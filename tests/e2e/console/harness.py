@@ -23,6 +23,7 @@ Not a test module itself; imported by ``test_console_smoke.py``.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import sys
@@ -91,6 +92,23 @@ class ConsoleSession:
         self._screen = pyte.Screen(cols, rows)
         self._stream = pyte.Stream(self._screen)
         self.wait_for(_READY_PATTERN, timeout=_READY_TIMEOUT_SECONDS)
+        # Live-verified this still isn't enough on its own under heavy
+        # system load (many back-to-back real sessions): the
+        # placeholder text can render before the composer is actually
+        # wired to receive input, silently dropping an immediate
+        # `send_line`/`press` call with no error anywhere. Settling
+        # until the screen stops changing (same mechanism as
+        # `wait_idle`, just a short bound) is more robust than a fixed
+        # sleep — it adapts to how long whatever's still initializing
+        # actually takes instead of guessing one constant.
+        with contextlib.suppress(ConsoleTimeout):
+            self.wait_idle(quiet_seconds=0.3, timeout=_READY_TIMEOUT_SECONDS)
+        # Belt-and-braces floor on top of the settle above: a screen
+        # that's merely stopped *repainting* isn't proof the composer
+        # is bound and reading input, and a lost first keystroke costs
+        # an entire test's timeout to surface. Cheap relative to every
+        # real LLM call this harness makes.
+        time.sleep(0.5)
 
     # ---- input ---------------------------------------------------------
 

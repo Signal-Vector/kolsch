@@ -1434,8 +1434,32 @@ class WorkflowsImpl(AbstractWorkflows):
             # an executor call site. `getattr` sidesteps the walker
             # without changing behaviour.
             _executor_run = executor.run
+            # Bug found live via the console e2e harness: a `user_input`
+            # node makes the executor return `WAITING_FOR_INPUT`
+            # directly (`src/workflows/executor.py`'s
+            # `except WorkflowPausedForInput` branch) rather than
+            # raising or emitting a `RUN_*` terminal event — the
+            # executor already wrote the correct on-disk status +
+            # `waiting_at` sidecar itself before returning. Capturing
+            # that return value here lets the `finally` below skip
+            # `_finalize_terminal` for a pause: that method's "phase is
+            # still `running` → reconcile to `error`" fallback (meant
+            # for genuine wiring failures) can't tell a real failure
+            # apart from `WAITING_FOR_INPUT` deliberately mapping to
+            # phase `"running"` (`EXECUTOR_STATUS_TO_PHASE`,
+            # `src/tools/services/workflows.py`) — so without this
+            # guard it overwrites the executor's correct
+            # `waiting_for_input` status with `failed` on every pause.
+            # The card and node row are a separate, known gap: nothing
+            # here (or anywhere) currently emits a card-visible pause
+            # indicator, so the row keeps its running/spinner glyph
+            # until the chat process exits. Fixing that needs the
+            # executor to emit an actual pause event the bridge drain
+            # can react to — out of scope for this fix, which targets
+            # the on-disk status corruption.
+            run_status: WorkflowRunStatus | None = None
             try:
-                await _executor_run()
+                run_status = await _executor_run()
             except asyncio.CancelledError:
                 # Best-effort card transition to cancelled.
                 with contextlib.suppress(Exception):
@@ -1486,7 +1510,17 @@ class WorkflowsImpl(AbstractWorkflows):
                             error_message=record.error_message,
                         )
             finally:
-                await self._finalize_terminal(spec, bridge_task)
+                # A pause is not terminal — leave the run's tracking
+                # state and the executor's own on-disk status alone so
+                # a later `kolsch workflows resume` (necessarily a
+                # separate process today — see
+                # `test_workflow_pause_and_resume`) finds it exactly as
+                # the executor left it. `run_status` stays `None` on
+                # every exception path above (CancelledError re-raise,
+                # generic failure), so those keep calling
+                # `_finalize_terminal` exactly as before.
+                if run_status != WorkflowRunStatus.WAITING_FOR_INPUT:
+                    await self._finalize_terminal(spec, bridge_task)
         finally:
             # spec-017: reset the nested-detection contextvar so a
             # downstream `start()` fired after this run terminates

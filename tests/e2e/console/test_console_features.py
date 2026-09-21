@@ -17,6 +17,8 @@ them is a deliberate, verified consolidation, not a dropped scenario.
 
 from __future__ import annotations
 
+import json
+import time
 from typing import TYPE_CHECKING
 
 import pytest
@@ -25,6 +27,9 @@ from tests.e2e.console.conftest import latest_session_id, run_cli
 from tests.e2e.console.harness import ConsoleSession
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+    from pathlib import Path
+
     from tests.e2e.console.conftest import ConsoleWorkspace
 
 pytestmark = [pytest.mark.e2e, pytest.mark.timeout(180)]
@@ -76,50 +81,153 @@ def test_workflow_inline_happy_path(console_workspace: ConsoleWorkspace) -> None
         session.close()
 
 
+def _wait_for_path(
+    predicate: Callable[[], Path | None], *, timeout: float, watch_dir: Path
+) -> Path:
+    """Poll the filesystem until `predicate()` returns a path, or time out."""
+    deadline = time.monotonic() + timeout
+    while True:
+        found = predicate()
+        if found is not None:
+            return found
+        if time.monotonic() >= deadline:
+            listing = (
+                [str(p) for p in watch_dir.rglob("*")]
+                if watch_dir.exists()
+                else [f"{watch_dir} does not exist"]
+            )
+            pytest.fail(
+                f"timed out after {timeout}s waiting on the filesystem under "
+                f"{watch_dir}:\n" + "\n".join(listing)
+            )
+        time.sleep(0.2)
+
+
+def _send_line_until(
+    session: ConsoleSession,
+    text: str,
+    *,
+    landed: Callable[[], bool],
+    attempts: int = 3,
+    per_attempt_timeout: float = 15.0,
+) -> None:
+    """Send `text` and confirm `landed()` within a bounded number of tries.
+
+    General-purpose defensive retry for a slash command that doesn't
+    take effect on the first `send_line` — cheap insurance against a
+    genuinely transient drop. NOT a fix for the specific,
+    reproducible-under-pytest failure documented on
+    `test_workflow_pause_and_resume` below: that one reliably fails on
+    every attempt (ruled out via direct testing), so this retry alone
+    doesn't unblock it.
+    """
+    for attempt in range(attempts):
+        if attempt > 0:
+            session.press("\x1b")
+        session.send_line(text)
+        deadline = time.monotonic() + per_attempt_timeout
+        while time.monotonic() < deadline:
+            if landed():
+                return
+            time.sleep(0.2)
+    pytest.fail(
+        f"{text!r} never landed after {attempts} attempts\n"
+        f"--- last screen ---\n{session.screen_text()}"
+    )
+
+
 @pytest.mark.skip(
     reason=(
-        "Live-verified 2026-09-21: `/workflow kolsch/workflows/hello-paused` "
-        "invoked from chat never reaches `waiting_for_input` — the `ask` "
-        "node spins (running glyph, elapsed counter climbing) indefinitely "
-        "(observed 2+ minutes with no transition). The SAME workflow "
-        "definition pauses correctly and instantly via the headless "
-        "`kolsch workflows run kolsch/workflows/hello-paused` CLI path "
-        "(confirmed: prints `waiting_for_input` in well under a second), "
-        "so the workflow YAML and the executor's `user_input` handling are "
-        "both fine — the bug is specific to `WorkflowsImpl.start`'s async "
-        "FIFO-worker path used by in-chat `/workflow` invocation "
-        "(src/cli/chat/services/workflows_impl.py), not the CLI's direct "
-        "`IterativeExecutor.run()` call. This is a real, separate bug "
-        "found by this scenario — exactly the failure class it was "
-        "written to catch — but is out of scope to fix inline while "
-        "building the scenario. Un-skip once fixed."
+        "Live-verified 2026-09-21: the underlying production bug this "
+        "test targets IS fixed and independently confirmed correct — "
+        "see WorkflowsImpl._run_one_workflow's `run_status` guard in "
+        "src/cli/chat/services/workflows_impl.py, verified via a "
+        "standalone (non-pytest) script showing runs/<id>/meta.json "
+        "correctly holds `waiting_for_input` instead of the old "
+        "corrupted `failed`. What's blocked is THIS test specifically: "
+        "`/workflow kolsch/workflows/hello-paused` reproducibly never "
+        "lands in the composer when driven via `pytest` — the composer "
+        "sits on its placeholder text every single time, 100% of many "
+        "attempts — while the byte-for-byte identical command against "
+        "the byte-for-byte identical bootstrap sequence (kolsch setup "
+        "--non-interactive against a workspace, then ConsoleSession + "
+        "send_line) reliably succeeds every time when run as a bare "
+        "standalone script outside pytest. Ruled out as causes: a "
+        "startup race (added a settle wait_idle + floor sleep in "
+        "ConsoleSession.__init__ — no change), a dropped/stuck-Enter "
+        "race (added _send_line_until's bounded retry-with-escape — "
+        "still fails every attempt), workspace path length/nesting "
+        "(reproduced pytest's exact long tmp_path in a standalone "
+        "script — worked fine), and pytest-timeout's SIGALRM handler "
+        "(reproduced with --timeout-method=thread and with the plugin "
+        "disabled — same failure either way). The actual differentiator "
+        "between 'runs under pytest' and 'runs as a bare script' was "
+        "not found. Needs further investigation before un-skipping; "
+        "the fix itself does not need further work."
     )
 )
 def test_workflow_pause_and_resume(console_workspace: ConsoleWorkspace) -> None:
     """A paused workflow doesn't wedge the chat; resuming via the CLI lands.
 
     `kolsch/workflows/hello-paused` pauses on `ask` (a `user_input`
-    node). Once the bug above is fixed, resuming is expected to
-    happen via a SEPARATE `kolsch workflows resume <run_id> --input
-    response=<text>` CLI call — the workflow's own documented usage —
-    NOT by typing a follow-up chat message in the same session.
-    `_resume_pending_workflow` (`src/cli/chat/session.py`) is ported
-    from `_legacy.py` but has no live call site in
-    `ChatApp.on_composer_submitted`, which routes every plain message
-    straight into `_run_exchange` regardless of pause state. Both the
-    chat process and the resume CLI process read/write the same
-    on-disk `runs/<run_id>/` state, so the resume should land
-    correctly despite being a separate OS process — once the pause
-    itself actually completes.
+    node). Resuming happens via a SEPARATE `kolsch workflows resume
+    <run_id> --input response=<text>` CLI call — the workflow's own
+    documented usage — NOT by typing a follow-up chat message in the
+    same session: `_resume_pending_workflow`
+    (`src/cli/chat/session.py`) is ported from `_legacy.py` but has no
+    live call site in `ChatApp.on_composer_submitted`, which routes
+    every plain message straight into `_run_exchange` regardless of
+    pause state. Both the chat process and the resume CLI process
+    read/write the same on-disk `runs/<run_id>/` state, so the resume
+    lands correctly despite being a separate OS process.
+
+    Live-verified bug, fixed alongside this test: `WorkflowsImpl.
+    _run_one_workflow` (`src/cli/chat/services/workflows_impl.py`)
+    used to call `_finalize_terminal` unconditionally in a bare
+    `finally`, even though a pause is not terminal — its "phase still
+    `running` -> reconcile to `error`" fallback (meant for genuine
+    wiring failures) can't distinguish that from `WAITING_FOR_INPUT`
+    deliberately mapping to phase `"running"`, so it overwrote the
+    executor's correct `waiting_for_input` on-disk status with
+    `failed` on every single pause. Fixed by capturing the executor's
+    return status and skipping `_finalize_terminal` for that one case.
+
+    Known gap, NOT fixed here: the WorkflowCard's node row never shows
+    a visual pause indicator — the executor signals a pause via a
+    direct status write + a `waiting_at` sidecar file, not a bridge-
+    drainable event, so nothing tells the row to stop spinning. This
+    test verifies the pause via the filesystem rather than the
+    rendered screen for exactly that reason; fixing the visual side
+    needs the executor to emit an actual pause event, a larger, riskier
+    change than the data-correctness fix made here.
 
     Pause/resume has broken in this exact spot before
     (bug-106/107/110) — the "chat stays responsive while paused" half
     of this test directly targets that history.
     """
+    runs_root = console_workspace.root / "runs"
     session = ConsoleSession(console_workspace.root, console_workspace.agent_ref)
     try:
-        session.send_line("/workflow kolsch/workflows/hello-paused")
-        session.wait_for(r"waiting|⚠", timeout=30)
+        _send_line_until(
+            session,
+            "/workflow kolsch/workflows/hello-paused",
+            landed=lambda: runs_root.exists() and any(runs_root.iterdir()),
+        )
+
+        def _find_run_dir() -> Path | None:
+            dirs = list(runs_root.iterdir()) if runs_root.exists() else []
+            return dirs[0] if dirs else None
+
+        run_dir = _wait_for_path(_find_run_dir, timeout=10, watch_dir=runs_root)
+
+        def _find_waiting_sidecar() -> Path | None:
+            sidecar = run_dir / "waiting_at"
+            return sidecar if sidecar.exists() else None
+
+        # Instant once run_dir exists — the executor writes the
+        # sidecar synchronously before returning from `run()`.
+        _wait_for_path(_find_waiting_sidecar, timeout=15, watch_dir=run_dir)
+
         # The chat itself must stay responsive while the workflow sits
         # paused — a real, unrelated turn should complete normally.
         session.send_line(_PONG_PROMPT)
@@ -128,15 +236,18 @@ def test_workflow_pause_and_resume(console_workspace: ConsoleWorkspace) -> None:
     finally:
         session.close()
 
-    run_dirs = list((console_workspace.root / "runs").iterdir())
-    assert len(run_dirs) == 1, f"expected exactly one workflow run dir: {run_dirs}"
-    run_id = run_dirs[0].name
+    meta = json.loads((run_dir / "meta.json").read_text())
+    assert meta["status"] == "waiting_for_input", (
+        f"expected the paused run's on-disk status to stay "
+        f"waiting_for_input (not get reconciled to something else), "
+        f"got {meta['status']!r}"
+    )
 
     result = run_cli(
         console_workspace,
         "workflows",
         "resume",
-        run_id,
+        run_dir.name,
         "--input",
         "response=KOLSCH_E2E_RESUMED",
     )
