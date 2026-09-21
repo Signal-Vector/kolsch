@@ -26,7 +26,7 @@ _PROVIDER_ENV = "E2E_LLM_PROVIDER"
 _API_KEY_ENV = "E2E_LLM_API_KEY"
 _KNOWN_PROVIDERS = ("claude_code", "openrouter", "opencode")
 _SETUP_TIMEOUT_SECONDS = 60
-_MODELS_TIMEOUT_SECONDS = 30
+_CLI_TIMEOUT_SECONDS = 30
 
 
 @dataclass(frozen=True)
@@ -103,6 +103,29 @@ def console_workspace(tmp_path: Path) -> ConsoleWorkspace:
     )
 
 
+def run_cli(
+    workspace: ConsoleWorkspace, *args: str, timeout: int = _CLI_TIMEOUT_SECONDS
+) -> subprocess.CompletedProcess[str]:
+    """Run ``kolsch <args>`` as a plain subprocess against ``workspace``.
+
+    No pty, no LLM call — for the CLI subcommands that are pure local
+    dispatch (``sessions``, ``workflows``, ``skills``, ``providers``,
+    ``refresh``, ``disconnect``, ``models``). Shared by every scenario
+    that needs a cheap out-of-band check rather than driving the
+    interactive console.
+    """
+    env = dict(os.environ)
+    env["KOLSCH_WORKSPACE"] = str(workspace.root)
+    return subprocess.run(
+        [sys.executable, "-m", "cli", *args],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+
+
 def discover_model_ref(workspace: ConsoleWorkspace) -> str:
     """Return a valid ``<provider>/<model_id>`` ref for ``/model`` to switch to.
 
@@ -111,23 +134,7 @@ def discover_model_ref(workspace: ConsoleWorkspace) -> str:
     `connect` step `console_workspace` already ran) rather than
     hardcoding a model id that may not exist for every provider.
     """
-    env = dict(os.environ)
-    env["KOLSCH_WORKSPACE"] = str(workspace.root)
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "cli",
-            "models",
-            workspace.provider,
-            "--json",
-        ],
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=_MODELS_TIMEOUT_SECONDS,
-        check=False,
-    )
+    result = run_cli(workspace, "models", workspace.provider, "--json")
     assert result.returncode == 0, (
         f"`kolsch models {workspace.provider} --json` failed:\n"
         f"stdout=\n{result.stdout}\nstderr=\n{result.stderr}"
@@ -137,3 +144,21 @@ def discover_model_ref(workspace: ConsoleWorkspace) -> str:
     assert models, f"no discovered models for provider {workspace.provider!r}"
     model_id: str = models[0]["id"]
     return f"{workspace.provider}/{model_id}"
+
+
+def latest_session_id(workspace: ConsoleWorkspace) -> str:
+    """Return the (only) session id in a freshly bootstrapped workspace.
+
+    Parses ``kolsch sessions list``'s table (``SESSION_ID`` is the
+    first column, full — not truncated — id) rather than scraping the
+    truncated 8-char id the chat UI's info bar renders, since the
+    truncated form isn't guaranteed to round-trip through ``--session``.
+    """
+    result = run_cli(workspace, "sessions", "list")
+    assert result.returncode == 0, (
+        f"`kolsch sessions list` failed:\nstdout=\n{result.stdout}\n"
+        f"stderr=\n{result.stderr}"
+    )
+    lines = [line for line in result.stdout.splitlines() if line.strip()]
+    assert len(lines) >= 2, f"expected a header + at least one session row:\n{lines}"
+    return lines[1].split()[0]

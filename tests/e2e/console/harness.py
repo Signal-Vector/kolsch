@@ -67,16 +67,20 @@ class ConsoleSession:
         workspace: Path,
         agent_ref: str,
         *,
+        session_id: str | None = None,
         env: dict[str, str] | None = None,
         timeout: float = _DEFAULT_TIMEOUT_SECONDS,
-        dimensions: tuple[int, int] = (40, 120),
+        dimensions: tuple[int, int] = (200, 120),
     ) -> None:
         rows, cols = dimensions
         run_env = dict(os.environ if env is None else env)
         run_env["KOLSCH_WORKSPACE"] = str(workspace)
+        args = ["-m", "cli", "chat", agent_ref]
+        if session_id is not None:
+            args += ["--session", session_id]
         self._child = pexpect.spawn(
             sys.executable,
-            ["-m", "cli", "chat", agent_ref],
+            args,
             cwd=str(workspace),
             env=run_env,
             timeout=timeout,
