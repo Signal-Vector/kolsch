@@ -70,7 +70,7 @@ fatally. It carries the `thread.exchange_failed` event so callers can
 read why. `execute_stream` does not raise; the failure event is the
 last item in the stream instead.
 
-## Principles
+## How it works
 
 **Stateless across exchanges.** Per-thread locks live on the Agent Engine
 instance for concurrency safety. Everything else — the framework

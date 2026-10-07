@@ -241,7 +241,7 @@ Cycle detection sits upstream of these — the parser produces a
 can't stall on a cycle (a cycle surfaces as an unreachable node
 in Layer 2).
 
-## Principles
+## How it works
 
 **Every node writes lifecycle events.** A runner writes
 `workflow.node.started` when it begins and one of

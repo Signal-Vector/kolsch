@@ -60,7 +60,7 @@ payload is larger than the inline threshold, the JSONL keeps the
 truncated form plus the `ContentRef`, and the full payload lives at
 `content/<hash>.bin`.
 
-## Principles
+## How it works
 
 **The JSONL is ground truth.** No state lives outside what the log
 can rebuild. Memory caches, entity rows, and replay output all
