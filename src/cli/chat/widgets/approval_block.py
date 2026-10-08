@@ -402,6 +402,9 @@ class ApprovalBlock(Widget):
             # one durable WIRE_PROMPT_ANSWERED via the normal
             # _bridge_widget_resolution path — no new emit, no race.
             self.call_after_refresh(self._auto_resolve_allow)
+            # Prevent Textual auto-focus from landing on the pane,
+            # which would interfere with the composer focus handoff.
+            self.focus()
             return
         if self._current_pane is not None:
             self._current_pane.focus()
