@@ -936,6 +936,10 @@ def _workspace_only_default_rules() -> list[dict[str, str]]:
         # extra). Same conservative prompt default as fetch_url so the
         # chat surface asks before the agent drives headless Chromium.
         {"what": "kolsch/tools/browse_url", "pattern": "*", "effect": "prompt"},
+        # spec-136: `jev_decide` sends workspace data (the `state`) to a
+        # third party (OpenRouter / TypeSafe) — same conservative
+        # `prompt` default as fetch_url.
+        {"what": "kolsch/tools/jev_decide", "pattern": "*", "effect": "prompt"},
         # bug-024: workflow-service tools. `run_workflow` opens a
         # WorkflowCard AND queues a run; conservative `prompt` so the
         # user confirms the run before any nodes fire. `workflow_status`
