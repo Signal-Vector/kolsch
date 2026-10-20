@@ -242,6 +242,34 @@ match any supported native provider…")`. The
 ticket walks through the diagnostic; the OpenCode connector's
 module docstring explains the choice inline.
 
+### 2.6. OpenAI-compatible connectors: use `build_openai_compatible_llm`
+
+*(bug-138.)* A connector that lands on `OpenAICompatibleCompletion`
+(the `openrouter/` and `hosted_vllm/` routes above) should build its
+client with `build_openai_compatible_llm(provider=..., model_id=...,
+**kwargs)` from `_openai_compat.py`, not `crewai.LLM(...)` directly.
+It constructs the same CrewAI class with the same kwargs, but as
+`KolschOpenAICompatibleCompletion`, which applies kolsch's
+**conditional strict tool-schema policy**:
+
+- CrewAI's stock conversion forces `"strict": true` and closes every
+  object schema to `{properties: {}, additionalProperties: false}`.
+  A free-form map argument (pydantic `dict[str, X]`, e.g.
+  `fetch_url.headers` or `run_workflow.inputs`) then reaches a
+  strict-honouring model as "empty object only", and it sends `{}`.
+- So, per tool: if `is_strict_compatible(parameters)` (no open maps,
+  no untyped values, no strict-rejected keywords such as
+  `minProperties`), the stock strict payload is sent unchanged.
+  Otherwise the kolsch-built `parameters` go out with
+  `"strict": false` and `$ref`s inlined (recursive schemas verbatim).
+
+The override is per subclass instance (no global CrewAI patch), so a
+`crewai.LLM(...)` built elsewhere keeps stock behaviour.
+`tests/unit/test_tool_schema_strict_policy.py` guards the private
+CrewAI seam (`OpenAICompletion._convert_tools_for_interference`) —
+re-check `_openai_compat.py` whenever that guard fails after a crewai
+bump.
+
 ---
 
 ## 3. Things to NOT do
