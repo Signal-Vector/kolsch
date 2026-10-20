@@ -30,6 +30,7 @@ import asyncio
 import contextlib
 import contextvars
 import logging
+import weakref
 from collections import OrderedDict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -67,6 +68,7 @@ from schemas import (
     ThreadExchangeStartedData,
     ToolCalledData,
     ToolResultData,
+    ToolUnavailableData,
     UserMessageData,
 )
 from schemas.events import AgentMessageData, ContextCompactedData
@@ -94,7 +96,7 @@ if TYPE_CHECKING:
     from schemas import ModelSpec, ThreadId
     from skills import SkillsSubsystem
     from store import SessionStore
-    from tools import ToolsSubsystem
+    from tools import ToolsSubsystem, UnavailableTool
 
 
 _log = logging.getLogger("engine")
@@ -254,6 +256,15 @@ class AgentEngine:
         self._bus = bus
         self._assets = asset_management
         self._tools = tools_subsystem
+        # feat-139: derived cache of `(session_id, tool_name)` pairs that
+        # already have a `tool.unavailable` in the log (the log stays the
+        # source of truth; a fresh process rescans once), plus one lock
+        # per session serialising the scan + emit. Weak values: a lock
+        # lives only while some exchange holds it.
+        self._tool_unavailable_recorded: set[tuple[str, str]] = set()
+        self._tool_unavailable_locks: weakref.WeakValueDictionary[str, asyncio.Lock] = (
+            weakref.WeakValueDictionary()
+        )
         self._skills = skills_subsystem
         self._memory = memory_provider
         self._secrets = secrets
@@ -1325,6 +1336,9 @@ class _Exchange:
         self.context = context
         self.inputs = inputs
         self.queue = queue
+        # feat-139: this exchange's own snapshot of the tools its
+        # registration hid (see `_register_tools_with_subsystem`).
+        self.unavailable_tools: list[UnavailableTool] = []
         # Identifiers filled in pre-flight step 4.
         self.thread_id = str(context.thread_id)
         self.session_id: str = ""
@@ -1765,6 +1779,10 @@ class _Exchange:
         # differs from the most recent `config.set` on the thread.
         await self._emit_config_set_if_changed()
 
+        # feat-139 — record tools hidden by `hide_if_secrets_missing`
+        # (one durable `tool.unavailable` per session per tool).
+        await self._emit_tool_unavailable_once()
+
         # Step 9 — process force-invoke skills, if any.
         await self._process_force_invoke()
 
@@ -1957,6 +1975,62 @@ class _Exchange:
             actor=Actor(kind="system"),
         )
         self.config_event_id = str(evt.event_id)
+
+    async def _emit_tool_unavailable_once(self) -> None:
+        """Emit `tool.unavailable` for each hidden tool not yet recorded.
+
+        feat-139. `register_for_agent` leaves a
+        `hide_if_secrets_missing` tool out of the agent's tools when a
+        secret is missing; `_register_tools_with_subsystem` snapshots
+        that list onto `self.unavailable_tools`. The engine writes ONE
+        durable event per session per tool:
+
+        - The session's event log is the source of truth: one
+          `read_session_events_of_type` pass (all threads) per scan, so
+          a rebuilt runtime / process restart never re-emits.
+        - `AgentEngine._tool_unavailable_recorded` caches the derived
+          `(session_id, tool_name)` pairs, so the log is only rescanned
+          when a hidden tool isn't known yet (in practice: once per
+          session per process).
+        - A per-session `asyncio.Lock` serialises scan + emit, so two
+          concurrent exchanges of one session can't both write.
+
+        Ordinary exchanges (nothing hidden) pay nothing.
+        """
+        if not self.unavailable_tools:
+            return
+        session = str(self.session_id)
+        recorded = self.engine._tool_unavailable_recorded
+        pending = [
+            item
+            for item in self.unavailable_tools
+            if (session, item.tool_name) not in recorded
+        ]
+        if not pending:
+            return
+        lock = self.engine._tool_unavailable_locks.get(session)
+        if lock is None:
+            lock = asyncio.Lock()
+            self.engine._tool_unavailable_locks[session] = lock
+        async with lock:
+            for event in await self.engine._store.read_session_events_of_type(
+                self.session_id,  # type: ignore[arg-type]
+                EventType.TOOL_UNAVAILABLE,
+            ):
+                recorded.add((session, str(event.data.get("tool_name", ""))))
+            for item in pending:
+                if (session, item.tool_name) in recorded:
+                    continue
+                await self._emit(
+                    type_=EventType.TOOL_UNAVAILABLE,
+                    data=ToolUnavailableData(
+                        tool_name=item.tool_name,
+                        missing_secrets=list(item.missing_secrets),
+                        recovery_hint=item.recovery_hint,
+                    ).model_dump(mode="json"),
+                    actor=Actor(kind="system"),
+                )
+                recorded.add((session, item.tool_name))
 
     async def _render_prompt_if_needed(self) -> None:
         """Render the agent's Jinja2 prompt template with the standard vars.
@@ -2346,6 +2420,13 @@ class _Exchange:
             # for builtins and legacy 1-seg action form for
             # unstamped declared tools in that case.
             home_bundle=home_bundle,
+        )
+        # feat-139: snapshot THIS registration's hidden tools now — no
+        # `await` between the registration returning and this read. The
+        # per-agent registration is shared across sessions, so a later
+        # read could see another session's registration instead.
+        self.unavailable_tools = self.engine._tools.list_unavailable_tools(
+            self.agent_id,  # type: ignore[arg-type]
         )
         # MCP server registration lands when the MCP wiring patch ships.
 

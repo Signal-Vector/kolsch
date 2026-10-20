@@ -23,7 +23,7 @@ guide, see [Write a workflow node](write-a-workflow-node.md).
 from tools.decorator import tool, ToolContext
 ```
 
-The decorator takes seven keyword-only arguments:
+The decorator takes these keyword-only arguments:
 
 - `name` — the wire name. Must match `^[a-z][a-z0-9_]*$`. The LLM
   sees this in its tools list.
@@ -40,6 +40,13 @@ The decorator takes seven keyword-only arguments:
 - `timeout_seconds` — optional per-call timeout.
 - `summary` — a one-line description for the prompt's compact tool
   listing. Falls back to the first sentence of `description`.
+- `requires` — tool services (`cards`, `prompts`, `workflows`,
+  `session`) the dispatcher injects on `ToolContext`.
+- `hide_if_secrets_missing` — default `False`. See
+  [Optional integrations](#optional-integrations-hide_if_secrets_missing)
+  below.
+- `unavailable_hint` — the recovery hint recorded when a
+  `hide_if_secrets_missing` tool is hidden.
 
 The decorator stamps a `ToolDefinition` dataclass onto the function
 as `_tool_definition` and returns the function unchanged. Discovery
@@ -245,13 +252,43 @@ records the `tool.called` → `tool.result` pair in the JSONL log.
   command the user can type to unblock.
 - **Missing secret at registration.** `SecretNotFound` wraps as
   `ToolSetupFailed`. The agent fails to load — fix the missing
-  secret in `.env` and retry.
+  secret in `.env` and retry. (Unless the tool opts into
+  `hide_if_secrets_missing`; see below.)
 - **Body raises non-`PlatformError`.** Any other exception is
   wrapped in `ToolExecutionFailed` with the original attached via
   `__cause__`. The event log carries the wrapped error; the original
   is available for debugging.
 - **Invalid tool name.** A `name` that doesn't match
   `^[a-z][a-z0-9_]*$` raises `ValueError` at import time.
+
+## Optional integrations: `hide_if_secrets_missing`
+
+By default a missing `secrets_needed` entry fails the whole agent:
+every exchange ends in `tool.setup_failed`, even ones that never call
+the tool. That is the right default — a misconfigured tool should be
+loud, not silently absent.
+
+For an **optional integration in a shared or starter agent** — a
+tool that needs a third-party key not every workspace has — opt in:
+
+```python
+@tool(
+    name="jev_decide",
+    description="...",
+    args_schema=JevDecideArgs,
+    secrets_needed=["OPENROUTER_API_KEY"],
+    hide_if_secrets_missing=True,
+    unavailable_hint="Run `kolsch connect openrouter`.",
+)
+```
+
+When the secret is missing, the tool is left out of the agent's
+tools: the model never sees it, the prompt `tools` variable doesn't
+list it, and the engine writes one `tool.unavailable` event per
+session (`{tool_name, missing_secrets, recovery_hint}`, secret names
+only). Guard any prompt text about the tool with
+`{% if "jev_decide" in tools.names() %}…{% endif %}`. Never use the
+flag for a tool the agent can't do its job without.
 
 ## Testing
 

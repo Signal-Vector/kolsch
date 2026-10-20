@@ -233,6 +233,16 @@ tree — must be stored):
 
 - `context.compacted`
 
+**Tool availability** (not projected):
+
+- `tool.unavailable` — a `@tool(hide_if_secrets_missing=True)` tool
+  was left out of the agent's tools because a secret it needs is
+  missing. Written during exchange setup (before
+  `thread.exchange_started`), at most once per session per tool; the
+  dedup is derived from the session's own log, so a restart doesn't
+  re-emit. Default tools never produce it — a missing secret still
+  fails the exchange with `tool.setup_failed`.
+
 **Agent pre-flight consistency:**
 
 - `agent.template_warning` — the engine's pre-flight emits one when
@@ -345,6 +355,14 @@ tool_call_id: str
 tool_name: str
 error: Error
 recovery_hint: str | None                # e.g. an `/perm allow ...` string
+```
+
+**`tool.unavailable.data`:**
+
+```python
+tool_name: str
+missing_secrets: list[str]               # secret NAMES, never values
+recovery_hint: str                       # e.g. "Run `kolsch connect openrouter`."
 ```
 
 **`config.set.data`:**

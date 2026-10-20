@@ -197,6 +197,18 @@ This is the *file-order* read — used for observability, replay, debugging.
 For context assembly the engine uses `read_path_to_leaf` below.
 
 ```
+async def read_session_events_of_type(
+    session_id: str,
+    event_type: EventType,
+) -> list[Event]
+```
+Returns every event of `event_type` in the session, across all of its
+threads, in file order — one pass over the session's JSONL, filtered
+by type before anything is kept. Empty when the log is missing or
+empty. Used by the engine's `tool.unavailable` once-per-session dedup
+(feat-139).
+
+```
 async def read_path_to_leaf(thread_id: str) -> AsyncIterator[Event]
 ```
 Yields the events on the path from the thread root to the current leaf,

@@ -558,6 +558,40 @@ class SessionStore:
 
         return await asyncio.to_thread(_probe)
 
+    async def read_session_events_of_type(
+        self,
+        session_id: SessionId,
+        event_type: EventType,
+    ) -> list[Event]:
+        """Return every `event_type` event in the session, across all threads.
+
+        One pass over the session's JSONL (file order), filtered by
+        type before anything is kept — unlike `read_events`, which
+        materialises the whole log and filters to one thread. feat-139
+        uses it to derive "which tools already have a `tool.unavailable`
+        in this session" without a per-thread re-read.
+
+        Args:
+            session_id: The session whose log to scan.
+            event_type: The event type to keep.
+
+        Returns:
+            The matching events in file order (empty when the log is
+            empty or missing).
+
+        Raises:
+            StoreCorruptLog: The JSONL has a malformed mid-file line.
+        """
+        path = jsonl_path(self._root, session_id)
+        if not await asyncio.to_thread(path.exists):
+            return []
+        await asyncio.to_thread(recover_partial_final_line, path)
+
+        def _scan() -> list[Event]:
+            return [event for event in read_lines(path) if event.type == event_type]
+
+        return await asyncio.to_thread(_scan)
+
     async def get_last_logical_seq(self, session_id: SessionId) -> int:
         """Return the `logical_seq` on the session's JSONL tail, or 0.
 

@@ -59,6 +59,7 @@ from schemas.events import (
     ToolCalledData,
     ToolFailedData,
     ToolResultData,
+    ToolUnavailableData,
     UIEventData,
     UserMessageData,
 )
@@ -123,6 +124,7 @@ __all__ = [
     "ToolCalledData",
     "ToolFailedData",
     "ToolResultData",
+    "ToolUnavailableData",
     "UIEventData",
     "UserMessageData",
     "derive_agent_id",

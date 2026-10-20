@@ -130,6 +130,8 @@ async def web_search(args: WebSearchArgs, ctx: ToolContext) -> dict:
                                     registration time by the engine,
                                     not by the @tool decorator)
     timeout_seconds   int?          optional; tool-specific timeout override
+    hide_if_secrets_missing bool    optional; default False (feat-139, §6.1.1)
+    unavailable_hint  str?          optional; recovery hint when hidden (§6.1.1)
 )
 ```
 
@@ -157,6 +159,8 @@ that take no arguments.
 **`secrets_needed`** — list of secret names the tool needs. The platform
 validates these exist at registration time (via `secrets.exists()`),
 resolves them at invocation time, and passes them via `ctx.secrets`.
+A missing one fails registration (`tool.setup_failed`) unless the tool
+sets `hide_if_secrets_missing` (§6.1.1).
 
 **`returns_schema`** — optional Pydantic model describing structured
 return value. Used by the platform for validation and for showing the
@@ -748,6 +752,38 @@ After setup, the framework has a list of available tools and can be
 handed to the agent loop. The agent's tool use is then native to the
 framework, with the platform's adapters doing the cross-cutting work
 (authorization, secrets, sandbox, observation) invisibly.
+
+### 6.1.1 Optional tools: `hide_if_secrets_missing` (feat-139)
+
+Registration verifies each tool's `secrets_needed` with
+`SecretsProvider.exists`. A missing secret raises `ToolSetupFailed`
+(Fatal) and the exchange fails — the default, so a misconfigured
+tool is never silently absent.
+
+A tool decorated `@tool(hide_if_secrets_missing=True)` opts out of
+that: when any of its secrets is missing, `register_for_agent` leaves
+it out of the agent's registered tools (dropping any copy from an
+earlier registration) and records
+`UnavailableTool{tool_name, missing_secrets, recovery_hint}`,
+readable through `ToolsSubsystem.list_unavailable_tools(agent_id)`.
+Consequences:
+
+- The model's tool list and the prompt `tools` variable are built
+  from the registered tools, so neither mentions the hidden tool.
+- The engine writes a durable `tool.unavailable` event (same
+  payload) during exchange setup, once per session per tool,
+  deduplicated against the session's event log (one scan of all its
+  threads, cached per process, serialised per session) so neither a
+  second thread nor a restart repeats it. The engine reads its
+  registration's hidden list synchronously right after
+  `register_for_agent` returns, because the per-agent registration is
+  shared by every session of that agent.
+- `recovery_hint` is the tool's `unavailable_hint`, or a derived
+  "Set <NAMES> in the workspace .env." Secret values never appear.
+- The chat renderer ignores the event for now.
+
+Both intake channels (programmatic `tools=` and `declared_paths=`)
+apply the flag; builtins carry no secrets.
 
 ### 6.2 At tool invocation
 

@@ -24,6 +24,7 @@ from tools.decorator import (
     ToolDefinition,
     ToolInfo,
     ToolResult,
+    UnavailableTool,
     get_tool_definition,
 )
 from tools.discovery import discover_tools_in_file
@@ -134,7 +135,10 @@ class ToolsSubsystem:
         builtins. For every tool (regardless of source), declared
         secrets are verified via `SecretsProvider.exists` and
         `ToolSetupFailed` is raised with the underlying
-        `SecretNotFound` chained if any are missing.
+        `SecretNotFound` chained if any are missing — unless the tool
+        opted into `hide_if_secrets_missing` (feat-139), in which case
+        it is left out of the agent's tools and recorded for
+        [`list_unavailable_tools`][tools.subsystem.ToolsSubsystem.list_unavailable_tools].
         MCP servers register the same way: eager lifecycle starts
         the server now, lazy registers a placeholder and starts on
         first invoke.
@@ -197,10 +201,16 @@ class ToolsSubsystem:
                 file fails to import.
         """
         registration = self._registry.ensure_agent(agent_id)
+        # Built locally and published in one synchronous assignment at
+        # the end: `_AgentRegistration` is shared by every session of
+        # this agent, so a concurrent registration must never observe
+        # (or clobber) a half-built list.
+        unavailable: dict[str, UnavailableTool] = {}
 
         for fn in tools or []:
             defn = get_tool_definition(fn)
-            await self._verify_secrets(defn)
+            if not await self._admit(registration, defn, unavailable):
+                continue
             if home_bundle is not None and defn.home_bundle is None:
                 defn.home_bundle = home_bundle
             registration.tools[defn.name] = defn
@@ -218,7 +228,8 @@ class ToolsSubsystem:
             stamp = path_owner if path_owner is not None else home_bundle
             for fn in discover_tools_in_file(path):
                 defn = get_tool_definition(fn)
-                await self._verify_secrets(defn)
+                if not await self._admit(registration, defn, unavailable):
+                    continue
                 if stamp is not None and defn.home_bundle is None:
                     defn.home_bundle = stamp
                 registration.tools[defn.name] = defn
@@ -266,6 +277,7 @@ class ToolsSubsystem:
         # etc.) and for pre-catalog workflows.
         self._register_virtual_workflow_tools(registration)
 
+        registration.unavailable = unavailable
         return [defn.to_info() for defn in registration.tools.values()]
 
     def _register_virtual_workflow_tools(
@@ -416,7 +428,54 @@ class ToolsSubsystem:
         """Return metadata-only views of every tool registered for `agent_id`."""
         return [d.to_info() for d in self._registry.list_tools(agent_id)]
 
+    def list_unavailable_tools(self, agent_id: AgentId) -> list[UnavailableTool]:
+        """Return the tools the last registration hid for missing secrets.
+
+        feat-139. Only `hide_if_secrets_missing=True` tools ever land
+        here; the list is rebuilt by every
+        [`register_for_agent`][tools.subsystem.ToolsSubsystem.register_for_agent]
+        call. Entries carry secret NAMES, never values.
+
+        The registration is shared by every session of `agent_id`, so a
+        caller that needs ITS registration's result must read this
+        synchronously right after `await register_for_agent(...)`
+        returns (no `await` in between) — the engine snapshots it so.
+        """
+        registration = self._registry.ensure_agent(agent_id)
+        return list(registration.unavailable.values())
+
     # --- internal --------------------------------------------------------
+
+    async def _admit(
+        self,
+        registration: Any,  # noqa: ANN401 — _AgentRegistration; mirrors _register_virtual_workflow_tools
+        defn: ToolDefinition,
+        unavailable: dict[str, UnavailableTool],
+    ) -> bool:
+        """Return whether `defn` should be registered; record it if hidden.
+
+        Default tools go through `_verify_secrets` (fail-fast,
+        `ToolSetupFailed`). A `hide_if_secrets_missing` tool with any
+        missing secret is dropped from the agent's tools — including a
+        stale copy from an earlier registration — and recorded in
+        `unavailable` instead (feat-139).
+        """
+        if not defn.hide_if_secrets_missing:
+            await self._verify_secrets(defn)
+            return True
+        missing = [
+            name for name in defn.secrets_needed if not await self._secrets.exists(name)
+        ]
+        if not missing:
+            return True
+        registration.tools.pop(defn.name, None)
+        unavailable[defn.name] = UnavailableTool(
+            tool_name=defn.name,
+            missing_secrets=missing,
+            recovery_hint=defn.unavailable_hint
+            or f"Set {', '.join(missing)} in the workspace .env.",
+        )
+        return False
 
     async def _verify_secrets(self, defn: ToolDefinition) -> None:
         """Call ``secrets.exists`` for every declared secret on ``defn``.
