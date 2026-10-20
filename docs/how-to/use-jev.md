@@ -25,7 +25,32 @@ kolsch connect openrouter
 See [Connect a provider](connect-a-provider.md) for the details. There
 is no separate Jev key and no `platform.yaml` section for it.
 
-## 2. Give an agent the tool
+Until the key is present, `jev_decide` is **hidden** rather than an
+error: agents that declare it keep working, the model never sees the
+tool, and the session log records one `tool.unavailable` event with
+the hint "Run `kolsch connect openrouter`." (The tool opts into
+`hide_if_secrets_missing`; see
+[Write a tool](write-a-tool.md#optional-integrations-hide_if_secrets_missing).)
+
+## 2. Use it from chat
+
+The starter `helper` agent declares `jev_decide`. Once OpenRouter is
+connected, just ask in plain language — you don't need to name the
+tool:
+
+```text
+classify this ticket as billing, outage or feature request, with
+confidence: "the site is returning 502s"
+```
+
+The helper calls `jev_decide` with a `choice` question, then answers
+with the chosen option and its confidence. The call shows up in chat
+as an ordinary tool-call block (approve it, or allow the rule — see
+below). The helper's prompt only mentions Jev when the tool is
+available (`{% if "jev_decide" in tools %}`), so a workspace
+without OpenRouter sees no reference to it.
+
+## 3. Give your own agent the tool
 
 Declare the tool in the agent's `subsystems.tools.config.declared`
 list:
@@ -50,7 +75,7 @@ to a third party:
 Change it to `allow` with `/perm` or `kolsch permissions` if you trust
 the agent with it.
 
-## 3. Ask questions
+## 4. Ask questions
 
 The tool takes three arguments:
 
@@ -116,7 +141,7 @@ OpenRouter reports it):
 
 The `box` question type and image inputs are not supported.
 
-## 4. Fail on low certainty with `fail_below`
+## 5. Fail on low certainty with `fail_below`
 
 Add `fail_below` to any question to turn a low-certainty answer into a
 failure. The tool compares one metric per question type:
@@ -148,7 +173,8 @@ threshold: without `fail_below`, the tool never fails on answer values.
 | Code | When |
 |---|---|
 | `tool.invalid_arguments` | Malformed questions (unknown or `box` type, empty `questions`, too many options or levels, `fail_below` out of range). Nothing is sent. |
-| `secret.not_found` | `OPENROUTER_API_KEY` is not in `.env`. Run `kolsch connect openrouter`. |
+| `tool.unavailable` (event, not an error) | `OPENROUTER_API_KEY` is not in `.env`, so the tool is hidden. Run `kolsch connect openrouter`. |
+| `secret.not_found` | `OPENROUTER_API_KEY` is in `.env` but empty: the tool registers (the name exists), then the call fails. Run `kolsch connect openrouter`. |
 | `tool.execution_failed` | The upstream answered with an error (`UpstreamHTTP<status>`; 401/403 carry the recovery hint `kolsch connect openrouter`, 400/413/415/422 carry the upstream validation message), a network error, or a malformed response. 429 and 529 are retried up to 3 attempts first. |
 | `tool.timeout` | A request took longer than 30 seconds. |
 | `tool.jev_below_threshold` | A `fail_below` was breached. |

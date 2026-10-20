@@ -625,7 +625,7 @@ a piece of content and returns calibrated answers. It is a plain
 | Action name | `kolsch/tools/jev_decide` (default rule: `prompt` — it sends workspace data to a third party) |
 | Args | `state` (string / object / array), `questions` (non-empty map of name → `choice` / `score` / `noul` question, each with optional `fail_below`), `model` (default `typesafe/jev-1.14`) |
 | Returns | `{model, answers, usage}`; `usage.cost` only when the upstream sends it |
-| Secret | `OPENROUTER_API_KEY` via `secrets_needed` — the key `kolsch connect openrouter` writes to `.env` |
+| Secret | `OPENROUTER_API_KEY` via `secrets_needed` — the key `kolsch connect openrouter` writes to `.env`. The tool sets `hide_if_secrets_missing` (§6.1.1): without the key it is hidden and a `tool.unavailable` is recorded, instead of failing the agent |
 | Transport | `POST https://openrouter.ai/api/v1/systemone`, behind a module-level profile seam; a direct-TypeSafe profile is defined as data but not selectable in v1 |
 | Codes | `tool.invalid_arguments` (bad questions, before any network call), `tool.execution_failed` (`UpstreamHTTP<status>`, `NetworkError`, `MalformedResponse`), `tool.timeout`, `tool.jev_below_threshold`, `secret.not_found` |
 

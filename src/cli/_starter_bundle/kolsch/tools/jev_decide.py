@@ -411,6 +411,11 @@ _THRESHOLD_METRIC: Final[dict[str, str]] = {
     ),
     args_schema=JevDecideArgs,
     secrets_needed=[_OPENROUTER_SECRET],
+    # feat-139: an optional integration on the stock helper — hide it
+    # (one `tool.unavailable` per session) rather than break every
+    # workspace that hasn't connected OpenRouter.
+    hide_if_secrets_missing=True,
+    unavailable_hint="Run `kolsch connect openrouter`.",
     timeout_seconds=_TOOL_BUDGET_SECONDS,
 )
 async def jev_decide(args: JevDecideArgs, ctx: ToolContext) -> dict[str, Any]:

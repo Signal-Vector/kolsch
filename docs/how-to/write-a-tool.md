@@ -287,7 +287,10 @@ tools: the model never sees it, the prompt `tools` variable doesn't
 list it, and the engine writes one `tool.unavailable` event per
 session (`{tool_name, missing_secrets, recovery_hint}`, secret names
 only). Guard any prompt text about the tool with
-`{% if "jev_decide" in tools.names() %}…{% endif %}`. Never use the
+`{% if "jev_decide" in tools %}…{% endif %}` — `in tools` is exact
+membership by tool name. Don't test against `tools.names()`: it is a
+comma-joined display string, so `"read" in tools.names()` would also
+match `read_file`. Never use the
 flag for a tool the agent can't do its job without.
 
 ## Testing
