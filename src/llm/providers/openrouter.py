@@ -55,7 +55,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, ClassVar
 
-import crewai
 import httpx
 
 from errors import LlmDiscoveryFailed
@@ -73,9 +72,12 @@ from llm.providers._errors import (
     classify_http_response,
     classify_transport_error,
 )
+from llm.providers._openai_compat import build_openai_compatible_llm
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+
+    import crewai
 
 _DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 _DEFAULT_TIMEOUT_SECONDS = 30.0
@@ -86,7 +88,12 @@ _PER_MILLION = 1_000_000
 # `ModelSpec.parameters` values that collide with these are dropped —
 # the connector always wins on routing so a mistyped YAML can't hijack
 # the model, key, base_url, or timeout via a `parameters:` entry.
-_INFRA_KEYS = frozenset({"model", "api_key", "base_url", "timeout"})
+# `provider` / `is_litellm` steer CrewAI's client construction
+# (bug-138); a stray agent-YAML value would otherwise collide with the
+# connector's own `provider=` kwarg.
+_INFRA_KEYS = frozenset(
+    {"model", "api_key", "base_url", "timeout", "provider", "is_litellm"}
+)
 
 
 def _extras(parameters: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -260,8 +267,11 @@ class OpenRouterConnector:
         silently so agent YAML can't accidentally hijack routing —
         see `_INFRA_KEYS` at module level.
         """
-        return crewai.LLM(
-            model=f"openrouter/{model_id}",
+        # bug-138: same client `crewai.LLM(model="openrouter/...")` builds,
+        # with kolsch's conditional strict tool-schema policy applied.
+        return build_openai_compatible_llm(
+            provider="openrouter",
+            model_id=model_id,
             api_key=api_key,
             base_url=provider_config.base_url,
             timeout=(
