@@ -142,6 +142,12 @@ def _canonical_data(event_type: EventType) -> dict[str, Any]:
                 "tool_name": "read_file",
                 "error": {"type": "authz.denied", "message": "not allowed"},
             }
+        case EventType.TOOL_UNAVAILABLE:
+            return {
+                "tool_name": "jev_decide",
+                "missing_secrets": ["OPENROUTER_API_KEY"],
+                "recovery_hint": "Run `kolsch connect openrouter`.",
+            }
         case EventType.MODEL_REQUEST:
             return {"call_id": "call-1", "model": {}, "messages": [], "tools": []}
         case EventType.MODEL_RESPONSE:

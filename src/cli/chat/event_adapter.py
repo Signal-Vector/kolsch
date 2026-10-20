@@ -544,6 +544,8 @@ class EventAdapter:
         EventType.TOOL_CALLED: "_handle_tool_called",
         EventType.TOOL_RESULT: "_handle_tool_result",
         EventType.TOOL_FAILED: "_handle_tool_failed",
+        # feat-139: silent no-op. A notice widget is a follow-up.
+        EventType.TOOL_UNAVAILABLE: "_handle_tool_unavailable",
         EventType.MODEL_REQUEST: "_handle_model_request",
         EventType.MODEL_RESPONSE: "_handle_model_response",
         EventType.MODEL_STREAMING_TOKEN: "_handle_model_streaming_token",
@@ -1573,6 +1575,17 @@ class EventAdapter:
                 level="info",
                 event_id=_event_id_str(event),
             )
+
+    async def _handle_tool_unavailable(self, event: Event) -> None:
+        """Silent — `tool.unavailable` (feat-139) has no widget yet.
+
+        The event records that a `hide_if_secrets_missing` tool was
+        left out of the agent's tools. Rendering it (a small notice
+        with the recovery hint) is a follow-up; until then the adapter
+        must only tolerate it, so live dispatch and replay never hit
+        the dispatch-table `KeyError`.
+        """
+        _ = event
 
     async def _handle_config_set(self, event: Event) -> None:
         """Silent — config is diagnostic-only in the JSONL.
