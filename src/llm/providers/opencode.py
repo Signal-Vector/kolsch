@@ -15,7 +15,9 @@ change.
 
 **CrewAI routing.**
 [`build_llm`][llm.providers.opencode.OpenCodeConnector.build_llm]
-constructs `crewai.LLM(model=f"hosted_vllm/{model_id}", ...)`. The
+constructs the client `crewai.LLM(model=f"hosted_vllm/{model_id}", ...)`
+would (via `build_openai_compatible_llm`, which adds bug-138's
+conditional strict tool-schema policy — see `_openai_compat.py`). The
 prefix is deliberately NOT `openai/` even though OpenCode is
 OpenAI-compatible at the wire level. CrewAI's native `openai/`
 provider validates the model part against OpenAI's canonical model
@@ -91,7 +93,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, ClassVar
 
-import crewai
 import httpx
 
 from errors import LlmDiscoveryFailed
@@ -107,9 +108,12 @@ from llm.providers._errors import (
     classify_http_response,
     classify_transport_error,
 )
+from llm.providers._openai_compat import build_openai_compatible_llm
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+
+    import crewai
 
 # The 30s default sits below the observed long-tail of opencode
 # responses (replay showed 12 successful calls between 30 and 56s,
@@ -124,7 +128,12 @@ _HTTP_CLIENT_ERROR_MIN = 400
 # `ModelSpec.parameters` values that collide with these are dropped —
 # the connector always wins on routing so a mistyped YAML can't hijack
 # the model, key, base_url, or timeout via a `parameters:` entry.
-_INFRA_KEYS = frozenset({"model", "api_key", "base_url", "timeout"})
+# `provider` / `is_litellm` steer CrewAI's client construction
+# (bug-138); a stray agent-YAML value would otherwise collide with the
+# connector's own `provider=` kwarg.
+_INFRA_KEYS = frozenset(
+    {"model", "api_key", "base_url", "timeout", "provider", "is_litellm"}
+)
 
 
 def _extras(parameters: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -276,8 +285,11 @@ class OpenCodeConnector:
         `crewai.LLM`. Infrastructure keys are dropped silently so
         agent YAML can't accidentally hijack routing.
         """
-        return crewai.LLM(
-            model=f"hosted_vllm/{model_id}",
+        # bug-138: same client `crewai.LLM(model="hosted_vllm/...")` builds,
+        # with kolsch's conditional strict tool-schema policy applied.
+        return build_openai_compatible_llm(
+            provider="hosted_vllm",
+            model_id=model_id,
             api_key=api_key,
             base_url=provider_config.base_url,
             timeout=(

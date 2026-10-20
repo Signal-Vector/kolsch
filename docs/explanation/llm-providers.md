@@ -99,6 +99,34 @@ design:
 A future patch may unify the two paths by deprecating the direct
 callable. For now, both seams are first-class.
 
+**How tool schemas are sent (bug-138).** Each tool's arguments are
+advertised as the JSON Schema of its pydantic `args_schema`, wrapped
+as `{type: "function", function: {name, description, parameters}}`
+(this is what the `model.request` event records). For the
+OpenAI-compatible connectors (`openrouter`, `opencode`), CrewAI then
+re-converts that payload before the HTTP call, and its stock
+conversion forces `"strict": true` and closes every object to
+`{properties: {}, additionalProperties: false}` — which would turn a
+free-form map argument (`dict[str, X]`, e.g. `fetch_url.headers`,
+`run_workflow.inputs`) into "empty object only" for models that
+honour strict decoding. Kolsch therefore applies a **conditional
+strict policy** in the client those connectors build
+(`llm.providers._openai_compat`):
+
+| Tool `parameters` | Sent as |
+|---|---|
+| Strict-compatible: only scalars and closed objects, every value typed, no strict-rejected keyword (`minProperties`, `patternProperties`, ...) | CrewAI's stock strict payload, unchanged (`"strict": true`) |
+| Anything else (an open map, an untyped value, a rejected keyword, a field named like a schema keyword such as `title` / `default`, a recursive `$ref`) | The kolsch-built `parameters`, `"strict": false`, with `$ref`s inlined (recursive schemas verbatim) |
+
+Of the starter tools, `browse_url`, `fetch_url` (free-form `headers` /
+`cookies` maps) and `run_workflow` (free-form `inputs`) go non-strict;
+every other starter tool keeps the stock strict payload.
+
+Validation never depends on strict decoding: dispatch re-validates
+every call against the real `args_schema` and returns
+`tool.invalid_arguments` to the model on a mismatch. The `claude_code`
+connector and the Mock LLM do not go through this conversion.
+
 ---
 
 ## Part 3 — The `ProviderConnector` Protocol
