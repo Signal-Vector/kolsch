@@ -353,8 +353,11 @@ fallback_models:
   - haiku
 ```
 
-Run it again with Opus simulated unavailable (swap the API key to
-a bad value temporarily, or pick a rate-limited model):
+Run it again with the primary simulated unavailable: temporarily
+point `model:` at a model id your provider doesn't serve, or pick a
+rate-limited model. (A bad API key won't do it: an authentication
+failure is Fatal, because the same key would fail on every entry, so
+it never falls back.)
 
 ```bash
 uv run kolsch run kolsch/agents/helper --input content="say hi"
@@ -362,8 +365,10 @@ uv run kolsch run kolsch/agents/helper --input content="say hi"
 
 Two new events in `kolsch sessions events`:
 
-- A `model.fallback` recording the transition
-  (`from: opus, to: haiku, reason: model.rate_limited`).
+- A `model.fallback` recording the transition to Haiku, with
+  `reason` naming the primary's error (for example
+  `model.rate_limited`, or `model.not_found` for an id the provider
+  doesn't serve).
 - The successful `model.response` attributed to Haiku.
 
 Each `model.fallback` is one transition, in order. If the whole

@@ -179,6 +179,17 @@ class ProviderConnector(Protocol):
         """Construct a configured crewai.LLM for the named
         model. `context` identifies the session the LLM serves
         (§3.6)."""
+
+    def classify_call_error(
+        self,
+        exc: BaseException,
+        *,
+        provider_config: ProviderConfig,
+        model_id: str,
+    ) -> PlatformError | None:
+        """Map a call-time failure of the LLM `build_llm` returned
+        to a catalogued `model.*` error, or None if unrecognised.
+        Pure (§3.7)."""
 ```
 
 **Declared protocol change (bug-144).** The keyword-only `context`
@@ -186,7 +197,8 @@ parameter was added to every in-tree connector and test double in
 one change. Connectors are registered in-tree only
 (`src/llm/providers/__init__.py`), so there is no runtime signature
 probing; `src/llm/providers/README.md` §2.7 is the migration note for
-anyone carrying a connector of their own.
+anyone carrying a connector of their own. `classify_call_error` is a
+second declared change (bug-145, README §2.8).
 
 ### 3.1 Supporting dataclasses
 
@@ -452,6 +464,61 @@ or the User-Agent: header-, query- and routing-shaped keys
 (`default_headers`, `extra_headers`, `headers`, `client_params`,
 `organization`, `project`, `default_query`, `api_base`, plus the
 routing keys) are dropped before the client is built.
+
+### 3.7 Call-time error classification (bug-145)
+
+`build_llm` only constructs the client. Failures happen later, when
+the engine calls it. The connector that built the client is the one
+that understands its errors, so it classifies them through
+`classify_call_error`.
+
+**Where it runs.** `make_build_llm_factory` binds the hook per model
+spec through `llm.call_error_classifier(spec, provider_config)`. That
+helper resolves the connector exactly as `build_llm` does. The LLM
+callable (`engine._crewai_adapter.make_llm_callable`) then invokes the
+hook on any exception from `crewai.LLM.call` that is not already a
+`PlatformError`:
+
+- It raises the returned error `from` the original.
+- If the hook returns `None`, the original exception is re-raised
+  unchanged.
+- If the hook itself raises, the failure is logged and the original
+  is re-raised.
+- `PlatformError` and `asyncio.CancelledError` pass through untouched.
+
+The engine's fallback handle, the compaction ladder and the event log
+all sit behind this callable, so they all see the typed code.
+
+**Why fallback depends on it.** `FallbackLLMHandle` advances the chain
+only on a typed, Recoverable `model.*` error. Before bug-145 every
+real provider failure reached it as a raw SDK exception. The
+`model.response` event recorded `error: null`, and `fallback_models`
+was never consulted, even for 429 or 5xx. The exception then surfaced
+as `platform.internal_error`.
+
+**What it must handle.** CrewAI re-wraps SDK exceptions before they
+reach the hook:
+
+- `ValueError("Model … not found") from NotFoundError` for a 404.
+- `ConnectionError(…) from APIConnectionError` (and `APITimeoutError`).
+- `LLMContextLengthExceededError(…) from <status error>` when the
+  message matches CrewAI's context-limit phrases.
+- `raise e from e` for every other status: a self-cycle on
+  `__cause__`.
+
+The OpenAI-compatible connectors delegate to one shared, SDK-import-free
+mapper, `llm.providers._errors.classify_openai_compat_exception`. It
+walks `__cause__` with a cycle guard and a 10-link cap, recognises
+links by duck typing (an integer `status_code` plus a `response`) or by
+qualified class name, and maps every HTTP status >= 400 per
+[Error Model §4.15](error-model.md). `claude_code` returns `None`: its
+LLM already raises typed `model.*` errors in its own layer.
+
+| Connector | `classify_call_error` |
+|---|---|
+| `opencode` | shared OpenAI-compatible mapper (default timeout 180 s) |
+| `openrouter` | shared OpenAI-compatible mapper (default timeout 30 s) |
+| `claude_code` | `None` (already typed) |
 
 ---
 
@@ -790,6 +857,9 @@ Catalog (Error Model §4.13):
 | `llm.connector_unknown` | Fatal | `registry.get` |
 | `llm.discovery_failed` | Recoverable | connector's `discover_models` |
 | `llm.validation_failed` | Fatal | CLI connect flow |
+
+Call-time `model.*` codes come from `classify_call_error` (§3.7). Their
+status mapping and levels are in Error Model §4.15.
 
 ---
 

@@ -714,6 +714,37 @@ missing or logged out — e.g. `claude_code`) would fail identically
 for any sibling model routed through the same binary. The
 engine MUST NOT consult the fallback chain on Fatal `model.*`.
 
+**Where the HTTP statuses are mapped (bug-145).** Each connector's
+`classify_call_error` hook classifies the exception its own client
+raised. The engine runs that hook at the LLM call seam
+(`engine._crewai_adapter.make_llm_callable`), before the fallback
+loop sees the error, so the codes in this table are what
+`model.response` and `thread.exchange_failed` record. The
+OpenAI-compatible connectors (OpenCode, OpenRouter) share one mapper
+that covers every HTTP status >= 400:
+
+| Provider failure | Code | Level |
+|---|---|---|
+| HTTP 429 | `model.rate_limited` | Recoverable |
+| HTTP 500–599 | `model.server_error` | Recoverable |
+| HTTP 401 / 403 | `model.authentication_failed` | Fatal |
+| HTTP 402 / 409 | `model.upstream_error` | Recoverable |
+| HTTP 408; transport timeout / connect / network failure | `model.timeout` | Recoverable |
+| Overflow message in the body (400 / 413 / 422 / 404 / other 4xx) | `model.context_overflow` | Recoverable |
+| HTTP 404 otherwise | `model.not_found` | Recoverable |
+| HTTP 400 / 422 otherwise, and any other status >= 400 | `model.bad_request` | Fatal |
+
+A 400 matches the broad overflow markers ("too long", "exceeds", the
+context and token phrases). Every other status matches only the
+specific context and token phrases. Both sets include CrewAI's own
+context-limit phrases, so no `model.bad_request` or `model.not_found`
+message can trip CrewAI's silent summarisation. A provider exception
+the hook doesn't recognise is re-raised unchanged and falls to the
+engine safety net (§6.3). A main-exchange overflow with no fallback
+chain is retried `runtime.max_retries` times on the same context and
+then ends as `model.retry_exhausted`; see
+[Configure fallbacks](../how-to/configure-fallbacks.md#context-overflow-with-no-chain).
+
 **`llm.all_models_failed`'s `attempts` field** is the full ordered
 list of `(model, error_code, detail)` triples the engine tried.
 The cause chain on the emitted `thread.exchange_failed` event
@@ -1045,8 +1076,26 @@ Specifically:
 - Fatal errors → emit `thread.exchange_failed`, then raise (sync) or
   end stream (streaming).
 
-Uncaught non-platform exceptions → wrapped as `platform.internal_error`
-at Fatal level, then handled per above.
+Uncaught non-platform exceptions first pass through a cause-chain
+**safety net** (`engine._classify.classify_from_cause_chain`, run both
+inside the retry loop and at the boundary). It walks `__cause__`
+(cycle-guarded, at most 10 links) in two passes:
+
+1. **Name tables**, unchanged since before bug-145:
+   `openai.APITimeoutError` / `APIConnectionError` / `RateLimitError`
+   → `model.upstream_error` (Recoverable), and
+   `openai.AuthenticationError` / `PermissionDeniedError` →
+   `agent.unauthorized` (Fatal). A hit anywhere in the chain wins.
+2. **Status branch** (bug-145): any link with an integer
+   `status_code` >= 400 and a `response` is mapped through the same
+   status table the connectors use (§4.15), with
+   `where: engine._classify.cause_chain` and `model: "unknown"`.
+
+Matching is by qualified class name and duck typing, so the engine
+imports no provider SDK. Only an exception neither pass recognises is
+wrapped as `platform.internal_error` at Fatal level, then handled per
+above. In practice the safety net is defense in depth: provider errors
+are normally typed earlier, at the connector call seam (§4.15).
 
 ---
 

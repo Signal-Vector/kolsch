@@ -62,31 +62,40 @@ trigger table breaks an AGENTS.md hard rule.
 
 - HTTP 429 -> `model.rate_limited` (Recoverable).
 - HTTP 5xx (500-599) -> `model.server_error` (Recoverable).
-- `httpx.TimeoutException` family -> `model.timeout` (Recoverable).
-- HTTP 400 with body markers (`context_length` / `context_window` /
-  `too long` / `maximum context`) -> `model.context_overflow`
-  (Recoverable).
 - HTTP 401 or 403 -> `model.authentication_failed` (Fatal).
-- HTTP 400 (any other body) -> `model.bad_request` (Fatal).
+- HTTP 402 or 409 -> `model.upstream_error` (Recoverable).
+- HTTP 408, `httpx` timeout / connect / network failures, and
+  `openai.APITimeoutError` / `APIConnectionError` -> `model.timeout`
+  (Recoverable).
+- A context-overflow message in the body -> `model.context_overflow`
+  (Recoverable). HTTP 400 matches the broad markers (`context_*`,
+  `too long`, `exceeds`, `maximum context`, ...); every other status
+  only the specific context/token phrases.
+- HTTP 404 otherwise -> `model.not_found` (Recoverable).
+- HTTP 400 / 422 otherwise, and any other status >= 400 ->
+  `model.bad_request` (Fatal).
 
 OpenAI-compatible providers return a JSON error body of shape
 `{"error": {"message": ..., "code": ..., "type": ...}}`; the overflow
-detection scans both `error.message` and `error.code` for the
-documented markers. Bodies that don't parse as JSON fall through to
-the status-only branches.
+detection scans the whole raw body (so `error.message`, `error.code`
+and non-JSON bodies alike). The reason carried on the error is
+`error.message` (capped at 2000 characters), or the first 200
+characters of a non-JSON body.
 
-Other HTTP statuses (200 with a malformed body, 3xx redirects, etc.)
+Statuses below 400 (200 with a malformed body, 3xx redirects, etc.)
 are NOT covered here — they are the response-parsing layer's problem
 and surface as `errors.ModelMalformedResponse` (also Recoverable).
 Truly out-of-band failures (DNS resolution, connection refused) raise
 `httpx.HTTPError` subclasses; this provider wraps them as
 `model.timeout` since they prevent a first-byte response.
 
-The classification helper
-`classify_http_response`
-is pure and testable in isolation. A future commit wires it into the
-call layer that wraps `crewai.LLM` invocation; today the engine
-exercises the same mapping through the Mock-LLM test path.
+`classify_call_error` delegates to the shared, pure
+`llm.providers._errors.classify_openai_compat_exception`, which walks
+the exception CrewAI re-raised (cause chain, cycle-guarded) to the SDK
+status error and maps it with `classify_http_response`. The engine runs
+the hook at its LLM call seam (`engine._crewai_adapter.make_llm_callable`),
+so these codes are what the event log records and what the fallback
+chain decides on (bug-145).
 """
 
 from __future__ import annotations

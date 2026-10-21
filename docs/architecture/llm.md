@@ -82,6 +82,13 @@ by a connector, so it can always be rebuilt from the event log. It is
 stable within a session (and across resume), new after `/new`, and
 separate for each spawned workflow-node session.
 
+**Connectors classify their own call failures.** The connector that
+built a client also maps that client's call-time exceptions (HTTP
+status, timeout, context overflow) to catalogued `model.*` errors,
+through its `classify_call_error` hook. The engine runs the hook where
+it calls the model, so fallback, compaction and the event log all see
+the real code rather than an opaque internal error.
+
 **Fallback is a list on the config.** A `ResolvedAgentConfig`
 declares `fallback_models` — an ordered list of backup `ModelSpec`s
 the engine walks on recoverable errors (rate limits, transient

@@ -74,22 +74,53 @@ are deliberately deferred (Phase 1.3 patch Part 7).
 
 ## What triggers fallback
 
-The engine consults the chain on Recoverable `model.*` errors only:
+The engine consults the chain on Recoverable `model.*` errors only.
+For OpenAI-compatible providers (OpenCode, OpenRouter) the connector
+maps each HTTP failure to a code as the call returns:
 
-- `model.rate_limited` (HTTP 429)
-- `model.server_error` (HTTP 5xx)
-- `model.timeout`
-- `model.context_overflow`
+- `model.rate_limited` — HTTP 429.
+- `model.server_error` — HTTP 5xx.
+- `model.timeout` — the provider didn't answer in time, the
+  connection failed, or HTTP 408.
+- `model.context_overflow` — the request didn't fit the model's
+  context window (HTTP 400, 413 or 422 with an overflow message).
+- `model.not_found` — HTTP 404. Usually the provider retired or
+  renamed the model; another entry can still answer. Run
+  `kolsch refresh <provider>` to re-read its catalog, and check the
+  provider's `base_url` (a wrong one 404s every model).
+- `model.upstream_error` — HTTP 402 (out of credits on this
+  provider) or 409.
 
 It does NOT consult the chain on:
 
-- `model.authentication_failed` — same key fails on the next entry.
-- `model.bad_request` — the request itself is broken.
+- `model.authentication_failed` — HTTP 401/403; the same key fails
+  on the next entry.
+- `model.bad_request` — HTTP 400/422 and any other 4xx; the request
+  itself is broken.
 - `llm.provider_not_configured` / `llm.client_init_failed` —
   config gaps that re-occur identically.
 - Anything outside `model.*` (engine bugs, store failures, etc.).
 
 The canonical table is [Error Model §4.15](../explanation/error-model.md).
+
+### Context overflow with no chain
+
+A context overflow on the main exchange is `model.context_overflow`
+(Recoverable). With no fallback chain to walk, the engine's retry
+loop re-sends the **same** over-long context `runtime.max_retries`
+times, then ends the exchange with `model.retry_exhausted`. Nothing
+shrinks the context in between. (Earlier releases sometimes hid this
+because CrewAI summarised the conversation itself and never recorded
+it in the event log; kolsch now classifies the error first, so that
+silent path no longer runs.)
+
+To recover from overflow, either:
+
+- add a larger-context model to `fallback_models`, which is the
+  chain-order row above; or
+- compact the conversation before it fills: run `/compact` in chat,
+  or rely on proactive compaction (see
+  [context compaction](context-compaction.md)).
 
 ## Reading the event log
 
