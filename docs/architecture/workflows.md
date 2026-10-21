@@ -139,7 +139,11 @@ field on every node type.
 `retry:` and `timeout:` are per-node modifiers, not node types.
 They wrap any runner (`with_retry`, `with_timeout`) at dispatch
 time. `retry` wraps first so the timeout deadline bounds the whole
-retry budget.
+retry budget. A node without its own `timeout:` gets the
+workspace default (`workflows.default_node_timeout_seconds` in
+`platform.yaml`, 240 s unless set) — on `kolsch workflows run`,
+`resume` and `fork` alike, since all three build their executor
+through the same `build_workflow_executor` (bug-141).
 
 ## DAG semantics
 
@@ -278,6 +282,23 @@ cleanly. `kolsch workflows resume <run>` (or the API's resume
 endpoint) replays the JSONL, validates the operator response,
 writes the `workflow.run.resumed` and paused-node
 `workflow.node.completed` events, and re-enters the walk loop.
+
+**Resume and fork re-validate the workflow.** Both reload the
+workflow YAML and run the same validator gate as a fresh run
+before touching anything (bug-142). On every CLI path — `run`
+(including `--follow`), `resume` and `fork` — a rejected workflow
+prints the validator's errors and exits 1, with no traceback, and a
+rejected `run` or `fork` leaves no run behind (no phantom `pending`
+entry in `kolsch workflows list`). If the YAML was edited into an
+invalid state since the run started — or fails a newer validator
+rule — a resume is rejected with the validator's error, writes no
+event and leaves the run `waiting_for_input`; fix the YAML and
+resume again. A rejected fork writes nothing and leaves no forked
+run behind. The one kept run is a sub-workflow child whose own gate
+rejects it: the parent already points at it, so it stays, recorded
+`failed`. In chat, a rejected resume or `/fork` prints a one-line
+notice plus a pointer to `kolsch workflows validate <ref>` for the
+details.
 
 **Cancellation is cooperative across the whole run.** The Executor
 polls the cancellation token between nodes; each runner polls

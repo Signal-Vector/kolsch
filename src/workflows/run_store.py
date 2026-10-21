@@ -26,9 +26,10 @@ NO executor logic here — pure data and filesystem plumbing.
 from __future__ import annotations
 
 import json
+import shutil
 import time
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -261,6 +262,7 @@ class WorkflowRunStore:
         run_id: WorkflowRunId,
         *,
         poll_seconds: float = _TAIL_POLL_SECONDS,
+        stop: Callable[[], bool] | None = None,
     ) -> Iterator[dict[str, Any]]:
         """Tail the JSONL like `tail -f`.
 
@@ -271,9 +273,18 @@ class WorkflowRunStore:
         terminal `workflow.run.*` event. Used by the CLI's `--follow`
         flag.
 
+        `stop` (bug-142) is checked after each drain of the file: once
+        it returns `True` the tail yields whatever is left and returns,
+        even without a terminal event. The `--follow` caller passes
+        "the executor has finished" so a run that ends WITHOUT writing
+        a terminal event (e.g. rejected by the validator before its
+        first event) can't leave the tail polling forever.
+
         Args:
             run_id: The run to tail.
             poll_seconds: Poll interval between file checks.
+            stop: Optional predicate; `True` ends the tail after a
+                final drain.
 
         Yields:
             One event dict per appended JSONL line, in append order.
@@ -282,6 +293,9 @@ class WorkflowRunStore:
         offset = 0
         terminal_kinds = _terminal_event_kinds()
         while True:
+            # Sample `stop` BEFORE draining so every line written before
+            # the producer finished is still yielded below.
+            stopping = stop is not None and stop()
             if run_dir.events_path.exists():
                 with run_dir.events_path.open("r", encoding="utf-8") as fh:
                     fh.seek(offset)
@@ -294,6 +308,8 @@ class WorkflowRunStore:
                         if event.get("kind") in terminal_kinds:
                             return
                     offset = fh.tell()
+            if stopping:
+                return
             time.sleep(poll_seconds)
 
     # ------------------------------------------------------------------
@@ -357,6 +373,28 @@ class WorkflowRunStore:
                 # Corrupt or unreadable meta — skip. The sweep must
                 # not derail on one bad run.
                 continue
+
+    def discard_unstarted(self, run_id: WorkflowRunId) -> None:
+        """Remove a minted run that never started (bug-142).
+
+        Used when a fork is rejected before its first event (e.g. the
+        reloaded workflow fails validation): the forked run's
+        directory holds only `meta.json`, so leaving it would surface a
+        phantom `pending` run in `kolsch workflows list`. `meta.json` is
+        unlinked first — a single atomic step after which no listing
+        (`list` / `list_all_meta`) treats the directory as a run — and
+        the directory is then removed.
+
+        Raises:
+            ValueError: The run has events — it started, and discarding
+                it would destroy history.
+        """
+        run_dir = self._directory(run_id)
+        if run_dir.events_path.exists() and run_dir.events_path.stat().st_size > 0:
+            msg = f"refusing to discard run {run_id}: it has events"
+            raise ValueError(msg)
+        (run_dir.root / "meta.json").unlink(missing_ok=True)
+        shutil.rmtree(run_dir.root, ignore_errors=True)
 
     # ------------------------------------------------------------------
     # directory accessor

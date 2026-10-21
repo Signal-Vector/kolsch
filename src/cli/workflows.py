@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import threading
 from typing import TYPE_CHECKING, Any, TextIO
 
 from assets import AssetManagement
@@ -40,9 +41,10 @@ from workflows.errors import (
     WorkflowValidationError,
 )
 from workflows.parser import load_workflow
-from workflows.validator import validate_workflow_or_raise
+from workflows.validator import validate_workflow_or_raise, workflow_errors_in
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
 __all__ = ["add_workflows_subparser", "cmd_workflows"]
@@ -663,8 +665,17 @@ async def _cmd_run(
         store=store,
     )
 
-    if follow:
-        return await _run_with_follow(
+    try:
+        if follow:
+            return await _run_with_follow(
+                executor=executor,
+                store=store,
+                run_id=run.run_id,
+                fmt=fmt,
+                out=out,
+                err=err,
+            )
+        return await _run_blocking(
             executor=executor,
             store=store,
             run_id=run.run_id,
@@ -672,14 +683,20 @@ async def _cmd_run(
             out=out,
             err=err,
         )
-    return await _run_blocking(
-        executor=executor,
-        store=store,
-        run_id=run.run_id,
-        fmt=fmt,
-        out=out,
-        err=err,
-    )
+    except WorkflowValidationError as exc:
+        # bug-142: the executor's run-start gate rejected the workflow.
+        # Render it like `workflows validate` does — no traceback.
+        return _emit_error_envelope(
+            command="workflows run", errors=[exc], fmt=fmt, out=out, err=err
+        )
+    except ExceptionGroup as group:
+        return _emit_error_envelope(
+            command="workflows run",
+            errors=workflow_errors_in(group),
+            fmt=fmt,
+            out=out,
+            err=err,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -781,10 +798,25 @@ async def _cmd_resume(
 
     try:
         status = await executor.resume(response=response)
-    except (WorkflowResumeRejected, WorkflowInputInvalid) as exc:
+    except (
+        WorkflowResumeRejected,
+        WorkflowInputInvalid,
+        WorkflowValidationError,
+    ) as exc:
+        # bug-142: a workflow edited into an invalid state since the
+        # pause is rejected by the resume gate; the run stays
+        # `waiting_for_input` for a retry once the YAML is fixed.
         return _emit_error_envelope(
             command="workflows resume",
             errors=[exc],
+            fmt=fmt,
+            out=out,
+            err=err,
+        )
+    except ExceptionGroup as group:
+        return _emit_error_envelope(
+            command="workflows resume",
+            errors=workflow_errors_in(group),
             fmt=fmt,
             out=out,
             err=err,
@@ -949,6 +981,15 @@ async def _cmd_fork(
         return _emit_error_envelope(
             command="workflows fork",
             errors=[exc],
+            fmt=fmt,
+            out=out,
+            err=err,
+        )
+    except ExceptionGroup as group:
+        # bug-142: several validation errors on the reloaded workflow.
+        return _emit_error_envelope(
+            command="workflows fork",
+            errors=workflow_errors_in(group),
             fmt=fmt,
             out=out,
             err=err,
@@ -1454,8 +1495,16 @@ async def _run_with_follow(
     from workflows.run import WorkflowRunStatus  # noqa: PLC0415
 
     exec_task = asyncio.create_task(executor.run())
+    # bug-142: end the tail as soon as the executor finishes, even if it
+    # finished without writing a terminal event (e.g. the run-start
+    # validation gate rejected the workflow) — otherwise the tail polls
+    # forever. A thread-safe flag, set from the task's done callback.
+    executor_done = threading.Event()
+    exec_task.add_done_callback(lambda _t: executor_done.set())
     try:
-        await asyncio.to_thread(_drain_tail_to_writer, store, run_id, out)
+        await asyncio.to_thread(
+            _drain_tail_to_writer, store, run_id, out, stop=executor_done.is_set
+        )
     finally:
         # If the tail printer raised, still let the executor finish so
         # the JSONL terminates cleanly.
@@ -1470,7 +1519,13 @@ async def _run_with_follow(
     return 1
 
 
-def _drain_tail_to_writer(store: Any, run_id: Any, out: TextIO) -> None:
+def _drain_tail_to_writer(
+    store: Any,
+    run_id: Any,
+    out: TextIO,
+    *,
+    stop: Callable[[], bool] | None = None,
+) -> None:
     """Synchronous-thread JSONL tail printer.
 
     Runs inside `asyncio.to_thread` so the `time.sleep` polls in
@@ -1478,7 +1533,7 @@ def _drain_tail_to_writer(store: Any, run_id: Any, out: TextIO) -> None:
     """
     import json as _json  # noqa: PLC0415
 
-    for event in store.tail(run_id):
+    for event in store.tail(run_id, stop=stop):
         out.write(_json.dumps(event, sort_keys=True, default=str))
         out.write("\n")
         out.flush()

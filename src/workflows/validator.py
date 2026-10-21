@@ -104,6 +104,7 @@ __all__ = [
     "ValidationResult",
     "validate_workflow",
     "validate_workflow_or_raise",
+    "workflow_errors_in",
 ]
 
 
@@ -270,6 +271,24 @@ def validate_workflow(
         errors=tuple(errors),
         warnings=tuple(warnings),
     )
+
+
+def workflow_errors_in(group: BaseExceptionGroup[BaseException]) -> list[WorkflowError]:
+    """The `WorkflowError`s inside a `validate_workflow_or_raise` group.
+
+    The validator raises ONE `ExceptionGroup` for a multi-error
+    workflow. Operator surfaces (CLI, chat) render its members; a group
+    carrying anything other than `WorkflowError`s is not a validation
+    result, so it is re-raised unchanged rather than half-rendered.
+
+    Raises:
+        BaseExceptionGroup: `group` itself, when any member is not a
+            `WorkflowError`.
+    """
+    errors = [exc for exc in group.exceptions if isinstance(exc, WorkflowError)]
+    if len(errors) != len(group.exceptions):
+        raise group
+    return errors
 
 
 def validate_workflow_or_raise(
