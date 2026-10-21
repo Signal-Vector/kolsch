@@ -96,7 +96,7 @@ concurrency: sequential                      # 'sequential' (default) or 'auto'.
 
 nodes:                                       # REQUIRED mapping.
   <name>:
-    type: <bundle>/nodes/<typename>          # 3-seg ref. The 14 built-ins are
+    type: <bundle>/nodes/<typename>          # 3-seg ref. The 16 built-ins are
                                              # kolsch/nodes/<bash|noop|…>.
     # ...type-specific config fields here.
     description: "..."                       # OPTIONAL display label.
@@ -113,17 +113,18 @@ graph:                                       # REQUIRED for runnable workflows.
     - from: <source-node-name>
       to: <target-node-name>
       binds: { <key>: <value-or-jinja> }     # OPTIONAL.
-      branch: true|false                     # OPTIONAL — required for true/false
-                                             # outbound from branchable sources.
+      branch: true|false|<option>            # OPTIONAL — true/false from boolean
+                                             # branch sources; an option name (str)
+                                             # from a jev node routed on a choice.
 ```
 
 **The runnable-vs-library marker is `graph:` presence.** A workflow with no `graph:` key is a `node_library` — importable via `extends:` but not directly runnable. Omitting `graph:` is intentional only for library workflows; if the brief asks for something runnable, always include `graph:`.
 
 **Names are stable identifiers, NOT descriptions.** The `nodes:` mapping key IS the node's identity. The `description:` modifier is display-only — never use it to identify or reference a node.
 
-### Node types — the 14 built-ins
+### Node types — the 16 built-ins
 
-The 14 reserved kolsch/nodes/<name> slots, grouped by purpose:
+The 16 reserved kolsch/nodes/<name> slots, grouped by purpose:
 
 | Slot | Purpose | Type-specific config | Outputs |
 |---|---|---|---|
@@ -141,13 +142,18 @@ The 14 reserved kolsch/nodes/<name> slots, grouped by purpose:
 | kolsch/nodes/map | Fan-out a worker over a list. | `over: <list-jinja>`, `apply: <worker-node>`, `item_as: <var-name>` (the worker reads each element as `inputs.<var-name>`), optional `parallel: true`, optional `concurrency: <int>`. | `results: list`. Worker referenced from `apply:` is NOT addressable from outside the map. |
 | kolsch/nodes/branch | Pure conditional. | `condition: <jinja>`. | `value: bool`. ALWAYS branchable; requires both `branch: true` and `branch: false` outbound arms. |
 | kolsch/nodes/compute | Compute a value. | `value: <jinja>`. | `value`. |
+| kolsch/nodes/browse_url | Fetch a rendered web page (needs the `kolsch[browse]` extra). | `url: "..."`, optional `format`, `wait_selector`, `headers`, `cookies`. | `url`, `final_url`, `status`, `content`, `content_persisted_to`, `truncated`. |
+| kolsch/nodes/jev | Typed Jev decision (classify / score / yes-no) via the `jev_decide` tool; needs OpenRouter. | `state: <jinja or object>`, `questions: { <name>: {type: choice\|score\|noul, instructions, criteria, fail_below?} }`, optional `model`, optional `route_on: <question>`, optional `noul_threshold`. | `answers`, `model`, `usage`, plus `value` with `route_on` (option name for a choice, bool for a noul). Multi-way branch source when `route_on` is a choice. |
 
 **Branchable sources** (edges may carry `branch: true|false` from these):
 - kolsch/nodes/branch — always; both arms required.
 - kolsch/nodes/bash — exit-code-driven; either arm optional.
 - Authored Python `@node` whose return type is `bool` or `tuple[bool, BaseModel]` — either arm optional.
+- kolsch/nodes/jev with `route_on` on a `noul` question — `branch: true|false`, both arms required.
 
-Anything else with `branch:` on an outbound edge → `WorkflowBranchOnNonBranchable`.
+**Multi-way source:** kolsch/nodes/jev with `route_on` on a `choice` question. Each outbound edge's `branch:` is an option NAME (a string, e.g. `branch: billing`); every option needs an arm; the chosen option's arm fires, the rest are pruned. Never name a choice option `true`/`false`: unquoted, YAML loads them as booleans and the node fails to parse (any choice question); on a ROUTED choice even a quoted `"true"` is rejected (`WorkflowJevAmbiguousOptionName`) because an edge `branch: true` could never match it.
+
+Anything else with `branch:` on an outbound edge → `WorkflowBranchOnNonBranchable`. A string `branch:` on a boolean source (note: `yes`/`no`/`on`/`off` are strings in YAML 1.2) → `WorkflowBranchTypeMismatch`.
 
 ### Authored Python `@node` files
 
@@ -249,7 +255,11 @@ Every concrete `WorkflowValidationError` subclass with what the engine sees, the
 | `WorkflowJinjaRefUnknown` | A `nodes.<X>.<field>` reference can't be resolved. | One of: `<X>` is not a transitive ancestor (`reason="not_predecessor"`); `<X>` resolves but `<field>` isn't in its output schema (`reason="unknown_field"`); `<X>`'s schema is unknown — e.g., authored-Python failed to import (`reason="not_declared"`). | Predecessor: add an edge that makes `<X>` reachable; unknown_field: pick a field the source actually emits; not_declared: fix the source's import. |
 | `WorkflowMapperWorkerNotAddressable` | A node outside a `map` references the map's worker by name. | Cross-boundary reference into the map. | Reference `nodes.<map>.results` instead of the worker. |
 | `WorkflowBranchOnNonBranchable` | An edge with `branch:` originates from a source that doesn't branch. | Added `branch:` to a non-branchable node. | Drop the `branch:` on the edge OR change the source to a branchable type (`branch`/`bash`/authored Python returning bool). |
-| `WorkflowBranchMissingArm` | A `branch` node is missing the `branch: true` OR `branch: false` outbound arm. | Wired only one arm. | Add the missing arm. Both are required on kolsch/nodes/branch. |
+| `WorkflowBranchMissingArm` | A `branch` node (or jev noul route) is missing the `branch: true` OR `branch: false` arm, or a jev choice route has an option with no arm (`missing_arm` names it). | Wired only some arms. | Add the missing arm. |
+| `WorkflowBranchUnknownArm` | A jev choice route has an edge whose `branch:` isn't one of the question's options. | Typo, or an option removed from `criteria`. | Use an option name from the question's `criteria`. |
+| `WorkflowBranchTypeMismatch` | A string arm on a boolean source, or a boolean arm on a jev choice route. | `branch: yes` (a string in YAML 1.2) or mixing bool and option arms. | Use `true`/`false` for boolean sources, option names for a jev choice route. |
+| `WorkflowJevInvalidRouteOn` | A jev node's `route_on` names no question, or a `score` question. | Typo, or routing on a score. | Name a `choice` or `noul` question; route on a score with a downstream `when:`. |
+| `WorkflowJevAmbiguousOptionName` | A routed choice option is named `true`/`false` (any case). | YAML 1.2 loads unquoted true/false as booleans. | Rename the option. |
 | `WorkflowMapperWorkerMissingField` | A map node expects a field its worker doesn't declare on its output schema. | Worker model is wrong. | Add the field to the worker's `Outputs(BaseModel)`. |
 | `WorkflowExtendsCycle` | An `extends:` chain loops. | A → B → A. | Break the chain by removing one `extends:` ref. |
 | `WorkflowExtendsDepthExceeded` | An `extends:` chain exceeds 16. | Deeply nested composition. | Flatten the chain. |
@@ -290,7 +300,7 @@ These will read as plausible to a model that doesn't know the contract. Avoid th
 - **Referencing a map worker from outside its map.** Use `nodes.<map>.results`.
 - **Calling `validate_workflow` against a `workflow_ref` for a draft you haven't written to disk yet.** The tool reads from disk. Use `yaml_path` for fresh drafts that aren't catalog-registered.
 - **Declaring a workflow ready without a green validation.** Hardest rule. Never skip the validator.
-- **Authoring at bundles/kolsch/nodes/<reserved-name>.py.** `WorkflowBuiltinShadowed`. The 14 built-in slots are reserved.
+- **Authoring at bundles/kolsch/nodes/<reserved-name>.py.** `WorkflowBuiltinShadowed`. The 16 built-in slots are reserved.
 - **Writing to the `kolsch` package bundle.** Read-only by convention. See "Where to write" below.
 
 ## Canonical examples

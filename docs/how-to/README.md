@@ -24,6 +24,9 @@ set up.
 - [Write a workflow node](write-a-workflow-node.md) — author a
   custom `@node`-decorated Python module that becomes a
   `<bundle>/nodes/<name>` step in workflow YAML.
+- [Use Jev for decisions](use-jev.md) — give an agent the
+  `jev_decide` tool for fast, typed classify / score / yes-no
+  judgements with calibrated confidence.
 - [MCP operator server](mcp-operator-server.md) — run `kolsch mcp
   serve` so an external agent (e.g. Claude Code) can list sessions
   and read event logs over the Model Context Protocol.

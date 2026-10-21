@@ -1,0 +1,80 @@
+# Starter workflow — Jev multi-way triage (spec-136).
+#
+# One ``kolsch/nodes/jev`` node asks Jev to route a ticket to one of
+# three teams, then a multi-way ``branch:`` fires the matching handler.
+# ``route`` captures ``{answers, model, usage, value}`` where ``value``
+# is the chosen option name; each outgoing edge names one option, the
+# matching arm fires and the other two emit ``workflow.node.pruned``
+# (carrying the string ``branch_value``).
+#
+# Needs OpenRouter (Jev is reached through it):
+#
+#     kolsch connect openrouter
+#
+# Run with:
+#
+#     kolsch workflows run kolsch/workflows/triage-tickets-jev \
+#         --input ticket_text="the site is returning 502s"
+#     # → outage_handler fires; billing_handler + feature_handler pruned
+#
+#     kolsch workflows run kolsch/workflows/triage-tickets-jev \
+#         --input ticket_text="I was charged twice"
+#     # → billing_handler fires
+#
+# The jev node dispatches the ``kolsch/tools/jev_decide`` tool, so the
+# workspace's authorization rules apply. The default rule for that tool
+# is ``prompt``; for a non-interactive run, allow it first:
+#
+#     kolsch permissions add --what kolsch/tools/jev_decide --effect allow --first
+#
+# The handlers are ``compute`` nodes so the walkthrough spends nothing
+# beyond the Jev call — swap in ``kolsch/nodes/agent`` responders (see
+# ``triage-tickets.yaml``) for real replies. Add ``fail_below: 0.6`` to
+# the question to fail the run instead of routing a low-confidence
+# guess.
+description: "Jev triage — one typed decision, three-way branch to a handler."
+
+nodes:
+  route:
+    type: kolsch/nodes/jev
+    description: "Ask Jev which team owns the ticket."
+    state: "{{ inputs.ticket_text }}"
+    questions:
+      team:
+        type: choice
+        instructions: "Which team should handle this support ticket?"
+        criteria:
+          billing: "Charges, refunds, invoices, subscriptions."
+          outage: "The service is down, erroring, or unreachable."
+          feature: "A request for new or changed functionality."
+    route_on: team
+  billing_handler:
+    type: kolsch/nodes/compute
+    description: "Billing path."
+    value: "{{ 'billing team (confidence ' ~ inputs.confidence ~ ')' }}"
+  outage_handler:
+    type: kolsch/nodes/compute
+    description: "Outage path."
+    value: "{{ 'on-call engineer (confidence ' ~ inputs.confidence ~ ')' }}"
+  feature_handler:
+    type: kolsch/nodes/compute
+    description: "Feature-request path."
+    value: "{{ 'product backlog (confidence ' ~ inputs.confidence ~ ')' }}"
+
+graph:
+  edges:
+    - from: route
+      to: billing_handler
+      branch: billing
+      binds:
+        confidence: "{{ nodes.route.answers.team.confidence }}"
+    - from: route
+      to: outage_handler
+      branch: outage
+      binds:
+        confidence: "{{ nodes.route.answers.team.confidence }}"
+    - from: route
+      to: feature_handler
+      branch: feature
+      binds:
+        confidence: "{{ nodes.route.answers.team.confidence }}"

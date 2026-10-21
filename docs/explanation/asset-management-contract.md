@@ -595,7 +595,7 @@ the standard uniqueness rules (a second bundle named `kolsch` would
 trip `AssetsDuplicateBundleName` like any other duplicate). The
 four builtin tools (`read`, `write`, `edit`, `bash`) are registered
 directly by the Tools subsystem at platform startup, not shipped as
-bundle files. The 15 built-in workflow node types (`kolsch/nodes/<name>`)
+bundle files. The 16 built-in workflow node types (`kolsch/nodes/<name>`)
 are virtual entries injected at catalog scan time (Phase 3.0 Step 3);
 authoring a file at one of those reserved slots
 (e.g., `bundles/kolsch/nodes/bash.py`) trips

@@ -176,6 +176,7 @@ Every node's captured output is available downstream via
 | `kolsch/nodes/compute` | `{value: Any}` |
 | `kolsch/nodes/map` | `{results: list[<worker capture>]}` |
 | `kolsch/nodes/branch` | `{value: bool}` |
+| `kolsch/nodes/jev` | `{answers, model, usage}` plus `value` (`str` option name for a `choice` `route_on`, `bool` for a `noul` `route_on`) |
 | `kolsch/nodes/workflow` | The child workflow's terminal-node captured output dict. |
 | Authored `@node` | Whatever the node returns — a `BaseModel`, a `bool`, or `(bool, BaseModel)`. |
 
@@ -692,8 +693,11 @@ Boolean route gate. Drives which outgoing edges fire via
 selector is valid only when the sender's captured output has a
 `value: bool` field. The three branchable sources are: any
 `kolsch/nodes/branch`, any `kolsch/nodes/bash` (via `exit_code == 0`
-convention when opted in), and any authored `@node` whose return
-type is `bool` or `(bool, BaseModel)`.
+convention when opted in), any authored `@node` whose return
+type is `bool` or `(bool, BaseModel)`, and a `kolsch/nodes/jev` node
+whose `route_on` names a `noul` question. A `kolsch/nodes/jev` node
+whose `route_on` names a `choice` question routes **multi-way** on
+string arms instead — see [`kolsch/nodes/jev`](#kolschnodesjev).
 
 **Errors surfaced:** `WorkflowNodeFailed` on a condition expression
 that raises; `NodeTimeoutExceeded` on `timeout_seconds`.
@@ -716,6 +720,118 @@ edges:
   - from: gate
     to: rollback
     branch: false
+```
+
+### `kolsch/nodes/jev`
+
+A typed decision from Jev (TypeSafe AI's "System One" model). The
+node dispatches the `kolsch/tools/jev_decide` tool, so the workspace's
+authorization rules (default: `prompt`) and the tool's own validation
+and retries apply. Like `browse_url`, the node runs the **packaged**
+`jev_decide` tool shipped with kolsch, not a copy edited in your
+workspace's `bundles/kolsch/tools/`. Needs `OPENROUTER_API_KEY`
+(`kolsch connect openrouter`). See
+[Use Jev for decisions](../how-to/use-jev.md).
+
+Known gap: `kolsch workflows resume` and `kolsch workflows fork`
+currently build their tool definitions without the `kolsch` bundle
+stamp, so a jev node reached on those paths is checked as
+`tool.jev_decide`, matches no `kolsch/tools/jev_decide` rule, and is
+denied by the default-deny tail. Plain `kolsch workflows run` is
+unaffected.
+
+**Config schema:**
+
+| Field | Type | Default | Semantics |
+|---|---|---|---|
+| `state` | `str \| object \| array` | required | The content judged. Every Jinja-marked string inside it, at any depth, is rendered against `inputs.*` / `state.*`. |
+| `questions` | `map[str, question]` | required | Same shape as the tool: `type` `choice` / `score` / `noul`, `instructions`, `criteria`, optional `fail_below`. Validated at parse against the tool's own models. Literal — not Jinja-rendered. |
+| `model` | `str` | `typesafe/jev-1.14` | Jev model id. |
+| `route_on` | `str \| None` | `None` | Name of a `choice` or `noul` question. Makes the node a branch source. |
+| `noul_threshold` | `float` 0–1 | `0.5` | For a `noul` `route_on`: `value = noul >= noul_threshold`. |
+
+**Binds accepted:** any keys referenced by `state`.
+
+**State read / written:** reads any `state.*` referenced by `state`.
+Writes nothing.
+
+**Return shape:**
+
+```json
+{
+  "answers": {"team": {"type": "choice", "choice": "outage", "confidence": 0.97, "probabilities": {"...": 0.0}}},
+  "model": "typesafe/jev-1.14-20261014",
+  "usage": {"input_tokens": 120, "output_tokens": 12, "cost": 0.000005},
+  "value": "outage"
+}
+```
+
+`value` is present only with `route_on`.
+
+**Multi-way branching:** with `route_on` on a `choice` question, each
+outgoing edge's `branch:` is an **option name** (a string). The edge
+whose `branch` equals the chosen option fires; every other arm is
+pruned (`workflow.node.pruned`, carrying the string `branch_value`).
+The validator requires:
+
+- `route_on` names a defined `choice` or `noul` question
+  (`WorkflowJevInvalidRouteOn`; a `score` can't route — use a
+  downstream `when:`).
+- Choice arms are option names (`WorkflowBranchUnknownArm`) and are
+  strings, not booleans (`WorkflowBranchTypeMismatch`); every option
+  has at least one arm (`WorkflowBranchMissingArm`, naming the option).
+- A `noul` route uses `branch: true` / `branch: false`, both wired.
+- Option names that read as YAML booleans: an **unquoted** `true:` /
+  `false:` criteria key loads as a boolean and fails parsing on any
+  choice question (rename it). On a **routed** choice, even a quoted
+  name like `"True"` (any case) is rejected
+  (`WorkflowJevAmbiguousOptionName`), because an edge `branch: true`
+  loads as a bool and could never match it.
+
+Without `route_on` the node is not a branch source.
+
+**Errors surfaced:** `WorkflowNodeFailed` whose `workflow.node.failed`
+payload carries `nested_error.type`:
+
+| `nested_error.type` | When |
+|---|---|
+| `tool.jev_below_threshold` | A question's `fail_below` was breached; `nested_error.detail.failures` lists each `{question, metric, value, threshold}`. |
+| `secret.not_found` | `OPENROUTER_API_KEY` is missing; `nested_error.recovery_hint` is "Run `kolsch connect openrouter`." |
+| `tool.unauthorized` | Authorization denied the call (a non-interactive run can't answer the default `prompt` rule — allow it with `kolsch permissions add`). |
+| `tool.execution_failed` / `tool.invalid_arguments` | Upstream / argument errors, with the tool's `recovery_hint` when set. |
+
+`NodeTimeoutExceeded` on `timeout_seconds`.
+
+**Example** (the starter `kolsch/workflows/triage-tickets-jev`):
+
+```yaml
+route:
+  type: kolsch/nodes/jev
+  state: "{{ inputs.ticket_text }}"
+  questions:
+    team:
+      type: choice
+      instructions: Which team should handle this support ticket?
+      criteria:
+        billing: Charges, refunds, invoices, subscriptions.
+        outage: The service is down, erroring, or unreachable.
+        feature: A request for new or changed functionality.
+  route_on: team
+```
+
+Paired edges:
+
+```yaml
+edges:
+  - from: route
+    to: billing_handler
+    branch: billing
+  - from: route
+    to: outage_handler
+    branch: outage
+  - from: route
+    to: feature_handler
+    branch: feature
 ```
 
 ### `kolsch/nodes/workflow`
@@ -877,7 +993,7 @@ classify:
 | `from` (alias `from_`) | `str` | required | Source node name. |
 | `to` | `str` | required | Target node name. Multiple edges sharing a `to:` form a fan-in. |
 | `binds` | `dict[str, Any]` | `{}` | Key → value map projected onto the target's `inputs.*` namespace. RHS is literal or Jinja-marked. |
-| `branch` | `bool \| None` | `None` | When set, edge fires only if the source returned a matching bool. Valid only from branchable sources (see the `branch` node's "Branchable sources" note). |
+| `branch` | `bool \| str \| None` | `None` | When set, edge fires only if the source's branch value equals it. A `bool` for boolean sources (see the `branch` node's "Branchable sources" note); a `str` option name for a `kolsch/nodes/jev` choice route. YAML 1.2: only `true` / `false` load as booleans — `yes` / `no` / `on` / `off` and quoted values are strings, and a string arm on a boolean source is rejected (`WorkflowBranchTypeMismatch`). |
 | `when` | `Any` | `None` | Edge-level gate. Literal or Jinja-marked. |
 
 Two legacy edge keys are rejected: `condition:` (rename to `when:`)

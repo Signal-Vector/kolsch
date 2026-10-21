@@ -175,8 +175,8 @@ def test_all_15_builtin_types_parse(
 
 
 def test_builtin_type_name_set_size() -> None:
-    """AC sanity — the 15-name set is EXACTLY 15 entries."""
-    assert len(BUILTIN_TYPE_NAMES) == 15
+    """AC sanity — the built-in set is EXACTLY 16 entries (spec-136 added jev)."""
+    assert len(BUILTIN_TYPE_NAMES) == 16
     expected = {
         "agent",
         "bash",
@@ -185,6 +185,7 @@ def test_builtin_type_name_set_size() -> None:
         "compute",
         "delete_state",
         "filter",
+        "jev",
         "list_files",
         "map",
         "noop",

@@ -11,7 +11,7 @@ Covers Step 4 of ``qol-browse-url-node`` (Tests 3, 3b, 8):
   future dev who defines the class but forgets one of the two
   registrations trips this test.
 - **Test 8 (count guard):** ``"browse_url" in BUILTIN_TYPE_NAMES`` AND
-  ``len(BUILTIN_TYPE_NAMES) == 15``. Trips loudly if a 16th slot is
+  ``len(BUILTIN_TYPE_NAMES) == 16``. Trips loudly if a 17th slot is
   added without updating both this build and its own reservation.
 """
 
@@ -92,10 +92,10 @@ def test_browse_url_parser_wiring_registered_in_both_places() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_builtin_type_names_count_is_fifteen_including_browse_url() -> None:
+def test_builtin_type_names_count_is_sixteen_including_browse_url() -> None:
     """``BUILTIN_TYPE_NAMES`` includes ``"browse_url"`` and is exactly
-    15 entries. Fires loudly if a 16th slot is added without updating
-    both this build and its own reservation.
+    16 entries (spec-136 added ``jev``). Fires loudly if a 17th slot is
+    added without updating both this build and its own reservation.
     """
     assert "browse_url" in BUILTIN_TYPE_NAMES
-    assert len(BUILTIN_TYPE_NAMES) == 15
+    assert len(BUILTIN_TYPE_NAMES) == 16

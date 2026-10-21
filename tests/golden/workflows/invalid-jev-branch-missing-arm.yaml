@@ -1,0 +1,27 @@
+# expected_error: WorkflowBranchMissingArm
+# spec-136 — every option of a routed choice needs an arm (feature has none).
+nodes:
+  route:
+    type: kolsch/nodes/jev
+    state: some ticket
+    questions:
+      team:
+        type: choice
+        instructions: Which team?
+        criteria:
+          billing: null
+          outage: null
+          feature: null
+    route_on: team
+  billing_handler:
+    type: kolsch/nodes/noop
+  outage_handler:
+    type: kolsch/nodes/noop
+graph:
+  edges:
+    - from: route
+      to: billing_handler
+      branch: billing
+    - from: route
+      to: outage_handler
+      branch: outage

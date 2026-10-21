@@ -462,7 +462,7 @@ async def test_tool_unavailable_not_emitted_when_secret_present(
 # Test 3 — prompt `tools` variable excludes hidden tools
 # ---------------------------------------------------------------------------
 
-_GUARDED = 'You help.{% if "flagged" in tools.names() %} FLAGGED-AVAILABLE{% endif %}'
+_GUARDED = 'You help.{% if "flagged" in tools %} FLAGGED-AVAILABLE{% endif %}'
 
 
 @pytest.mark.parametrize(
@@ -478,6 +478,35 @@ async def test_tools_var_hidden_tool_guard(
     await _run_exchange(tmp_path, llm, None)
     system = next(m for m in llm.requests[0].messages if m.role == "system")
     assert ("FLAGGED-AVAILABLE" in system.content) is expect_text
+
+
+async def test_tools_var_hidden_guard_is_exact_membership(tmp_path: Path) -> None:
+    """A hidden ``flagged`` with a registered ``flagged_batch`` sibling must
+    NOT render the guard — ``in tools`` is exact, unlike a substring test on
+    the ``tools.names()`` display string (shown for contrast)."""
+    prompt = (
+        'You help.{% if "flagged" in tools %} EXACT-HIT{% endif %}'
+        '{% if "flagged" in tools.names() %} SUBSTRING-HIT{% endif %}'
+    )
+    _write_workspace(tmp_path, env={}, prompt=prompt)
+    bundle = tmp_path / "bundles" / "demo"
+    (bundle / "tools" / "flagged_batch.py").write_text(
+        _SIBLING_SRC.replace('name="sibling"', 'name="flagged_batch"'),
+        encoding="utf-8",
+    )
+    agent_path = bundle / "agents" / "hider.yaml"
+    agent = yaml.safe_load(agent_path.read_text(encoding="utf-8"))
+    agent["subsystems"]["tools"]["config"]["declared"].append(
+        {"ref": "demo/tools/flagged_batch"}
+    )
+    agent_path.write_text(yaml.safe_dump(agent), encoding="utf-8")
+
+    llm = _RecordingLLM()
+    await _run_exchange(tmp_path, llm, None)
+    assert {t["name"] for t in llm.requests[0].tools} == {"sibling", "flagged_batch"}
+    system = next(m for m in llm.requests[0].messages if m.role == "system")
+    assert "EXACT-HIT" not in system.content
+    assert "SUBSTRING-HIT" in system.content  # why `tools.names()` is wrong
 
 
 # ---------------------------------------------------------------------------

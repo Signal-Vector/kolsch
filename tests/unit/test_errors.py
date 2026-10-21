@@ -73,6 +73,7 @@ from errors import (
     FileLineTooLong,
     FileNotFound,
     FileTooLarge,
+    JevBelowThreshold,
     Level,
     LlmAllModelsFailed,
     LlmClientInitFailed,
@@ -223,6 +224,12 @@ CONSTRUCTOR_ARGS: dict[type[PlatformError], dict[str, Any]] = {
     ToolInvalidArguments: {"tool_name": "read", "validation_errors": []},
     ToolExecutionFailed: {"tool_name": "read", "error_class": "FileNotFoundError"},
     ToolTimeout: {"tool_name": "long_running", "timeout_seconds": 30},
+    JevBelowThreshold: {
+        "failures": [
+            {"question": "team", "metric": "confidence", "value": 0.4, "threshold": 0.6}
+        ],
+        "answers": {"team": {"type": "choice", "choice": "billing", "confidence": 0.4}},
+    },
     McpServerUnreachable: {
         "server_name": "github",
         "transport_error": "ECONNREFUSED",

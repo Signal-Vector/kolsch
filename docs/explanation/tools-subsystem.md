@@ -601,7 +601,10 @@ bundles/kolsch/
     ├── read_file.py
     ├── write_file.py
     ├── list_files.py
-    └── bash.py
+    ├── bash.py
+    ├── fetch_url.py        # HTTP GET + main-content extraction
+    ├── browse_url.py       # headless Chromium (kolsch[browse] extra)
+    └── jev_decide.py       # typed Jev decisions (§4.5.7)
 ```
 
 `bundles/kolsch/` is the canonical bundle name from Phase 2.0 onward.
@@ -609,6 +612,30 @@ Phase 1.2 originally scaffolded `bundles/starter/`; Phase 2.3's drift
 detection handles the rename — see TOOL-R12 alignment note in
 `process/phase1.2-usability-specs.md` §2.4 for the migration
 mechanism.
+
+### 4.5.7 `jev_decide` — typed decisions (spec-136)
+
+`bundles/kolsch/tools/jev_decide.py` asks **Jev** (TypeSafe AI's
+"System One" decision model) one or more named, typed questions about
+a piece of content and returns calibrated answers. It is a plain
+`@tool` file like the others — no engine branch.
+
+| | |
+|---|---|
+| Action name | `kolsch/tools/jev_decide` (default rule: `prompt` — it sends workspace data to a third party) |
+| Args | `state` (string / object / array), `questions` (non-empty map of name → `choice` / `score` / `noul` question, each with optional `fail_below`), `model` (default `typesafe/jev-1.14`) |
+| Returns | `{model, answers, usage}`; `usage.cost` only when the upstream sends it |
+| Secret | `OPENROUTER_API_KEY` via `secrets_needed` — the key `kolsch connect openrouter` writes to `.env`. The tool sets `hide_if_secrets_missing` (§6.1.1): without the key it is hidden and a `tool.unavailable` is recorded, instead of failing the agent |
+| Transport | `POST https://openrouter.ai/api/v1/systemone`, behind a module-level profile seam; a direct-TypeSafe profile is defined as data but not selectable in v1 |
+| Codes | `tool.invalid_arguments` (bad questions, before any network call), `tool.execution_failed` (`UpstreamHTTP<status>`, `NetworkError`, `MalformedResponse`), `tool.timeout`, `tool.jev_below_threshold`, `secret.not_found` |
+
+429 / 529 responses are retried (3 attempts total, honouring
+`retry-after` capped at 10 s, otherwise exponential backoff); every
+request and wait races `ctx.cancellation`. A question's `fail_below`
+fails the call with `tool.jev_below_threshold` when its metric
+(`confidence` for choice, `score` for score, `noul` for noul) is
+strictly below the threshold. See
+[Use Jev for decisions](../how-to/use-jev.md).
 
 ### 4.6 The chat as canonical callback consumer (Phase 2.1, CHAT-R1)
 

@@ -84,6 +84,11 @@ CATALOG: dict[str, Level] = {
     "tool.invalid_arguments": Level.DIAGNOSTIC,
     "tool.execution_failed": Level.DIAGNOSTIC,
     "tool.timeout": Level.DIAGNOSTIC,
+    # spec-136: a `jev_decide` answer fell strictly below an
+    # author-set `fail_below` threshold. Diagnostic like every other
+    # tool-call outcome; a `tool.*` code, so it never triggers model
+    # fallback.
+    "tool.jev_below_threshold": Level.DIAGNOSTIC,
     "mcp.server_unreachable": Level.DIAGNOSTIC,
     "mcp.upstream_error": Level.DIAGNOSTIC,
     "mcp.protocol_error": Level.DIAGNOSTIC,

@@ -46,6 +46,7 @@ from tools.decorator import get_tool_definition, tool
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+    from types import ModuleType
 
     from files import PathPolicy
     from tools.decorator import ToolContext
@@ -381,6 +382,62 @@ def make_browse_url(
     # that stamp `home_bundle` don't poison the module-cached sentinel
     # for every subsequent caller in the process.
     return _detach_tool_definition(browse_url)
+
+
+def load_jev_decide_module() -> ModuleType:
+    """Load (once per process) the ``jev_decide`` starter-bundle tool module.
+
+    spec-136. The starter-bundle file is the source of truth (TOOL-R10,
+    file-IS-the-tool); the ``kolsch/nodes/jev`` workflow node reuses its
+    question models for parse-time validation and its ``@tool`` for
+    dispatch, so both load the same module object from here.
+    """
+    import importlib.util  # noqa: PLC0415 — deferred; avoids cost when unused
+    import sys  # noqa: PLC0415 — deferred
+
+    module_name = "_kolsch_starter_bundle_jev_decide"
+    cached = sys.modules.get(module_name)
+    if cached is not None:
+        return cached
+    tool_path = (
+        Path(__file__).resolve().parent.parent
+        / "cli"
+        / "_starter_bundle"
+        / "kolsch"
+        / "tools"
+        / "jev_decide.py"
+    )
+    spec = importlib.util.spec_from_file_location(module_name, tool_path)
+    if spec is None or spec.loader is None:
+        msg = f"could not load jev_decide tool template from {tool_path}"
+        raise RuntimeError(msg)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        # Never leave a half-initialised module cached: the next call
+        # (e.g. after the tool file is fixed) must re-execute it.
+        sys.modules.pop(module_name, None)
+        raise
+    return module
+
+
+def make_jev_decide(
+    *,
+    policy: PathPolicy,  # noqa: ARG001 — kept for signature symmetry across make_* factories
+    root: Path,  # noqa: ARG001
+) -> Callable[..., Awaitable[Any]]:
+    """Factory for the jev_decide tool — the ``kolsch/nodes/jev`` runner's tool.
+
+    Same shape as [`make_browse_url`][tools.builtins.make_browse_url]:
+    loads the starter-bundle ``@tool`` coroutine and detaches a fresh
+    ``_tool_definition`` per call so a caller stamping ``home_bundle``
+    can't poison the module-cached sentinel. ``policy`` / ``root`` are
+    unused (the tool reaches the network, not the filesystem).
+    """
+    jev_decide: Callable[..., Awaitable[Any]] = load_jev_decide_module().jev_decide
+    return _detach_tool_definition(jev_decide)
 
 
 def make_bash(*, policy: PathPolicy, root: Path) -> Callable[..., Awaitable[Any]]:  # noqa: ARG001

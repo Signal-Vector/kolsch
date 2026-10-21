@@ -69,10 +69,12 @@ touching the Agent Engine.
 ### Running agents and workflows
 
 - [Workflows](workflows.md) — coordinates jobs across multiple
-  agents.
+  agents; 16 built-in node types, including `kolsch/nodes/jev`
+  (a typed Jev decision that can route multi-way).
 - [Engine](engine.md) — runs one agent per exchange.
 - [Tools](tools.md) — the `@tool` decorator; routes tool calls from
-  the LLM back to Python functions.
+  the LLM back to Python functions. The starter bundle's tools include
+  `jev_decide` (typed Jev decisions via OpenRouter).
 - [Skills](skills.md) — declarative augments to agent prompts.
 
 ### Composing configuration

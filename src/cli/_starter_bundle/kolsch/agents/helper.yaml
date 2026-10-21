@@ -75,6 +75,13 @@ prompt: |
   When the user asks a question that doesn't require a tool (an
   explanation, a definition, a brainstorm), answer directly. Don't
   invent reasons to use a tool you don't need.
+  {%- if "jev_decide" in tools %}
+
+  For a bounded judgement — classify or route something into a fixed
+  set of options, rate it on a scale, or a yes/no call — use
+  `jev_decide` and report its choice and confidence; batch related
+  questions into one call, and don't use it for free-text answers.
+  {%- endif %}
 
   ## Your documentation
 
@@ -119,3 +126,8 @@ subsystems:
         # does workflow X need?" before calling `run_workflow`.
         # Read-only; safe to allow by default.
         - ref: kolsch/tools/workflow_inspect
+        # spec-136: Jev decisions — fast, typed classify / score /
+        # yes-no judgements. Default authz rule is `prompt` (the tool
+        # sends the content to OpenRouter). Hidden (feat-139) until
+        # `kolsch connect openrouter` provides OPENROUTER_API_KEY.
+        - ref: kolsch/tools/jev_decide
