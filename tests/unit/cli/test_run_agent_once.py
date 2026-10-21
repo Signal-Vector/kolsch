@@ -6,9 +6,10 @@ through `_run_agent_once`. These tests pin:
 - the core's outcome on engine-Fatal (`AgentExecutionError`), on an
   unexpected exception, on success, and on a `--stream` run that ends
   Fatal — and that the core itself logs nothing;
-- `_cmd_run`'s unchanged rendering: exit 2 + one `cli` ERROR record
-  `agent execution failed: …` with `exc_info` on failure, the agent
-  message JSON on success;
+- `_cmd_run`'s rendering: exit 2 + the traceback logged on `cli` at
+  INFO only (bug-148 — on stderr only under `-v`; the failure block
+  itself is pinned in `tests/component/test_cli_run_failure.py`), the
+  agent message JSON on success;
 - the PRODUCTION setup run handler (`make_default_setup_io`) now
   receives the failed run's session id and durable error envelope —
   the root cause of bug-147 was that it never did.
@@ -184,6 +185,10 @@ def _error_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
     return [r for r in caplog.records if r.name == "cli" and r.levelno >= logging.ERROR]
 
 
+def _info_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [r for r in caplog.records if r.name == "cli" and r.levelno == logging.INFO]
+
+
 # ---------------------------------------------------------------------------
 # The core
 # ---------------------------------------------------------------------------
@@ -277,6 +282,10 @@ def test_core_config_resolve_failure_has_no_session(
     assert outcome.failed_event is None
     assert outcome.exc is None
     assert capsys.readouterr().err != ""  # diagnostic still printed by the core
+    # bug-148: the structured pre-flight outcome — no exchange ran.
+    assert outcome.preflight is not None
+    assert outcome.preflight.code == "assets.not_found"
+    assert "could not resolve agent" in outcome.preflight.message
 
 
 def test_core_skill_validation_failure_keeps_session(
@@ -293,18 +302,22 @@ def test_core_skill_validation_failure_keeps_session(
     assert outcome.session_id == _SESSION_ID
     assert outcome.failed_event is None
     assert outcome.exc is None
+    assert outcome.preflight is not None
+    assert "nope/skills/missing" in outcome.preflight.message
 
 
 # ---------------------------------------------------------------------------
-# `kolsch run` — rendering unchanged
+# `kolsch run` — rendering
 # ---------------------------------------------------------------------------
 
 
-def test_cmd_run_engine_fatal_logs_one_cli_error_with_exc_info(
+def test_cmd_run_engine_fatal_logs_traceback_at_info_only(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    # bug-148: the traceback is an INFO record (stderr only under `-v`),
+    # never an ERROR record.
     exc = AgentExecutionError(_failed_event())
     _install(monkeypatch, _Engine(raises=exc))
     caplog.set_level(logging.DEBUG)
@@ -312,9 +325,10 @@ def test_cmd_run_engine_fatal_logs_one_cli_error_with_exc_info(
     rc = asyncio.run(_cmd_run(_args()))
 
     assert rc == 2
-    records = _error_records(caplog)
+    assert _error_records(caplog) == []
+    records = _info_records(caplog)
     assert len(records) == 1
-    assert records[0].getMessage().startswith("agent execution failed:")
+    assert records[0].getMessage().startswith("agent execution failed (event ev_")
     assert records[0].exc_info is not None
     assert records[0].exc_info[1] is exc
     assert capsys.readouterr().out == ""
@@ -361,7 +375,10 @@ def test_setup_run_handler_logs_unexpected_exception(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
+    # bug-148: setup follows `kolsch run`'s `-v`-only traceback rule —
+    # a one-line internal-error message on stderr, the traceback at INFO.
     boom = ValueError("boom")
     _install(monkeypatch, _Engine(raises=boom))
     caplog.set_level(logging.DEBUG)
@@ -371,10 +388,15 @@ def test_setup_run_handler_logs_unexpected_exception(
     assert result.rc == 2
     assert result.session_id == str(_SESSION_ID)
     assert result.error is None
-    records = _error_records(caplog)
+    assert result.preflight is None
+    assert _error_records(caplog) == []
+    records = _info_records(caplog)
     assert len(records) == 1
     assert records[0].exc_info is not None
     assert records[0].exc_info[1] is boom
+    err = capsys.readouterr().err
+    assert "failed with an internal error (ValueError): boom" in err
+    assert "Traceback" not in err
 
 
 def test_setup_run_handler_success_echoes_agent_message(
