@@ -975,11 +975,16 @@ class AgentEngine:
         ``/compact``, session-open eager) run outside an exchange, so
         they resolve the owning session from the store — the summariser
         call then carries the same conversation key the session's
-        exchanges use.
+        exchanges use. ``agent_id`` defaults to the session's recorded
+        agent when the caller (the eager path, which only has a
+        ``ModelSpec``) doesn't know it.
         """
         from llm.protocol import LLMCallContext  # noqa: PLC0415
 
         thread = await self._store.get_thread(thread_id)
+        if agent_id is None:
+            session = await self._store.get_session(thread.session_id)
+            agent_id = str(session.agent_id)
         return LLMCallContext.for_session(
             str(thread.session_id),
             agent_id=agent_id,

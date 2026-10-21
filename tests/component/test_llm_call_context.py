@@ -10,7 +10,8 @@ text). Asserts:
 (b) a fallback chain (primary raises Recoverable `model.server_error`)
     hands the SAME context object to both attempts;
 (c) two sessions record two different keys (the `/new` case);
-(d) the compaction summariser call records its session's id;
+(d) the compaction summariser call (manual `/compact` and session-open
+    eager) records its session's id;
 (e) `FallbackLLMHandle.context` is the object the factory received.
 """
 
@@ -309,6 +310,31 @@ async def test_llm_call_context_reaches_compaction_summariser(tmp_path: Path) ->
         assert rec.context is not None
         assert rec.context.session_id == session_id
         assert rec.context.conversation_key == session_id
+
+
+async def test_llm_call_context_reaches_eager_session_open_compaction(
+    tmp_path: Path,
+) -> None:
+    """(d') session-open eager compaction carries the session id + its agent."""
+    engine, store = await _build(tmp_path, context_length=200, compaction=True)
+    session_id, thread_id = await _new_session(store)
+    cfg = _config(ModelSpec(provider=_PROVIDER, model="steady"))
+    for _ in range(4):
+        await _turn(engine, cfg, thread_id)
+    before = len(_RECORDS)
+
+    emitted = await engine.maybe_compact_thread_eagerly(
+        thread_id=thread_id,
+        spec=cfg.model,
+    )
+
+    assert emitted is not None
+    eager = [r for r in _RECORDS[before:] if r.model_id == "summ"]
+    assert eager, "eager session-open compaction never built the summariser"
+    for rec in eager:
+        assert rec.context is not None
+        assert rec.context.conversation_key == session_id
+        assert rec.context.agent_id == "ag_ctx"  # the session's recorded agent
 
 
 async def test_llm_call_context_on_handle_is_factory_context(tmp_path: Path) -> None:
