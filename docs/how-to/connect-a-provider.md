@@ -234,28 +234,34 @@ then from `opencode`; then falls back to
 
 [OpenCode Go](https://opencode.ai/docs/go/) is a subscription gateway
 that serves a rotating set of open models. Use the `opencode`
-connector with Go's OpenAI-compatible endpoint:
+connector with base URL `https://opencode.ai/zen/go/v1`:
 
 ```yaml
 # platform.yaml (written by `kolsch connect opencode`)
 llm_providers:
   opencode:
-    base_url: https://opencode.ai/inference/go/openai/v1
+    base_url: https://opencode.ai/zen/go/v1
     api_key_secret: OPENCODE_API_KEY
 ```
 
-- **Base URL.** At the time of writing, Go's docs list
-  `https://opencode.ai/inference/go/openai/v1/chat/completions` for its
-  OpenAI-compatible models, so the base URL is
-  `https://opencode.ai/inference/go/openai/v1`. The older
-  `https://opencode.ai/zen/go/v1` path still answered when this was
-  written but is no longer documented; prefer the current one. Check
-  the Go page if connecting fails with a 404.
+- **Base URL — use `/zen/go/v1`.** The `opencode` connector needs one
+  base URL that serves both `GET /models` and `POST /chat/completions`.
+  `kolsch connect opencode` validates your key with `GET {base_url}/models`,
+  and `kolsch refresh opencode` discovers the catalog from the same
+  endpoint. As of 2026-10-21, `https://opencode.ai/zen/go/v1` answers
+  both.
+- **Not `/inference/go/openai/v1`.** Go's docs page now lists
+  `https://opencode.ai/inference/go/openai/v1/chat/completions` as its
+  OpenAI-compatible chat endpoint. That path does **not** serve
+  `/models` (it returns `404`), so `kolsch connect` validation and
+  `kolsch refresh` fail against it. Chat calls alone would work there,
+  but you'd lose discovery. If Go retires `/zen/go/v1`, re-check the
+  [Go page](https://opencode.ai/docs/go/) for a base URL that lists
+  models.
 - **Only chat-completions models work.** The `opencode` connector
   speaks OpenAI chat completions. Go models served only on its
-  `/responses`, Anthropic `/messages` or Google endpoints are not
-  reachable through it — pick a model the Go page lists under
-  `/chat/completions`.
+  `/responses`, Anthropic `/messages` or Google endpoints can't be
+  reached through it.
 - **Session header — automatic.** Go requires a stable session id in
   `x-opencode-session` for each conversation (requests without it fail
   with `400 MissingSessionID`). kolsch sends the current session's id
@@ -264,10 +270,12 @@ llm_providers:
   nothing.
 - **User-Agent — automatic.** Go asks clients to identify themselves
   with their own user agent; kolsch sends `kolsch/<version>`.
-- **Models drift.** Go's lineup changes; a model that worked last month
-  may be gone (`kimi-k2.6`, for example, is no longer listed). Run
-  `kolsch refresh opencode` to re-sync the catalog, then point
-  `defaults.model` / your agents at a currently listed model.
+- **Models drift.** Go's lineup changes, and the Go docs page and the
+  live `/models` catalog don't always agree: a model can disappear
+  from the page while the catalog still serves it, or the reverse.
+  Treat the catalog as the source of truth. Run
+  `kolsch refresh opencode`, then point `defaults.model` / your agents
+  at a model it lists.
 - **Usage terms — read them yourself.** The Go page states that Go "is
   designed for OpenCode and other coding agents that produce similar
   types of requests", that traffic is monitored for abuse, and that Go
@@ -452,6 +460,7 @@ provider, or the next agent load will fail with
 | `HTTP 403` | Key valid but lacks scope, or account suspended | Check the provider's dashboard |
 | `HTTP 404` at validation | Wrong `base_url` for OpenCode (default is a placeholder) | Re-run `kolsch connect opencode` with your real endpoint |
 | `HTTP 429` during discovery | Rate-limited | Wait, then `kolsch refresh <provider>` |
+| `HTTP 404` from `/models` at `kolsch connect opencode` / `refresh` against OpenCode Go | `base_url` is `https://opencode.ai/inference/go/openai/v1`, which serves chat completions but not `/models` | Use `https://opencode.ai/zen/go/v1` — see [OpenCode Go](#opencode-go) |
 | `400 MissingSessionID` from OpenCode Go | The provider's `request_policy.session_headers` overrides away `x-opencode-session` (or a pre-bug-144 kolsch) | Remove the override, or include `x-opencode-session` in it — see [OpenCode Go](#opencode-go) |
 | `config.invalid` naming `llm_providers.<name>.request_policy` at startup or connect | Malformed or reserved session-header name | Fix or remove that `request_policy` block; every provider is blocked until it is valid |
 | `llm.client_init_failed` mentioning `LLMCallContext` | A session-header provider was built outside a session (a custom script or test calling `build_llm` without `context=`) | Pass `context=LLMCallContext.for_session(<session_id>)` |
