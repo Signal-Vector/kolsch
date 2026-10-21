@@ -692,17 +692,20 @@ Phase 1.3 patch §2.2; the levels below MUST match.
 | `model.server_error` | Recoverable | `{provider, model, status_code}` | connector's call layer (HTTP 5xx) |
 | `model.timeout` | Recoverable | `{provider, model, timeout_seconds}` | connector's call layer |
 | `model.context_overflow` | Recoverable | `{provider, model, requested_tokens, max_tokens?}` | connector's call layer |
+| `model.not_found` | Recoverable | `{provider, model, status_code, reason}` | connector's call layer (HTTP 404) |
 | `model.authentication_failed` | Fatal | `{provider, model, status_code}` | connector's call layer (HTTP 401/403) |
 | `model.bad_request` | Fatal | `{provider, model, status_code, reason}` | connector's call layer (HTTP 400) |
 | `model.binary_unavailable` | Fatal | `{provider, model, reason}` | native connector's call layer (local CLI missing / logged out) |
 | `llm.all_models_failed` | Fatal | `{primary, attempts: [{model, error_code, detail}], reason}` | engine model loop, after exhausting the chain |
 | `config.fallback_duplicate` | Diagnostic | `{agent, model, positions}` | Layer 1 validator at agent load (warning surface) |
 
-**Why these levels.** The four Recoverable codes are conditions
+**Why these levels.** The five Recoverable codes are conditions
 another model might handle differently (a rate limit on Opus does
 not constrain Haiku; a transient 5xx from one provider is unlikely
 to repeat at another; a different model may have a larger context
-window). The Fatal `model.*` codes are conditions the chain
+window; a `model.not_found` is usually catalog drift — the provider
+retired or renamed that model — so another chain entry can still
+answer, and `kolsch refresh <provider>` re-reads the catalog). The Fatal `model.*` codes are conditions the chain
 won't help with: an auth failure with one provider's key won't
 succeed against another model on the same key, a malformed
 request is broken regardless of which model receives it, and a

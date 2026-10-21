@@ -41,6 +41,7 @@ from errors import (
     LlmProviderNotConfigured,
     ModelAuthenticationFailed,
     ModelContextOverflow,
+    ModelNotFound,
     ModelRateLimited,
     ModelServerError,
     ModelTimeout,
@@ -219,6 +220,13 @@ def test_tc_fb_09_fatal_model_error_does_not_trigger_fallback() -> None:
     assert (
         is_fallback_triggering(
             ModelContextOverflow(provider="x", model="y", requested_tokens=99_999)
+        )
+        is True
+    )
+    # bug-145: a 404 (model retired by the provider) advances the chain.
+    assert (
+        is_fallback_triggering(
+            ModelNotFound(provider="x", model="y", status_code=404, reason="gone")
         )
         is True
     )

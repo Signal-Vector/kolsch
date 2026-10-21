@@ -120,6 +120,11 @@ async def test_llm_call_context_build_llm_forwards_to_connector() -> None:
     class _Connector:
         type_name = "ctx_unit_bug144"
 
+        def classify_call_error(
+            self, exc: BaseException, *, provider_config: Any, model_id: str
+        ) -> Any:  # pragma: no cover — unused (bug-145 protocol)
+            return None
+
         async def build_llm(
             self,
             model_id: str,

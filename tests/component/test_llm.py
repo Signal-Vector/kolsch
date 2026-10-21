@@ -255,6 +255,11 @@ async def test_build_llm_connector_failure_wraps_as_client_init() -> None:
             ) -> object:  # pragma: no cover - unused
                 raise NotImplementedError
 
+            def classify_call_error(
+                self, exc: BaseException, *, provider_config: Any, model_id: str
+            ) -> Any:  # pragma: no cover — unused (bug-145 protocol)
+                return None
+
             async def build_llm(
                 self,
                 model_id: str,
@@ -1000,6 +1005,11 @@ async def test_build_llm_threads_spec_parameters_through_to_connector() -> None:
         ) -> Any:  # pragma: no cover — unused
             raise NotImplementedError
 
+        def classify_call_error(
+            self, exc: BaseException, *, provider_config: Any, model_id: str
+        ) -> Any:  # pragma: no cover — unused (bug-145 protocol)
+            return None
+
         async def build_llm(
             self,
             model_id: str,
@@ -1060,6 +1070,11 @@ async def test_build_llm_omits_parameters_when_spec_has_empty_dict() -> None:
             self, credentials: Credentials, base_url: str | None
         ) -> Any:  # pragma: no cover — unused
             raise NotImplementedError
+
+        def classify_call_error(
+            self, exc: BaseException, *, provider_config: Any, model_id: str
+        ) -> Any:  # pragma: no cover — unused (bug-145 protocol)
+            return None
 
         async def build_llm(
             self,

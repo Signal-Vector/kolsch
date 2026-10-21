@@ -70,6 +70,7 @@ from llm.protocol import (
 )
 from llm.providers._errors import (
     classify_http_response,
+    classify_openai_compat_exception,
     classify_transport_error,
 )
 from llm.providers._openai_compat import (
@@ -82,6 +83,7 @@ if TYPE_CHECKING:
 
     import crewai
 
+    from errors import PlatformError
     from llm.protocol import LLMCallContext
 
 _DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
@@ -281,6 +283,32 @@ class OpenRouterConnector:
             parameters=parameters,
             context=context,
             default_policy=self.DEFAULT_REQUEST_POLICY,
+        )
+
+    def classify_call_error(
+        self,
+        exc: BaseException,
+        *,
+        provider_config: ProviderConfig,
+        model_id: str,
+    ) -> PlatformError | None:
+        """Map a call-time failure of this connector's `crewai.LLM` (bug-145).
+
+        Delegates to the shared OpenAI-compatible mapper
+        `llm.providers._errors.classify_openai_compat_exception`,
+        stamping `provider_config.name` and the same effective timeout
+        `build_llm` configured.
+        """
+        timeout = (
+            float(provider_config.timeout_seconds)
+            if provider_config.timeout_seconds is not None
+            else _DEFAULT_TIMEOUT_SECONDS
+        )
+        return classify_openai_compat_exception(
+            exc,
+            provider=provider_config.name,
+            model=model_id,
+            timeout_seconds=timeout,
         )
 
     # ---- MetadataSourceConnector extension --------------------------------

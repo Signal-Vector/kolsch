@@ -42,6 +42,7 @@ from errors import (
     ModelAuthenticationFailed,
     ModelBadRequest,
     ModelContextOverflow,
+    ModelNotFound,
     ModelRateLimited,
     ModelServerError,
     ModelTimeout,
@@ -84,6 +85,9 @@ _RECOVERABLE_MODEL_CODES: frozenset[str] = frozenset(
         "model.server_error",
         "model.timeout",
         "model.context_overflow",
+        # HTTP 404 — usually a model the provider retired; a different
+        # chain entry can still answer (bug-145).
+        "model.not_found",
         # Generic upstream failure, kept Recoverable in the catalog
         # and treated as fallback-triggering for back-compat.
         "model.upstream_error",
@@ -621,7 +625,7 @@ def _attempt_entry(spec: ModelSpec, exc: PlatformError) -> dict[str, Any]:
     }
 
 
-# Module-level re-exports keep the public surface obvious. The six
+# Module-level re-exports keep the public surface obvious. The seven
 # model.* PlatformErrors are re-exported so connector authors can
 # `from engine._fallback import ModelRateLimited` rather than walking
 # the errors package.
@@ -630,6 +634,7 @@ __all__ = [
     "ModelAuthenticationFailed",
     "ModelBadRequest",
     "ModelContextOverflow",
+    "ModelNotFound",
     "ModelRateLimited",
     "ModelServerError",
     "ModelTimeout",

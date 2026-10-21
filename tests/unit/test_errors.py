@@ -96,6 +96,7 @@ from errors import (
     ModelBinaryUnavailable,
     ModelContextOverflow,
     ModelMalformedResponse,
+    ModelNotFound,
     ModelRateLimited,
     ModelRetryExhausted,
     ModelServerError,
@@ -385,6 +386,12 @@ CONSTRUCTOR_ARGS: dict[type[PlatformError], dict[str, Any]] = {
         "model": "anthropic/x",
         "status_code": 400,
         "reason": "malformed",
+    },
+    ModelNotFound: {
+        "provider": "opencode",
+        "model": "kimi-k2.6",
+        "status_code": 404,
+        "reason": "model not found",
     },
     ModelBinaryUnavailable: {
         "provider": "claude_code",
