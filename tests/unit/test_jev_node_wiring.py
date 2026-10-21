@@ -174,13 +174,17 @@ def test_jev_runner_registered_by_register_builtins() -> None:
         bare.get("kolsch/nodes/jev", node_name="route")
 
 
-def test_all_three_cli_call_sites_wire_the_jev_runner() -> None:
-    """``_workflow_runtime`` (run) plus the resume and fork paths in
-    ``cli.workflows`` each build and pass a ``jev_decide_defn``."""
+def test_cli_paths_wire_the_jev_runner_through_the_shared_builder() -> None:
+    """``build_workflow_executor`` builds and passes ``jev_decide_defn``;
+    since bug-141 run, resume and fork all go through it, so
+    ``cli.workflows`` builds no tool definitions of its own (the
+    behavioural check is
+    ``test_builtin_tool_defns_stamped_on_all_paths``)."""
     src = Path(__file__).resolve().parents[2] / "src" / "cli"
     runtime_src = (src / "_workflow_runtime.py").read_text(encoding="utf-8")
     workflows_src = (src / "workflows.py").read_text(encoding="utf-8")
     assert runtime_src.count("jev_decide_defn=jev_decide_defn") == 1
     assert "make_jev_decide(" in runtime_src
-    assert workflows_src.count("jev_decide_defn=jev_decide_defn") == 2
-    assert workflows_src.count("make_jev_decide(") == 2
+    assert "make_jev_decide(" not in workflows_src
+    assert "register_builtins(" not in workflows_src
+    assert workflows_src.count("build_workflow_executor(") == 3

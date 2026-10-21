@@ -201,12 +201,10 @@ graph:
 ```
 
 The node runs the `jev_decide` tool, so the default `prompt` rule
-applies. (Like `browse_url`, it uses the packaged tool shipped with
-kolsch, not a copy edited in your workspace's bundle. Known gap:
-`kolsch workflows resume` / `fork` currently deny jev nodes — their
-tool definitions lack the `kolsch` bundle stamp, so no
-`kolsch/tools/jev_decide` rule matches. `kolsch workflows run` is
-fine.) Allow it before a non-interactive run, then run the workflow:
+applies — on `kolsch workflows run`, `resume` and `fork` alike. (Like
+`browse_url`, it uses the packaged tool shipped with kolsch, not a copy
+edited in your workspace's bundle.) Allow it before a non-interactive
+run, then run the workflow:
 
 ```bash
 kolsch permissions add --what kolsch/tools/jev_decide --effect allow --first

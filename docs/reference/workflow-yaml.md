@@ -733,13 +733,6 @@ workspace's `bundles/kolsch/tools/`. Needs `OPENROUTER_API_KEY`
 (`kolsch connect openrouter`). See
 [Use Jev for decisions](../how-to/use-jev.md).
 
-Known gap: `kolsch workflows resume` and `kolsch workflows fork`
-currently build their tool definitions without the `kolsch` bundle
-stamp, so a jev node reached on those paths is checked as
-`tool.jev_decide`, matches no `kolsch/tools/jev_decide` rule, and is
-denied by the default-deny tail. Plain `kolsch workflows run` is
-unaffected.
-
 **Config schema:**
 
 | Field | Type | Default | Semantics |

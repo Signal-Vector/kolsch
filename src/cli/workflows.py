@@ -758,80 +758,25 @@ async def _cmd_resume(
             err=err,
         )
 
-    # Live executor wiring — mirrors `_cmd_run` so the resume
-    # process has the same builtin runner set (the resume may
-    # continue into bash / agent / catalog-node nodes downstream
-    # of the user_input).
-    from tools.builtins import (  # noqa: PLC0415
-        make_bash,
-        make_browse_url,
-        make_jev_decide,
-        make_list_files,
-        make_read_file,
-        make_write_file,
+    # Live executor wiring — the SAME builder `_cmd_run` uses
+    # (bug-141): one place wires and stamps the built-in tool
+    # definitions, so a resume that continues into bash / file-IO /
+    # browse_url / jev / agent / catalog-node nodes authorises them as
+    # `kolsch/tools/<name>` exactly like `run` does.
+    from cli._workflow_runtime import (  # noqa: PLC0415
+        build_workflow_executor,
     )
-    from tools.decorator import get_tool_definition  # noqa: PLC0415
-    from workflows.builtins import register_builtins  # noqa: PLC0415
     from workflows.errors import (  # noqa: PLC0415
         WorkflowInputInvalid,
         WorkflowResumeRejected,
     )
-    from workflows.executor import (  # noqa: PLC0415
-        IterativeExecutor,
-        RunnerRegistry,
-    )
 
-    bash_fn = make_bash(policy=runtime.path_policy, root=root)
-    bash_defn = get_tool_definition(bash_fn)
-    # Mirror `_cmd_run`: resumes downstream of `user_input` may
-    # hit file-IO nodes.
-    read_file_defn = get_tool_definition(
-        make_read_file(policy=runtime.path_policy, root=root)
-    )
-    write_file_defn = get_tool_definition(
-        make_write_file(policy=runtime.path_policy, root=root)
-    )
-    list_files_defn = get_tool_definition(
-        make_list_files(policy=runtime.path_policy, root=root)
-    )
-    browse_url_defn = get_tool_definition(
-        make_browse_url(policy=runtime.path_policy, root=root)
-    )
-    jev_decide_defn = get_tool_definition(
-        make_jev_decide(policy=runtime.path_policy, root=root)
-    )
-    registry = RunnerRegistry()
-
-    # Same factory wiring as `_cmd_run` so a resumed workflow that
-    # fires a downstream sub-workflow node can still construct
-    # nested executors.
-    def _executor_factory(**kwargs: Any) -> IterativeExecutor:
-        return IterativeExecutor(**kwargs)
-
-    register_builtins(
-        registry,
-        bash_defn=bash_defn,
-        authz=runtime.authz,
-        secrets=runtime.secrets,
-        sandbox=runtime.sandbox,
-        catalog=catalog,
-        engine=runtime.engine,
-        session_store=runtime.store,
-        config_builder=runtime.build_resolved_config,
-        read_file_defn=read_file_defn,
-        write_file_defn=write_file_defn,
-        list_files_defn=list_files_defn,
-        browse_url_defn=browse_url_defn,
-        jev_decide_defn=jev_decide_defn,
-        workflow_store=store,
-        executor_factory=_executor_factory,
-    )
-    executor = IterativeExecutor(
+    executor = build_workflow_executor(
+        root=root,
+        runtime=runtime,
         workflow=workflow,
         run=run,
         store=store,
-        registry=registry,
-        catalog=catalog,
     )
 
     try:
@@ -960,72 +905,21 @@ async def _cmd_fork(
         ),
     )
 
-    # Live executor wiring — mirrors `_cmd_run` / `_cmd_resume` so
-    # the fork process has the same builtin runner set. A fork
-    # downstream of the fork point may hit any node type the
-    # workflow uses (bash, agent, sub-workflow, file IO, state,
+    # Live executor wiring — the SAME builder `_cmd_run` / `_cmd_resume`
+    # use (bug-141), so built-in tools downstream of the fork point are
+    # authorised as `kolsch/tools/<name>`. A fork may hit any node type
+    # the workflow uses (bash, agent, sub-workflow, file IO, state,
     # branching).
-    from tools.builtins import (  # noqa: PLC0415
-        make_bash,
-        make_browse_url,
-        make_jev_decide,
-        make_list_files,
-        make_read_file,
-        make_write_file,
-    )
-    from tools.decorator import get_tool_definition  # noqa: PLC0415
-    from workflows.builtins import register_builtins  # noqa: PLC0415
-    from workflows.executor import (  # noqa: PLC0415
-        IterativeExecutor,
-        RunnerRegistry,
+    from cli._workflow_runtime import (  # noqa: PLC0415
+        build_workflow_executor,
     )
 
-    bash_fn = make_bash(policy=runtime.path_policy, root=root)
-    bash_defn = get_tool_definition(bash_fn)
-    read_file_defn = get_tool_definition(
-        make_read_file(policy=runtime.path_policy, root=root)
-    )
-    write_file_defn = get_tool_definition(
-        make_write_file(policy=runtime.path_policy, root=root)
-    )
-    list_files_defn = get_tool_definition(
-        make_list_files(policy=runtime.path_policy, root=root)
-    )
-    browse_url_defn = get_tool_definition(
-        make_browse_url(policy=runtime.path_policy, root=root)
-    )
-    jev_decide_defn = get_tool_definition(
-        make_jev_decide(policy=runtime.path_policy, root=root)
-    )
-    registry = RunnerRegistry()
-
-    def _executor_factory(**kwargs: Any) -> IterativeExecutor:
-        return IterativeExecutor(**kwargs)
-
-    register_builtins(
-        registry,
-        bash_defn=bash_defn,
-        authz=runtime.authz,
-        secrets=runtime.secrets,
-        sandbox=runtime.sandbox,
-        catalog=catalog,
-        engine=runtime.engine,
-        session_store=runtime.store,
-        config_builder=runtime.build_resolved_config,
-        read_file_defn=read_file_defn,
-        write_file_defn=write_file_defn,
-        list_files_defn=list_files_defn,
-        browse_url_defn=browse_url_defn,
-        jev_decide_defn=jev_decide_defn,
-        workflow_store=store,
-        executor_factory=_executor_factory,
-    )
-    executor = IterativeExecutor(
+    executor = build_workflow_executor(
+        root=root,
+        runtime=runtime,
         workflow=workflow,
         run=forked_run,
         store=store,
-        registry=registry,
-        catalog=catalog,
     )
 
     try:
