@@ -169,7 +169,7 @@ CATALOG: dict[str, Level] = {
     # HTTP 404 — the provider doesn't serve the model (catalog drift);
     # another chain entry can still answer (bug-145).
     "model.not_found": Level.RECOVERABLE,
-    # Two Fatal model.* codes — abort without consulting the chain.
+    # Fatal model.* codes — abort without consulting the chain.
     "model.authentication_failed": Level.FATAL,
     "model.bad_request": Level.FATAL,
     # The local CLI a subscription connector shells is missing or not

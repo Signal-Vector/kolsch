@@ -175,8 +175,10 @@ def test_404_empty_body_uses_default_reason() -> None:
         "provider": "opencode",
         "model": "kimi-k2.6",
         "status_code": 404,
-        "reason": "model not found",
+        "reason": "not found",
     }
+    # Neutral wording (QA NB-3): a wrong base_url 404s every model too.
+    assert "check the model id and the provider's base_url" in str(err)
 
 
 @pytest.mark.parametrize("status", [413, 422])
@@ -186,15 +188,67 @@ def test_413_and_422_with_overflow_marker_map_to_overflow(status: int) -> None:
     assert isinstance(err, ModelContextOverflow)
 
 
-def test_overflow_markers_are_a_superset_of_crewai() -> None:
-    """AC 4: CrewAI's executor silently summarises on any error text
-    matching ``CONTEXT_LIMIT_ERRORS``. Every phrase must classify as
-    overflow here, so a ``ModelBadRequest`` reason can never carry one."""
+@pytest.mark.parametrize("status", [400, 404, 405, 410, 413, 418, 422, 451])
+def test_overflow_markers_are_a_superset_of_crewai(status: int) -> None:
+    """AC 4 / QA NB-1: CrewAI's executor silently summarises on any error
+    text matching ``CONTEXT_LIMIT_ERRORS``. For every status that would
+    otherwise map to a code whose message carries the provider reason
+    (``model.bad_request`` / ``model.not_found``), each phrase must
+    classify as overflow instead."""
     assert CONTEXT_LIMIT_ERRORS, "CrewAI moved its marker list"
     for phrase in CONTEXT_LIMIT_ERRORS:
         body = json.dumps({"error": {"message": f"Error: {phrase.upper()} (8192)"}})
-        err = classify_http_response(400, body, provider="p", model="m")
-        assert isinstance(err, ModelContextOverflow), phrase
+        err = classify_http_response(status, body, provider="p", model="m")
+        assert isinstance(err, ModelContextOverflow), (status, phrase)
+
+
+@pytest.mark.parametrize("status", [413, 422, 404, 418])
+@pytest.mark.parametrize(
+    "message", ["temperature exceeds maximum of 2", "stop sequence too long"]
+)
+def test_generic_markers_do_not_overflow_outside_400(status: int, message: str) -> None:
+    """QA NB-2 (Coordinator decision): only 400 keeps the generic
+    "exceeds" / "too long" markers; newly classified statuses need a
+    specific context/token phrase."""
+    body = json.dumps({"error": {"message": message}})
+    err = classify_http_response(status, body, provider="p", model="m")
+    assert not isinstance(err, ModelContextOverflow)
+    assert err is not None
+    assert err.code in {"model.bad_request", "model.not_found"}
+
+
+def test_400_keeps_generic_overflow_markers() -> None:
+    """No behaviour regression for 400 (tightening is a follow-up)."""
+    body = json.dumps({"error": {"message": "temperature exceeds maximum of 2"}})
+    err = classify_http_response(400, body, provider="p", model="m")
+    assert isinstance(err, ModelContextOverflow)
+
+
+def test_json_reason_is_capped() -> None:
+    """QA NB-4: an oversized provider message can't bloat the log."""
+    body = json.dumps({"error": {"message": "x" * 100_000}})
+    err = classify_http_response(418, body, provider="p", model="m")
+    assert isinstance(err, ModelBadRequest)
+    assert len(err.detail["reason"]) == 2000
+    err = classify_http_response(
+        400, json.dumps({"error": "y" * 5000}), provider="p", model="m"
+    )
+    assert isinstance(err, ModelBadRequest)
+    assert len(err.detail["reason"]) == 2000
+
+
+@pytest.mark.parametrize("status", [400, 401, 402, 404, 408, 429, 503, 413])
+def test_where_is_stamped_on_every_branch(status: int) -> None:
+    body = (
+        '{"error": {"message": "maximum context length is 8192"}}'
+        if status == 413
+        else ""
+    )
+    err = classify_http_response(
+        status, body, provider="p", model="m", where="engine._classify.cause_chain"
+    )
+    assert err is not None
+    assert err.where == "engine._classify.cause_chain"
 
 
 def test_error_message_extraction_handles_top_level_error_string() -> None:

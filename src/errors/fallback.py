@@ -175,6 +175,7 @@ class ModelNotFound(PlatformError):
     Recoverable — the usual cause is catalog drift (the provider retired
     or renamed the model), so a different chain entry can still answer.
     `kolsch refresh <provider>` re-reads the provider's current catalog.
+    A wrong `base_url` 404s every model too, so the message names both.
     """
 
     code = "model.not_found"
@@ -191,8 +192,9 @@ class ModelNotFound(PlatformError):
     ) -> None:
         super().__init__(
             message=(
-                f"Provider {provider!r} does not serve model {model!r} (HTTP "
-                f"{status_code}): {reason}"
+                f"Provider {provider!r} returned HTTP {status_code} for model "
+                f"{model!r}: {reason} — check the model id and the "
+                f"provider's base_url"
             ),
             where=where,
             detail={

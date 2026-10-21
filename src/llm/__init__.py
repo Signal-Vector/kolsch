@@ -28,6 +28,9 @@ The public surface re-exports:
 - [`provider_config_from_yaml`][llm.protocol.provider_config_from_yaml] —
   the one factory that builds and validates a `ProviderConfig` from a
   `platform.yaml` `llm_providers` entry.
+- [`call_error_classifier`][llm.build_llm.call_error_classifier] —
+  binds a connector's `classify_call_error` hook for the engine's LLM
+  call seam (bug-145).
 - `llm.registry` — explicit registration and lookup. Providers
   register themselves in `llm.providers` at import time.
 
@@ -35,7 +38,7 @@ For the full subsystem contract, see the
 [LLM providers explanation](../explanation/llm-providers.md).
 """
 
-from llm.build_llm import build_llm
+from llm.build_llm import build_llm, call_error_classifier
 from llm.protocol import (
     AuthPromptSpec,
     Credentials,
@@ -72,6 +75,7 @@ __all__ = [
     "RequestPolicyConfig",
     "ValidationResult",
     "build_llm",
+    "call_error_classifier",
     "connected_metadata_sources",
     "get",
     "known_types",

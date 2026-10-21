@@ -208,3 +208,96 @@ def test_classify_recognises_all_fatal_auth_types(module: str, name: str) -> Non
     typed = _exception_with_module(module, name, "test")
     classified = classify_from_cause_chain(typed)
     assert isinstance(classified, AgentUnauthorized)
+
+
+# ---------------------------------------------------------------------------
+# bug-145 — status branch after the (unchanged) name tables.
+# ---------------------------------------------------------------------------
+
+
+class _Response:
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.headers: dict[str, str] = {}
+
+
+def _status_exception(module: str, name: str, status: int, body: str) -> Exception:
+    """A synthesised SDK status error: `int status_code` + `response`."""
+    exc = _exception_with_module(module, name, f"Error code: {status}")
+    exc.status_code = status
+    exc.response = _Response(body)
+    return exc
+
+
+def test_status_branch_classifies_bad_request() -> None:
+    from engine._classify import _STATUS_WHERE
+
+    body = '{"type":"error","error":{"type":"MissingSessionID","message":"missing session"}}'
+    exc = _status_exception("openai", "BadRequestError", 400, body)
+    exc.__cause__ = exc  # CrewAI's `raise e from e`
+    classified = classify_from_cause_chain(exc)
+    assert classified is not None
+    assert classified.code == "model.bad_request"
+    assert classified.where == _STATUS_WHERE
+    assert classified.detail["provider"] == "openai"
+    assert classified.detail["model"] == "unknown"
+    assert classified.detail["reason"] == "missing session"
+
+
+def test_status_branch_reaches_through_wrapper() -> None:
+    inner = _status_exception("openai", "NotFoundError", 404, "")
+    outer = ValueError("Model m not found")
+    outer.__cause__ = inner
+    classified = classify_from_cause_chain(outer)
+    assert classified is not None
+    assert classified.code == "model.not_found"
+
+
+def test_name_tables_win_over_a_nearer_status_link() -> None:
+    """Two passes: a name-table hit anywhere in the chain beats the
+    status branch, so pre-bug-145 classifications never change."""
+    deep = _exception_with_module("openai", "APITimeoutError", "timed out")
+    near = _status_exception("openai", "InternalServerError", 500, "")
+    near.__cause__ = deep
+    assert isinstance(classify_from_cause_chain(near), ModelUpstreamError)
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        _status_exception("x", "Redirect", 302, ""),
+        _exception_with_module("starlette", "HTTPException", "no response attr"),
+    ],
+)
+def test_status_branch_ignores_non_errors(exc: Exception) -> None:
+    if exc.__class__.__name__ == "HTTPException":
+        exc.status_code = 404
+    assert classify_from_cause_chain(exc) is None
+
+
+def test_status_branch_with_real_openai_exceptions() -> None:
+    """Test 6 with the real SDK classes (skipped if `openai` is absent)."""
+    openai = pytest.importorskip("openai")
+    httpx = pytest.importorskip("httpx")
+    request = httpx.Request("POST", "http://x/v1/chat/completions")
+
+    def make(cls: type[Exception], status: int) -> Exception:
+        response = httpx.Response(status, request=request, text="")
+        exc: Exception = cls("boom", response=response, body=None)  # type: ignore[call-arg]
+        exc.__cause__ = exc
+        return exc
+
+    bad = classify_from_cause_chain(make(openai.BadRequestError, 400))
+    assert bad is not None
+    assert bad.code == "model.bad_request"
+    server = classify_from_cause_chain(make(openai.InternalServerError, 503))
+    assert server is not None
+    assert server.code == "model.server_error"
+    # Existing name tables still win (Decision D3).
+    assert isinstance(
+        classify_from_cause_chain(make(openai.RateLimitError, 429)), ModelUpstreamError
+    )
+    assert isinstance(
+        classify_from_cause_chain(make(openai.AuthenticationError, 401)),
+        AgentUnauthorized,
+    )

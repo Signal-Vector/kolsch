@@ -116,8 +116,8 @@ from collections.abc import Mapping
 from typing import Any, ClassVar
 import crewai
 
-from src.errors import PlatformError
-from src.llm.protocol import (
+from errors import PlatformError
+from llm.protocol import (
     AuthPromptSpec, PromptField,
     Credentials, ValidationResult,
     LLMCallContext,
@@ -202,7 +202,7 @@ from .opencode import OpenCodeConnector
 from .openrouter import OpenRouterConnector
 from .<name> import <Name>Connector   # add this line
 
-from src.llm.registry import register
+from llm.registry import register
 
 register("opencode", OpenCodeConnector)
 register("openrouter", OpenRouterConnector)

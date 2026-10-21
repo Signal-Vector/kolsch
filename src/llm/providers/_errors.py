@@ -45,32 +45,49 @@ if TYPE_CHECKING:
     from errors import PlatformError
 
 
-# Substrings the OpenAI-compat error body uses to flag context
-# overflow. Lowercased before scan; case-insensitive match. MUST stay a
-# superset of CrewAI's `CONTEXT_LIMIT_ERRORS` (bug-145): CrewAI's
-# executor silently summarises on any error whose text matches one of
-# its phrases, so a `ModelBadRequest` reason carrying such a phrase
-# would still trip that unrecorded path. `test_provider_errors` imports
-# CrewAI's list and asserts every phrase is detected here.
-_CONTEXT_OVERFLOW_MARKERS: tuple[str, ...] = (
-    "context_length",
-    "context_window",
+# Substrings an error body uses to flag context overflow. Lowercased
+# before scan; case-insensitive match. Both sets MUST stay supersets of
+# CrewAI's `CONTEXT_LIMIT_ERRORS` (bug-145): CrewAI's executor silently
+# summarises on any error whose text matches one of its phrases, so a
+# `ModelBadRequest` / `ModelNotFound` (whose messages carry the reason)
+# must never carry such a phrase. `test_provider_errors` imports
+# CrewAI's list and asserts every phrase is detected for every status
+# that would otherwise map to one of those two codes.
+#
+# The specific set is used for every status except 400: CrewAI's
+# phrases verbatim plus kolsch's context/token phrases.
+_SPECIFIC_OVERFLOW_MARKERS: tuple[str, ...] = (
+    "expected a string with maximum length",
+    "maximum context length",
+    "context length exceeded",
+    "context_length_exceeded",
+    "context window full",
+    "too many tokens",
+    "input is too long",
+    "exceeds token limit",
     "context length",
     "context window",
     "maximum context",
-    "too many tokens",
-    "expected a string with maximum length",
+)
+# 400 keeps its pre-bug-145 generic markers ("too long", "exceeds")
+# so no existing 400 changes classification. Tightening them is a
+# recorded follow-up (they also catch e.g. "stop sequence too long").
+_CONTEXT_OVERFLOW_MARKERS: tuple[str, ...] = (
+    *_SPECIFIC_OVERFLOW_MARKERS,
+    "context_length",
+    "context_window",
     "too long",
     "exceeds",
 )
 
+# Cap on a provider-supplied `reason` so one oversized error body can't
+# bloat the event log.
+_MAX_REASON_CHARS: int = 2000
+
 
 _HTTP_ERROR_MIN: int = 400
 _HTTP_AUTH_CODES: frozenset[int] = frozenset({401, 403})
-# Statuses whose body may report a context overflow: 400 (OpenAI's
-# shape), 413 (payload too large), 422 (validation-style gateways).
-_HTTP_OVERFLOW_CANDIDATES: frozenset[int] = frozenset({400, 413, 422})
-_HTTP_BAD_REQUEST_CODES: frozenset[int] = frozenset({400, 422})
+_HTTP_BAD_REQUEST: int = 400
 _HTTP_NOT_FOUND: int = 404
 # 402 (out of credits on THIS provider) and 409 (conflict that already
 # survived the SDK's retries) — another chain entry can answer.
@@ -98,13 +115,14 @@ _SDK_TRANSPORT_NAMES: frozenset[str] = frozenset(
 )
 
 
-def classify_http_response(  # noqa: PLR0911 — one return per row of the status table
+def classify_http_response(  # noqa: PLR0911, PLR0913 — one return per status row; keyword-only stamps
     status_code: int,
     body: str,
     *,
     provider: str,
     model: str,
     timeout_seconds: float = 0.0,
+    where: str = "llm.connector.call",
 ) -> PlatformError | None:
     """Map one HTTP response to a catalogued `model.*` PlatformError.
 
@@ -112,16 +130,16 @@ def classify_http_response(  # noqa: PLR0911 — one return per row of the statu
     response-parsing layer takes over). Every status >= 400 maps to a
     typed error (bug-145 made the mapping total):
 
-    - 400 / 413 / 422 with context-overflow markers in body ->
-      `ModelContextOverflow`
-    - 400 / 422 otherwise -> `ModelBadRequest`
-    - 401 / 403 -> `ModelAuthenticationFailed`
-    - 404 -> `ModelNotFound`
-    - 402 / 409 -> `ModelUpstreamError`
-    - 408 -> `ModelTimeout`
     - 429 -> `ModelRateLimited`
     - 500-599 -> `ModelServerError`
-    - any other status >= 400 -> `ModelBadRequest`
+    - 401 / 403 -> `ModelAuthenticationFailed`
+    - 402 / 409 -> `ModelUpstreamError`
+    - 408 -> `ModelTimeout`
+    - any other status whose body carries a context-overflow marker ->
+      `ModelContextOverflow` (400 matches the broad marker set; every
+      other status only the specific context/token phrases)
+    - 404 otherwise -> `ModelNotFound`
+    - 400 / 422 and any other status >= 400 -> `ModelBadRequest`
 
     New `model.*` codes added later must add a branch here in the same
     change that introduces them.
@@ -133,6 +151,8 @@ def classify_http_response(  # noqa: PLR0911 — one return per row of the statu
         model: The model id to stamp on the resulting error.
         timeout_seconds: The configured client timeout, stamped on the
             `ModelTimeout` a 408 maps to; `0.0` when unknown.
+        where: The `where` stamped on the resulting error. The engine
+            safety net passes its own location.
 
     Returns:
         The matched `PlatformError`, or `None` when the status is
@@ -141,44 +161,59 @@ def classify_http_response(  # noqa: PLR0911 — one return per row of the statu
     if status_code < _HTTP_ERROR_MIN:
         return None
     if status_code == _HTTP_RATE_LIMIT:
-        return ModelRateLimited(provider=provider, model=model)
+        return ModelRateLimited(provider=provider, model=model, where=where)
     if _HTTP_SERVER_ERROR_MIN <= status_code <= _HTTP_SERVER_ERROR_MAX:
-        return ModelServerError(provider=provider, model=model, status_code=status_code)
+        return ModelServerError(
+            provider=provider, model=model, status_code=status_code, where=where
+        )
     if status_code in _HTTP_AUTH_CODES:
         return ModelAuthenticationFailed(
-            provider=provider, model=model, status_code=status_code
-        )
-    if status_code in _HTTP_OVERFLOW_CANDIDATES and _is_context_overflow_body(body):
-        return ModelContextOverflow(
-            provider=provider,
-            model=model,
-            requested_tokens=0,  # provider rarely reports exact count
+            provider=provider, model=model, status_code=status_code, where=where
         )
     reason = _extract_error_message(body)
-    if status_code == _HTTP_NOT_FOUND:
-        return ModelNotFound(
-            provider=provider,
-            model=model,
-            status_code=status_code,
-            reason=reason or "model not found",
-        )
     if status_code in _HTTP_UPSTREAM_CODES:
         return ModelUpstreamError(
             provider=provider,
             http_status=status_code,
             response=reason or "",
-            where="llm.connector.call",
+            where=where,
         )
     if status_code == _HTTP_REQUEST_TIMEOUT:
         return ModelTimeout(
-            provider=provider, model=model, timeout_seconds=timeout_seconds
+            provider=provider,
+            model=model,
+            timeout_seconds=timeout_seconds,
+            where=where,
         )
-    # 400 / 422 and every other status >= 400.
+    # Every remaining code would carry `reason` in its message, so the
+    # overflow check runs first for all of them (CrewAI superset, AC 4).
+    markers = (
+        _CONTEXT_OVERFLOW_MARKERS
+        if status_code == _HTTP_BAD_REQUEST
+        else _SPECIFIC_OVERFLOW_MARKERS
+    )
+    if _is_context_overflow_body(body, markers):
+        return ModelContextOverflow(
+            provider=provider,
+            model=model,
+            requested_tokens=0,  # provider rarely reports exact count
+            where=where,
+        )
+    if status_code == _HTTP_NOT_FOUND:
+        return ModelNotFound(
+            provider=provider,
+            model=model,
+            status_code=status_code,
+            reason=reason or "not found",
+            where=where,
+        )
+    # 400 / 413 / 422 and every other status >= 400.
     return ModelBadRequest(
         provider=provider,
         model=model,
         status_code=status_code,
         reason=reason or "malformed request",
+        where=where,
     )
 
 
@@ -296,7 +331,7 @@ def _classify_link(
     ):
         classified = classify_http_response(
             status,
-            _response_body(link),
+            response_body(link),
             provider=provider,
             model=model,
             timeout_seconds=timeout_seconds,
@@ -320,7 +355,7 @@ def _qualified_names(exc: BaseException) -> set[str]:
     return {f"{cls.__module__}.{cls.__qualname__}" for cls in type(exc).__mro__}
 
 
-def _response_body(link: BaseException) -> str:
+def response_body(link: BaseException) -> str:
     """Best-effort body text of a status error: `response.text`, else `body`.
 
     `httpx.Response.text` raises on an unread streaming response, so
@@ -343,12 +378,12 @@ def _response_body(link: BaseException) -> str:
         return str(body)
 
 
-def _is_context_overflow_body(body: str) -> bool:
+def _is_context_overflow_body(body: str, markers: tuple[str, ...]) -> bool:
     """Scan an OpenAI-compatible error body for context-overflow markers."""
     if not body:
         return False
     lowered = body.lower()
-    return any(marker in lowered for marker in _CONTEXT_OVERFLOW_MARKERS)
+    return any(marker in lowered for marker in markers)
 
 
 def _extract_error_message(body: str) -> str | None:
@@ -371,7 +406,7 @@ def _extract_error_message(body: str) -> str | None:
     if isinstance(err, dict):
         msg = err.get("message")
         if isinstance(msg, str):
-            return msg
+            return msg[:_MAX_REASON_CHARS]
     if isinstance(err, str):
-        return err
+        return err[:_MAX_REASON_CHARS]
     return None

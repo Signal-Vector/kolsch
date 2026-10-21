@@ -12,6 +12,12 @@ The factory threads
 [`EchoLLMDriver`][engine.dev_llm.EchoLLMDriver] for `provider:
 "mock"` so the no-creds tutorial path keeps working.
 
+The callable is also the LLM **call seam** (bug-145): a raw provider
+exception from `crewai.LLM.call` is handed to the building connector's
+`classify_call_error` hook and re-raised as a typed `model.*`
+`PlatformError`, so the fallback loop, compaction and the event log
+all see the real failure. The engine never imports a provider SDK.
+
 Neither function performs I/O at module-import time; `crewai.LLM`
 construction happens inside the factory — per exchange when the
 engine's pre-flight first requests a per-attempt client.
@@ -21,12 +27,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from engine.framework import LLMResponse
-from errors import ModelTimeout
+from errors import ModelTimeout, PlatformError
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -37,6 +44,9 @@ if TYPE_CHECKING:
     from llm import LLMCallContext, ProviderConfig
     from providers import SecretsProvider
     from schemas import ModelSpec
+
+
+_log = logging.getLogger("engine.crewai_adapter")
 
 
 # spec-069 Part A — bound the blocking LLM read so a wedged provider
@@ -122,6 +132,8 @@ def _resolve_configured_default() -> float | None:
 
 def make_llm_callable(
     crewai_llm: crewai.LLM,
+    *,
+    classify: Callable[[BaseException], PlatformError | None] | None = None,
 ) -> Callable[[LLMRequest], Awaitable[LLMResponse]]:
     """Wrap a `crewai.LLM` in an async callable matching the engine's shape.
 
@@ -144,6 +156,16 @@ def make_llm_callable(
     `list[{"id", "function": {"name", "arguments"}}]` (OpenAI
     tool-call shape per litellm); the wrapper translates back into
     `LLMResponse.tool_calls`.
+
+    Error classification (bug-145): `classify` is the building
+    connector's bound `classify_call_error` hook (see
+    [`llm.call_error_classifier`][llm.build_llm.call_error_classifier]).
+    When `crewai_llm.call` raises an `Exception` that is not a
+    `PlatformError`, the callable raises `classify(exc)` `from exc`.
+    If `classify` is `None`, returns `None`, or itself raises (logged),
+    the original exception is re-raised unchanged. `PlatformError`s
+    (including the adapter's own timeout `ModelTimeout`) and
+    `asyncio.CancelledError` pass through untouched.
     """
 
     async def call(request: LLMRequest) -> LLMResponse:
@@ -169,6 +191,21 @@ def make_llm_callable(
         tools_arg = (
             [_tool_to_openai_spec(t) for t in request.tools] if request.tools else None
         )
+        # bug-145 call seam: a raw provider exception becomes the
+        # connector's typed `model.*` error before FallbackLLMHandle
+        # sees it. PlatformErrors (incl. the timeout below) pass through.
+        try:
+            result = await _invoke(messages, tools_arg)
+        except PlatformError:
+            raise
+        except Exception as exc:
+            classified = _classify_call_error(classify, exc)
+            if classified is None:
+                raise
+            raise classified from exc
+        return _engine_response_from_crewai(result)
+
+    async def _invoke(messages: list[dict[str, Any]], tools_arg: Any) -> Any:
         # crewai's LLMMessage is a TypedDict variant we don't import
         # to avoid the heavy crewai imports at module load; our dict
         # has the same shape. Cast is safe.
@@ -183,39 +220,59 @@ def make_llm_callable(
         # that need it.
         timeout = _read_llm_call_timeout_seconds()
         if timeout is None:
-            result = await asyncio.to_thread(
+            return await asyncio.to_thread(
                 crewai_llm.call,
                 messages,  # type: ignore[arg-type]
                 tools=tools_arg,
             )
-        else:
-            try:
-                result = await asyncio.wait_for(
-                    asyncio.to_thread(
-                        crewai_llm.call,
-                        messages,  # type: ignore[arg-type]
-                        tools=tools_arg,
-                    ),
-                    timeout=timeout,
-                )
-            except TimeoutError as exc:
-                # Semantic domain error rather than a bare `TimeoutError`
-                # so the engine's fallback ladder + observer render
-                # the same shape as a provider-side `model.timeout`.
-                # Provider + model are best-effort — this call site
-                # is inside `make_llm_callable` which was constructed
-                # for a specific `crewai_llm` with `crewai_llm.model`
-                # set.
-                model_name = getattr(crewai_llm, "model", None) or "unknown"
-                raise ModelTimeout(
-                    provider="crewai",
-                    model=str(model_name),
-                    timeout_seconds=float(timeout),
-                    where="engine._crewai_adapter.make_llm_callable",
-                ) from exc
-        return _engine_response_from_crewai(result)
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(
+                    crewai_llm.call,
+                    messages,  # type: ignore[arg-type]
+                    tools=tools_arg,
+                ),
+                timeout=timeout,
+            )
+        except TimeoutError as exc:
+            # Semantic domain error rather than a bare `TimeoutError`
+            # so the engine's fallback ladder + observer render
+            # the same shape as a provider-side `model.timeout`.
+            # Provider + model are best-effort — this call site
+            # is inside `make_llm_callable` which was constructed
+            # for a specific `crewai_llm` with `crewai_llm.model`
+            # set.
+            model_name = getattr(crewai_llm, "model", None) or "unknown"
+            raise ModelTimeout(
+                provider="crewai",
+                model=str(model_name),
+                timeout_seconds=float(timeout),
+                where="engine._crewai_adapter.make_llm_callable",
+            ) from exc
 
     return call
+
+
+def _classify_call_error(
+    classify: Callable[[BaseException], PlatformError | None] | None,
+    exc: Exception,
+) -> PlatformError | None:
+    """Run the connector's classifier; never let it mask `exc`.
+
+    A classifier that raises is a connector bug: log it and return
+    `None` so the caller re-raises the original provider exception.
+    """
+    if classify is None:
+        return None
+    try:
+        return classify(exc)
+    except Exception:  # noqa: BLE001 — a classifier bug must not mask the provider error
+        _log.warning(
+            "classify_call_error raised while classifying %s; re-raising the original",
+            type(exc).__name__,
+            exc_info=True,
+        )
+        return None
 
 
 def _engine_message_to_crewai(message: Any) -> dict[str, Any]:
@@ -436,7 +493,11 @@ def make_build_llm_factory(
       Preserves the no-creds tutorial path even when real providers
       ARE configured.
     - Anything else → call `llm.build_llm` to get a `crewai.LLM` for
-      the spec, then wrap via `make_llm_callable`. `build_llm`
+      the spec, then wrap via `make_llm_callable` with the spec's
+      connector classifier bound
+      ([`llm.call_error_classifier`][llm.build_llm.call_error_classifier],
+      bug-145) so provider call failures reach the fallback loop as
+      typed `model.*` errors. `build_llm`
       raises [`LlmProviderNotConfigured`][errors.LlmProviderNotConfigured]
       (Fatal) if the spec's provider isn't in
       `llm_providers_config` — the engine surfaces that as
@@ -460,15 +521,20 @@ def make_build_llm_factory(
             from engine.dev_llm import EchoLLMDriver  # noqa: PLC0415
 
             return EchoLLMDriver().__call__
-        from llm import build_llm  # noqa: PLC0415
+        from llm import build_llm, call_error_classifier  # noqa: PLC0415
 
+        provider_config = llm_providers_config.get(spec.provider)
         crewai_llm = await build_llm(
             spec,
-            llm_providers_config.get(spec.provider),
+            provider_config,
             secrets,
             configured_providers=sorted(llm_providers_config),
             context=context,
         )
-        return make_llm_callable(crewai_llm)
+        # `build_llm` raised `LlmProviderNotConfigured` for a `None` config.
+        assert provider_config is not None  # noqa: S101 — narrowed by build_llm
+        return make_llm_callable(
+            crewai_llm, classify=call_error_classifier(spec, provider_config)
+        )
 
     return factory
