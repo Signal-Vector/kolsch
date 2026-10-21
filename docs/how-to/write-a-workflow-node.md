@@ -1,6 +1,6 @@
 # Write a workflow node
 
-The 15 built-in node types cover the common cases — running a shell
+The 16 built-in node types cover the common cases — running a shell
 command, invoking an agent, mutating state, mapping over a list.
 Anything beyond those, you write yourself as a **Python `@node`
 module** inside a bundle. The parser routes any `type:` ref that
@@ -285,5 +285,5 @@ whether it will pass validation before it ends up in a workflow.
 
 The parser and runtime references are at
 [API: Workflows](../api/index.md#workflows). For the complete YAML
-field spec covering both authored nodes and the 15 built-ins, see
+field spec covering both authored nodes and the 16 built-ins, see
 the [workflow YAML reference](../reference/workflow-yaml.md).

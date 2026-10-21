@@ -348,7 +348,7 @@ not oversights:
   `tests/component/test_browse_url.py`,
   `tests/component/test_workflow_browse_url.py`.
 - Parser: `tests/component/test_workflow_parser.py` (parametrized
-  over all 15 built-in node types plus the `browse_url` timeout
+  over all 16 built-in node types plus the `browse_url` timeout
   disambiguation validator).
 
 Run the web-fetch-scoped subset via:

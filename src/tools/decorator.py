@@ -140,6 +140,22 @@ class ToolInfo(BaseModel):
     args_schema: dict[str, Any]
 
 
+class UnavailableTool(BaseModel):
+    """A `hide_if_secrets_missing` tool left out of an agent's tools (feat-139).
+
+    Returned by
+    [`ToolsSubsystem.list_unavailable_tools`][tools.subsystem.ToolsSubsystem.list_unavailable_tools];
+    the engine writes one `tool.unavailable` event per session per
+    entry. Carries secret NAMES only, never values.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    tool_name: str
+    missing_secrets: list[str]
+    recovery_hint: str
+
+
 @dataclass
 class ToolDefinition:
     """Everything the dispatch needs to know about a tool.
@@ -172,6 +188,16 @@ class ToolDefinition:
     """spec-001: names of tool services the dispatcher must inject on
     `ToolContext` before this tool runs. Empty by default; the
     dispatcher only populates fields listed here."""
+
+    hide_if_secrets_missing: bool = False
+    """feat-139: when `True`, a missing `secrets_needed` entry hides
+    this tool from the agent instead of failing registration with
+    `ToolSetupFailed`. See the `@tool` decorator docstring."""
+
+    unavailable_hint: str | None = None
+    """feat-139: the user-facing recovery hint recorded on the
+    `tool.unavailable` event when this tool is hidden. `None` derives
+    a generic "set <NAMES> in the workspace .env" hint."""
 
     target_shape: Literal["auto", "json"] = "auto"
     """bug-029: hint for `_extract_target_from_args` on how to
@@ -246,6 +272,8 @@ def tool(
     timeout_seconds: float | None = None,
     summary: str | None = None,
     requires: list[ServiceName] | None = None,
+    hide_if_secrets_missing: bool = False,
+    unavailable_hint: str | None = None,
 ) -> Callable[[Callable[..., Awaitable[Any]]], Callable[..., Awaitable[Any]]]:
     """The `@tool` decorator.
 
@@ -280,6 +308,23 @@ def tool(
             names raise `ValueError` at decoration time. Default
             `None` — tools that don't opt in see all four service
             fields as `None`.
+        hide_if_secrets_missing: feat-139 opt-in. Default `False`:
+            a declared tool whose `secrets_needed` entry is missing
+            fails the agent's tool registration with
+            `ToolSetupFailed` (fail-fast — a misconfigured tool never
+            silently disappears). When `True`, the tool is instead
+            left out of the agent's registered tools (and so out of
+            the model's tool list and the prompt `tools` variable),
+            and the engine records one durable `tool.unavailable`
+            event per session naming the missing secrets. Use it
+            only for optional integrations in shared / starter
+            agents, never for a tool the agent can't work without.
+        unavailable_hint: feat-139: the recovery hint carried on the
+            `tool.unavailable` event (e.g. "Run `kolsch connect
+            openrouter`."). Only meaningful with
+            `hide_if_secrets_missing=True`; `None` derives a generic
+            "set <NAMES> in the workspace .env" hint. Must never
+            contain a secret value.
 
     Returns:
         The decorator that stamps a `ToolDefinition` and returns the
@@ -318,6 +363,8 @@ def tool(
             timeout_seconds=timeout_seconds,
             summary=resolved_summary,
             requires=list(requires or []),
+            hide_if_secrets_missing=hide_if_secrets_missing,
+            unavailable_hint=unavailable_hint,
         )
         fn._tool_definition = defn  # type: ignore[attr-defined]
         return fn

@@ -193,6 +193,13 @@ class ToolExecutionFailed(PlatformError):
     the registry that builds hints per `error_class` and current
     install mode. The observer forwards `recovery_hint` verbatim into
     the `tool.failed` event and the LLM-visible payload (qol-090).
+
+    Optionally carries `extra_detail` — tool-specific structured
+    context (e.g. an upstream HTTP status and validation message)
+    merged into `detail` so the calling model can correct its call.
+    `tool_name` and `error_class` always win over a colliding key.
+    Every `extra_detail` value must be JSON-serialisable: `detail`
+    lands verbatim in the `tool.failed` event payload.
     """
 
     code = "tool.execution_failed"
@@ -205,11 +212,16 @@ class ToolExecutionFailed(PlatformError):
         *,
         where: str = "tools.dispatch.execute",
         recovery_hint: str | None = None,
+        extra_detail: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(
             message=(f"Tool {tool_name!r} raised {error_class}"),
             where=where,
-            detail={"tool_name": tool_name, "error_class": error_class},
+            detail={
+                **(extra_detail or {}),
+                "tool_name": tool_name,
+                "error_class": error_class,
+            },
         )
         self.recovery_hint = recovery_hint
 
@@ -235,6 +247,46 @@ class ToolTimeout(PlatformError):
                 "timeout_seconds": timeout_seconds,
             },
         )
+
+
+class JevBelowThreshold(PlatformError):
+    """Raised when a `jev_decide` answer fell below its `fail_below` threshold.
+
+    spec-136 D6. The author opts in per question with `fail_below`;
+    the compared metric is `confidence` for `choice`, `score` for
+    `score`, and `noul` for `noul`. A metric strictly below its
+    threshold is a fail outcome: the chat model sees the failure as a
+    Diagnostic tool result, and a `kolsch/nodes/jev` workflow node
+    fails the node. `detail` carries every failing question
+    (`{question, metric, value, threshold}`) AND the full `answers`
+    so the caller can still inspect what Jev decided.
+    """
+
+    code = "tool.jev_below_threshold"
+    level = Level.DIAGNOSTIC
+
+    def __init__(
+        self,
+        failures: list[dict[str, Any]],
+        answers: dict[str, Any],
+        *,
+        tool_name: str = "jev_decide",
+        where: str = "kolsch.tools.jev_decide.check_thresholds",
+    ) -> None:
+        names = ", ".join(str(f.get("question")) for f in failures)
+        super().__init__(
+            message=(
+                f"Jev answer(s) below fail_below threshold for question(s): {names}"
+            ),
+            where=where,
+            detail={
+                "tool_name": tool_name,
+                "failures": list(failures),
+                "answers": dict(answers),
+            },
+        )
+        self.failures = list(failures)
+        self.answers = dict(answers)
 
 
 class McpServerUnreachable(PlatformError):

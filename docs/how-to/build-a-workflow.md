@@ -4,7 +4,7 @@ A **workflow** is a YAML file that names some nodes and draws edges
 between them. The executor topologically sorts the graph, fires each
 node with its inputs, captures the output, and moves on. All the
 plumbing — argument passing, branching, state, JSONL — is handled by
-the 15 built-in node types. This guide shows you how to author one.
+the 16 built-in node types. This guide shows you how to author one.
 
 For a per-field reference see the
 [Workflow YAML reference](../reference/workflow-yaml.md). To write a
@@ -15,7 +15,7 @@ custom node in Python, see [Write a workflow node](write-a-workflow-node.md).
 Every workflow YAML has two top-level blocks:
 
 - `nodes:` — a map of `<name>: <NodeDef>`. Each entry sets `type:` to
-  one of the 15 built-in 3-segment refs (`kolsch/nodes/bash`,
+  one of the 16 built-in 3-segment refs (`kolsch/nodes/bash`,
   `kolsch/nodes/agent`, `kolsch/nodes/branch`, ...) or a catalog ref
   for an authored Python node.
 - `graph:` — a `{ edges: [...] }` block. Each edge has `from`, `to`,
@@ -214,6 +214,12 @@ workflow (`user_input` nodes), the run exits early with
 ```
 kolsch workflows resume <wrk_id> --input response=<text>
 ```
+
+Resume (and `fork`) re-validate the workflow YAML first. If you
+edited the workflow into an invalid state while the run was
+paused, the resume is rejected with the validation error and the
+run stays paused — fix the YAML and resume again. Resumed and
+forked runs use the same per-node default timeout as `run`.
 
 ## How to see what happened
 

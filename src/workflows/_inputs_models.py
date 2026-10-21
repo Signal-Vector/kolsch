@@ -21,6 +21,7 @@ from workflows.parser import (
     ComputeInputs,
     DeleteStateInputs,
     FilterInputs,
+    JevInputs,
     ListFilesInputs,
     MapInputs,
     NoopInputs,
@@ -49,6 +50,7 @@ _BUILTIN_TO_INPUTS: dict[str, type] = {
     "kolsch/nodes/workflow": WorkflowSubInputs,
     "kolsch/nodes/map": MapInputs,
     "kolsch/nodes/branch": BranchInputs,
+    "kolsch/nodes/jev": JevInputs,
 }
 
 

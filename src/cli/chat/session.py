@@ -169,11 +169,15 @@ async def _resume_pending_workflow(
     from cli._workflow_chat_runner import (  # noqa: PLC0415
         execute_workflow_with_renderer,
     )
-    from workflows.errors import WorkflowError  # noqa: PLC0415
+    from workflows.errors import (  # noqa: PLC0415
+        WorkflowError,
+        WorkflowValidationError,
+    )
     from workflows.ids import WorkflowRunId  # noqa: PLC0415
     from workflows.parser import load_workflow  # noqa: PLC0415
     from workflows.run import WorkflowRunStatus  # noqa: PLC0415
     from workflows.run_store import WorkflowRunStore  # noqa: PLC0415
+    from workflows.validator import workflow_errors_in  # noqa: PLC0415
 
     if not state.pending_workflow_run_id:
         state.expecting_user_input_response = False
@@ -203,14 +207,32 @@ async def _resume_pending_workflow(
         state.expecting_user_input_response = False
         return
 
-    status = await execute_workflow_with_renderer(
-        state=state,
-        stdout=stdout,
-        store=store,
-        workflow=workflow,
-        run=run,
-        resume_response={"response": response_text},
-    )
+    try:
+        status = await execute_workflow_with_renderer(
+            state=state,
+            stdout=stdout,
+            store=store,
+            workflow=workflow,
+            run=run,
+            resume_response={"response": response_text},
+        )
+    except (WorkflowValidationError, ExceptionGroup) as exc:
+        # bug-142: the reloaded workflow fails validation. The resume
+        # gate rejects it before any side effect, so the run is still
+        # paused: keep expecting a reply so the operator can fix the
+        # YAML and answer again.
+        errors = workflow_errors_in(exc) if isinstance(exc, ExceptionGroup) else [exc]
+        for error in errors:
+            message = getattr(error, "caller_message", None) or str(error)
+            stdout.write(f"resume failed: {message}\n")
+        stdout.write(
+            f"Run `kolsch workflows validate {run.workflow_ref}` to see what's wrong.\n"
+        )
+        stdout.write(
+            "The run is still waiting for input — fix the workflow and reply again.\n"
+        )
+        state.expecting_user_input_response = True
+        return
     state.expecting_user_input_response = status == WorkflowRunStatus.WAITING_FOR_INPUT
 
 

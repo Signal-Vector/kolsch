@@ -18,12 +18,12 @@ This document is the cross-phase event-log schema and conventions for the workfl
 | `workflow.run.timed_out` | entire run exceeded the workflow-level `timeout_seconds:` at a node boundary |
 | `workflow.run.aborted` | user-initiated cancellation via `kolsch workflows cancel` (§8.4) |
 | `workflow.run.forked_from` | emitted as the FIRST event of every forked run; payload carries `forked_from_run_id` |
-| `workflow.run.resumed` | a paused run resumed via `kolsch workflows resume`; payload carries `resumed_at_invocation_id` |
+| `workflow.run.resumed` | a paused run resumed via `kolsch workflows resume`; payload carries `resumed_at_invocation_id`. A resume rejected by the validator (the workflow was edited into an invalid state) emits **nothing** — no `workflow.run.resumed`, no status change — and a rejected fork leaves no forked run at all (bug-142) |
 | `workflow.node.started` | node begins execution |
-| `workflow.node.completed` | node finished successfully; payload includes captured outputs |
+| `workflow.node.completed` | node finished successfully; payload includes captured outputs, plus `branch_value: bool \| str` when the node is used as a branch source (a `str` is the chosen option of a `kolsch/nodes/jev` choice route — spec-136) |
 | `workflow.node.failed` | node raised; payload includes exception + traceback |
 | `workflow.node.timed_out` | a node exceeded its per-node `timeout_seconds:` (§2.6) |
-| `workflow.node.pruned` | a node skipped because its branch was not taken; carries a synthetic `invocation_id` |
+| `workflow.node.pruned` | a node skipped because its branch was not taken; carries a synthetic `invocation_id` and `{reason: "branch_not_taken", upstream_source, branch_value: bool \| str}` |
 | `workflow.node.logged` | author's `ctx.log` call (was: `node.log`) |
 | `workflow.node.emitted` | engine-side wrapper kind family for author `ctx.emit` calls (the actual wire kind on disk is the per-call author kind below) |
 | `workflow.node.called_workflow` | sub-workflow invocation start |

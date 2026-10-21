@@ -142,6 +142,7 @@ from errors.store import (
 )
 from errors.tools import (
     ConfigUnknownTool,
+    JevBelowThreshold,
     McpProtocolError,
     McpServerUnreachable,
     McpUpstreamError,
@@ -222,6 +223,7 @@ __all__ = [
     "FileLineTooLong",
     "FileNotFound",
     "FileTooLarge",
+    "JevBelowThreshold",
     "Level",
     "LlmAllModelsFailed",
     "LlmClientInitFailed",

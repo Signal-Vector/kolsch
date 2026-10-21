@@ -507,8 +507,9 @@ losing a bus message doesn't fail an exchange.)
 | `tool.not_found` | Fatal | `{tool_name, agent_id}` | `tools.setup.register` |
 | `tool.setup_failed` | Fatal | `{tool_name, reason}` | `tools.setup.register` |
 | `tool.invalid_arguments` | Diagnostic | `{tool_name, validation_errors}` | `tools.dispatch.invoke` |
-| `tool.execution_failed` | Diagnostic | `{tool_name, error_class}` | `tools.dispatch.execute` |
+| `tool.execution_failed` | Diagnostic | `{tool_name, error_class, ...extra_detail}` | `tools.dispatch.execute` |
 | `tool.timeout` | Diagnostic | `{tool_name, timeout_seconds}` | `tools.dispatch.execute` |
+| `tool.jev_below_threshold` | Diagnostic | `{tool_name, failures, answers}` | `kolsch.tools.jev_decide.check_thresholds` |
 | `mcp.server_unreachable` | Diagnostic | `{server_name, transport_error}` | `tools.mcp.spawn` |
 | `mcp.upstream_error` | Diagnostic | `{server_name, tool, response}` | `tools.mcp.invoke` |
 | `mcp.protocol_error` | Diagnostic | `{server_name, expected, actual}` | `tools.mcp.invoke` |
@@ -524,6 +525,26 @@ engine wraps as `config.unknown_tool` so the user sees a clear
 generic asset error. Coordinator resolution (PR 1) enforces this
 at engine pre-flight (option (b)); validator-side enforcement at
 agent-load time is tracked as FUL-1.
+
+**`tool.execution_failed` `extra_detail`** (spec-136) — a tool may
+pass tool-specific structured context through the optional
+`extra_detail` constructor argument; it is merged into `detail`
+(`tool_name` / `error_class` always win). `jev_decide` uses it to
+carry the upstream HTTP `status` and `upstream_message` (for 400 /
+413 / 415 / 422, the validation `loc`/`msg` pairs) so the calling
+model can correct its question.
+
+**`tool.jev_below_threshold`** (spec-136) — raised by the
+`jev_decide` tool when an author-set `fail_below` threshold is
+breached. For each question carrying `fail_below`, the tool compares
+one metric (`confidence` for `choice`, `score` for `score`, `noul`
+for `noul`); any metric strictly below its threshold fails the call.
+`failures` is a list of `{question, metric, value, threshold}`;
+`answers` is the full upstream answer map, so the caller can still
+see what Jev decided. Diagnostic: in chat the model sees it as a
+failed tool result and the exchange continues. It is a `tool.*`
+code and is **not** part of the model-fallback trigger table in
+§4.15 — it never triggers fallback.
 
 ### 4.5b MCP tool bridge (spec-120)
 

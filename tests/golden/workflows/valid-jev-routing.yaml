@@ -1,0 +1,53 @@
+# expected: valid
+# spec-136 — a jev choice routes three ways; a jev noul routes true/false.
+nodes:
+  route:
+    type: kolsch/nodes/jev
+    state: "{{ inputs.ticket_text }}"
+    questions:
+      team:
+        type: choice
+        instructions: Which team owns this?
+        criteria:
+          billing: null
+          outage: null
+          feature: null
+    route_on: team
+  billing_handler:
+    type: kolsch/nodes/noop
+  outage_handler:
+    type: kolsch/nodes/noop
+  feature_handler:
+    type: kolsch/nodes/noop
+  refund_check:
+    type: kolsch/nodes/jev
+    state: "{{ inputs.ticket_text }}"
+    questions:
+      refund:
+        type: noul
+        instructions: Is the customer asking for a refund?
+    route_on: refund
+    noul_threshold: 0.7
+  refund_yes:
+    type: kolsch/nodes/noop
+  refund_no:
+    type: kolsch/nodes/noop
+graph:
+  edges:
+    - from: route
+      to: billing_handler
+      branch: billing
+    - from: route
+      to: outage_handler
+      branch: outage
+    - from: route
+      to: feature_handler
+      branch: feature
+    - from: billing_handler
+      to: refund_check
+    - from: refund_check
+      to: refund_yes
+      branch: true
+    - from: refund_check
+      to: refund_no
+      branch: false

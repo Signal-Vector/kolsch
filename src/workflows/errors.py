@@ -45,6 +45,8 @@ __all__ = [
     "WorkflowBindUndefined",
     "WorkflowBranchMissingArm",
     "WorkflowBranchOnNonBranchable",
+    "WorkflowBranchTypeMismatch",
+    "WorkflowBranchUnknownArm",
     "WorkflowBuiltinShadowed",
     "WorkflowCallCycle",
     "WorkflowDuplicateEdge",
@@ -62,6 +64,8 @@ __all__ = [
     "WorkflowInvalidConcurrency",
     "WorkflowInvalidRef",
     "WorkflowInvalidTimeout",
+    "WorkflowJevAmbiguousOptionName",
+    "WorkflowJevInvalidRouteOn",
     "WorkflowJinjaRefUnknown",
     "WorkflowJinjaSecurityError",
     "WorkflowMapperWorkerMissingField",
@@ -710,6 +714,186 @@ class WorkflowBranchMissingArm(WorkflowValidationError):
                 fix=(
                     f"add an edge from {node!r} with branch: {missing_arm} "
                     "(see docs/workflows#branch)"
+                ),
+            )
+        )
+
+
+class WorkflowBranchUnknownArm(WorkflowValidationError):
+    """Raised when a `branch:` arm names an option the source can't choose.
+
+    spec-136 multi-way branching: a `kolsch/nodes/jev` node routed on a
+    choice question only ever produces one of that question's option
+    names, so an edge whose `branch:` names anything else can never
+    fire.
+    """
+
+    caller_message: ClassVar[str] = (
+        "A workflow route points at an option the decision step never "
+        "chooses. Contact your engineer."
+    )
+    identifying_names_keys: ClassVar[tuple[str, ...]] = ("node", "arm")
+
+    def __init__(
+        self,
+        *,
+        file: str,
+        line: int,
+        node: str,
+        arm: str,
+        options: tuple[str, ...],
+    ) -> None:
+        self.file = file
+        self.line = line
+        self.node = node
+        self.arm = arm
+        self.options = options
+        super().__init__(
+            _yaml_origin_str(
+                self,
+                file=file,
+                line=line,
+                problem=(
+                    f"jev node {node!r} routes on a choice whose options are "
+                    f"{list(options)!r}, but an edge uses branch {arm!r}"
+                ),
+                fix=(
+                    "set the edge's branch to one of the question's option "
+                    "names, or add that option to the question's criteria "
+                    "(see docs/workflows#jev)"
+                ),
+            )
+        )
+
+
+class WorkflowBranchTypeMismatch(WorkflowValidationError):
+    """Raised when a `branch:` arm's type doesn't match what the source produces.
+
+    spec-136: boolean sources (branch, bash, authored `@node`, a jev
+    node routed on a noul question) need `true` / `false` arms; a jev
+    node routed on a choice question needs option-name string arms.
+    """
+
+    caller_message: ClassVar[str] = (
+        "A workflow route uses the wrong kind of value for its decision "
+        "step. Contact your engineer."
+    )
+    identifying_names_keys: ClassVar[tuple[str, ...]] = (
+        "from_node",
+        "to_node",
+        "expected",
+    )
+
+    def __init__(
+        self,
+        *,
+        file: str,
+        line: int,
+        from_node: str,
+        to_node: str,
+        expected: str,
+        actual: object,
+    ) -> None:
+        self.file = file
+        self.line = line
+        self.from_node = from_node
+        self.to_node = to_node
+        self.expected = expected
+        self.actual = actual
+        super().__init__(
+            _yaml_origin_str(
+                self,
+                file=file,
+                line=line,
+                problem=(
+                    f"edge from {from_node!r} to {to_node!r} has branch "
+                    f"{actual!r} but {from_node!r} produces a {expected} value"
+                ),
+                fix=(
+                    "use true or false for boolean decision steps, and an "
+                    "option name for a jev choice route; note that yes, no, "
+                    "on and off are strings, not booleans "
+                    "(see docs/workflows#branch)"
+                ),
+            )
+        )
+
+
+class WorkflowJevInvalidRouteOn(WorkflowValidationError):
+    """Raised when a jev node's `route_on` can't drive routing.
+
+    `route_on` must name a question defined on the node, of type
+    `choice` or `noul` (a `score` is fractional — route on it with a
+    downstream `when:` instead).
+    """
+
+    caller_message: ClassVar[str] = (
+        "A workflow decision step routes on a question it does not ask, "
+        "or on one that cannot pick a route. Contact your engineer."
+    )
+    identifying_names_keys: ClassVar[tuple[str, ...]] = ("node", "route_on")
+
+    def __init__(
+        self,
+        *,
+        file: str,
+        line: int,
+        node: str,
+        route_on: str,
+        reason: str,
+    ) -> None:
+        self.file = file
+        self.line = line
+        self.node = node
+        self.route_on = route_on
+        self.reason = reason
+        super().__init__(
+            _yaml_origin_str(
+                self,
+                file=file,
+                line=line,
+                problem=f"jev node {node!r} has route_on {route_on!r}: {reason}",
+                fix=(
+                    "set route_on to the name of a choice or noul question "
+                    "defined under the node's questions, or remove route_on "
+                    "(see docs/workflows#jev)"
+                ),
+            )
+        )
+
+
+class WorkflowJevAmbiguousOptionName(WorkflowValidationError):
+    """Raised when a routed choice option is named like a YAML boolean.
+
+    Under YAML 1.2 an unquoted `true` / `false` (any case) loads as a
+    boolean, so an edge `branch: true` could never equal the option
+    name `"true"`. Options on a routed choice question must be renamed.
+    """
+
+    caller_message: ClassVar[str] = (
+        "A workflow decision option is named like true or false, which "
+        "cannot be routed reliably. Contact your engineer."
+    )
+    identifying_names_keys: ClassVar[tuple[str, ...]] = ("node", "option")
+
+    def __init__(self, *, file: str, line: int, node: str, option: str) -> None:
+        self.file = file
+        self.line = line
+        self.node = node
+        self.option = option
+        super().__init__(
+            _yaml_origin_str(
+                self,
+                file=file,
+                line=line,
+                problem=(
+                    f"jev node {node!r} routes on a choice with option "
+                    f"{option!r}, which YAML reads as a boolean"
+                ),
+                fix=(
+                    "rename the option to a non-boolean word such as "
+                    "is_true or yes_case, and use that name on the edge "
+                    "(see docs/workflows#jev)"
                 ),
             )
         )

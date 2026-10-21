@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Literal
 if TYPE_CHECKING:
     from providers.authz import Rule
     from schemas import AgentId
-    from tools.decorator import ToolDefinition
+    from tools.decorator import ToolDefinition, UnavailableTool
     from tools.mcp import MCPServer
 
 
@@ -52,6 +52,11 @@ class _AgentRegistration:
     mcp_servers: dict[str, _MCPRegistration] = field(default_factory=dict)
     agent_permissions: list[Rule] = field(default_factory=list)
     bundle_permissions: list[Rule] = field(default_factory=list)
+    # feat-139: `hide_if_secrets_missing` tools left out by the most
+    # recent `register_for_agent` call, keyed by tool name. Rebuilt on
+    # every registration (in-memory; the durable record is the
+    # `tool.unavailable` event the engine writes).
+    unavailable: dict[str, UnavailableTool] = field(default_factory=dict)
 
 
 class ToolRegistry:

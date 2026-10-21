@@ -41,9 +41,12 @@ permissions (`/perm`), and resuming a prior session with `--session`.
 `kolsch run` invokes a single agent for one exchange and prints the
 final reply (or one model call in `single_shot` mode); `--model <ref>`
 overrides the model for that one run. Workflows have their own verb:
-`kolsch workflows run <ref>`.
+`kolsch workflows run <ref>` — e.g. the starter
+`kolsch/workflows/triage-tickets-jev`, which routes a ticket three ways
+on a `kolsch/nodes/jev` decision.
 
-`kolsch models`, `kolsch nodes` (workflow node definitions),
+`kolsch models`, `kolsch nodes` (workflow node definitions — the 16
+built-ins plus any authored `@node`s),
 `kolsch skills`, `kolsch sessions`, `kolsch permissions`,
 `kolsch workflows`, and `kolsch providers` are catalog and
 management commands — listing what's installed, what's been run, and

@@ -42,7 +42,8 @@ You: ▍
 - **Agents** — a model, a prompt, and tools, defined in YAML. Agents can [inherit from other agents](docs/how-to/extending-an-agent.md).
 - **Tools** — Python functions an agent can call. [Write your own](docs/how-to/write-a-tool.md) or use the built-ins.
 - **Skills** — reusable prompt instructions. One skill works across many agents.
-- **Workflows** — deterministic DAGs of agents, tools, and Python steps. [Build a workflow](docs/how-to/build-a-workflow.md).
+- **Workflows** — deterministic DAGs of agents, tools, and Python steps. 16 built-in node types; branch on booleans or route multi-way on a typed decision. [Build a workflow](docs/how-to/build-a-workflow.md).
+- **Jev decisions** — fast, typed classify / score / yes-no judgements (TypeSafe AI's Jev, via OpenRouter) as the `jev_decide` agent tool and the `kolsch/nodes/jev` workflow node. [Use Jev](docs/how-to/use-jev.md).
 - **Bundles** — a folder that ships everything together. One name, one copy, one share.
 
 ## Documentation
@@ -54,6 +55,7 @@ You: ▍
 **Build**
 - [Build a workflow](docs/how-to/build-a-workflow.md)
 - [Write a tool](docs/how-to/write-a-tool.md)
+- [Use Jev for decisions](docs/how-to/use-jev.md)
 - [Extend an agent](docs/how-to/extending-an-agent.md)
 - [Permissions](docs/how-to/permissions.md)
 

@@ -81,15 +81,15 @@ podman-compose -f compose.dev.yml up -d --build
 # Edit code on the host — it's live-mounted, so no rebuild for code changes.
 
 # Run checks INSIDE the dev container against your live edits:
-podman-compose exec dev uv run ruff format .
-podman-compose exec dev uv run ruff check --fix .
-podman-compose exec dev uv run mypy .
-podman-compose exec dev uv run pytest tests/unit          # seconds
-podman-compose exec dev uv run pytest tests/component     # ~1 min
-podman-compose exec dev uv run pytest tests/integration   # minutes (Mock LLM + real CrewAI)
+podman-compose -f compose.dev.yml exec dev uv run ruff format .
+podman-compose -f compose.dev.yml exec dev uv run ruff check --fix .
+podman-compose -f compose.dev.yml exec dev uv run mypy .
+podman-compose -f compose.dev.yml exec dev uv run pytest tests/unit          # seconds
+podman-compose -f compose.dev.yml exec dev uv run pytest tests/component     # ~1 min
+podman-compose -f compose.dev.yml exec dev uv run pytest tests/integration   # minutes (Mock LLM + real CrewAI)
 
 # If you changed engine behavior, check golden diffs:
-podman-compose exec dev uv run pytest tests/golden
+podman-compose -f compose.dev.yml exec dev uv run pytest tests/golden
 #   Unexpected golden diff = your change altered emitted events.
 #   If intentional: ... uv run pytest --update-golden, then review the diff.
 

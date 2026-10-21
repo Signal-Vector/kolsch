@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import threading
 from typing import TYPE_CHECKING, Any, TextIO
 
 from assets import AssetManagement
@@ -40,9 +41,10 @@ from workflows.errors import (
     WorkflowValidationError,
 )
 from workflows.parser import load_workflow
-from workflows.validator import validate_workflow_or_raise
+from workflows.validator import validate_workflow_or_raise, workflow_errors_in
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
 __all__ = ["add_workflows_subparser", "cmd_workflows"]
@@ -663,8 +665,17 @@ async def _cmd_run(
         store=store,
     )
 
-    if follow:
-        return await _run_with_follow(
+    try:
+        if follow:
+            return await _run_with_follow(
+                executor=executor,
+                store=store,
+                run_id=run.run_id,
+                fmt=fmt,
+                out=out,
+                err=err,
+            )
+        return await _run_blocking(
             executor=executor,
             store=store,
             run_id=run.run_id,
@@ -672,14 +683,20 @@ async def _cmd_run(
             out=out,
             err=err,
         )
-    return await _run_blocking(
-        executor=executor,
-        store=store,
-        run_id=run.run_id,
-        fmt=fmt,
-        out=out,
-        err=err,
-    )
+    except WorkflowValidationError as exc:
+        # bug-142: the executor's run-start gate rejected the workflow.
+        # Render it like `workflows validate` does — no traceback.
+        return _emit_error_envelope(
+            command="workflows run", errors=[exc], fmt=fmt, out=out, err=err
+        )
+    except ExceptionGroup as group:
+        return _emit_error_envelope(
+            command="workflows run",
+            errors=workflow_errors_in(group),
+            fmt=fmt,
+            out=out,
+            err=err,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -758,83 +775,48 @@ async def _cmd_resume(
             err=err,
         )
 
-    # Live executor wiring — mirrors `_cmd_run` so the resume
-    # process has the same builtin runner set (the resume may
-    # continue into bash / agent / catalog-node nodes downstream
-    # of the user_input).
-    from tools.builtins import (  # noqa: PLC0415
-        make_bash,
-        make_browse_url,
-        make_list_files,
-        make_read_file,
-        make_write_file,
+    # Live executor wiring — the SAME builder `_cmd_run` uses
+    # (bug-141): one place wires and stamps the built-in tool
+    # definitions, so a resume that continues into bash / file-IO /
+    # browse_url / jev / agent / catalog-node nodes authorises them as
+    # `kolsch/tools/<name>` exactly like `run` does.
+    from cli._workflow_runtime import (  # noqa: PLC0415
+        build_workflow_executor,
     )
-    from tools.decorator import get_tool_definition  # noqa: PLC0415
-    from workflows.builtins import register_builtins  # noqa: PLC0415
     from workflows.errors import (  # noqa: PLC0415
         WorkflowInputInvalid,
         WorkflowResumeRejected,
     )
-    from workflows.executor import (  # noqa: PLC0415
-        IterativeExecutor,
-        RunnerRegistry,
-    )
 
-    bash_fn = make_bash(policy=runtime.path_policy, root=root)
-    bash_defn = get_tool_definition(bash_fn)
-    # Mirror `_cmd_run`: resumes downstream of `user_input` may
-    # hit file-IO nodes.
-    read_file_defn = get_tool_definition(
-        make_read_file(policy=runtime.path_policy, root=root)
-    )
-    write_file_defn = get_tool_definition(
-        make_write_file(policy=runtime.path_policy, root=root)
-    )
-    list_files_defn = get_tool_definition(
-        make_list_files(policy=runtime.path_policy, root=root)
-    )
-    browse_url_defn = get_tool_definition(
-        make_browse_url(policy=runtime.path_policy, root=root)
-    )
-    registry = RunnerRegistry()
-
-    # Same factory wiring as `_cmd_run` so a resumed workflow that
-    # fires a downstream sub-workflow node can still construct
-    # nested executors.
-    def _executor_factory(**kwargs: Any) -> IterativeExecutor:
-        return IterativeExecutor(**kwargs)
-
-    register_builtins(
-        registry,
-        bash_defn=bash_defn,
-        authz=runtime.authz,
-        secrets=runtime.secrets,
-        sandbox=runtime.sandbox,
-        catalog=catalog,
-        engine=runtime.engine,
-        session_store=runtime.store,
-        config_builder=runtime.build_resolved_config,
-        read_file_defn=read_file_defn,
-        write_file_defn=write_file_defn,
-        list_files_defn=list_files_defn,
-        browse_url_defn=browse_url_defn,
-        workflow_store=store,
-        executor_factory=_executor_factory,
-    )
-    executor = IterativeExecutor(
+    executor = build_workflow_executor(
+        root=root,
+        runtime=runtime,
         workflow=workflow,
         run=run,
         store=store,
-        registry=registry,
-        catalog=catalog,
     )
 
     try:
         status = await executor.resume(response=response)
-    except (WorkflowResumeRejected, WorkflowInputInvalid) as exc:
+    except (
+        WorkflowResumeRejected,
+        WorkflowInputInvalid,
+        WorkflowValidationError,
+    ) as exc:
+        # bug-142: a workflow edited into an invalid state since the
+        # pause is rejected by the resume gate; the run stays
+        # `waiting_for_input` for a retry once the YAML is fixed.
         return _emit_error_envelope(
             command="workflows resume",
             errors=[exc],
+            fmt=fmt,
+            out=out,
+            err=err,
+        )
+    except ExceptionGroup as group:
+        return _emit_error_envelope(
+            command="workflows resume",
+            errors=workflow_errors_in(group),
             fmt=fmt,
             out=out,
             err=err,
@@ -955,67 +937,21 @@ async def _cmd_fork(
         ),
     )
 
-    # Live executor wiring — mirrors `_cmd_run` / `_cmd_resume` so
-    # the fork process has the same builtin runner set. A fork
-    # downstream of the fork point may hit any node type the
-    # workflow uses (bash, agent, sub-workflow, file IO, state,
+    # Live executor wiring — the SAME builder `_cmd_run` / `_cmd_resume`
+    # use (bug-141), so built-in tools downstream of the fork point are
+    # authorised as `kolsch/tools/<name>`. A fork may hit any node type
+    # the workflow uses (bash, agent, sub-workflow, file IO, state,
     # branching).
-    from tools.builtins import (  # noqa: PLC0415
-        make_bash,
-        make_browse_url,
-        make_list_files,
-        make_read_file,
-        make_write_file,
-    )
-    from tools.decorator import get_tool_definition  # noqa: PLC0415
-    from workflows.builtins import register_builtins  # noqa: PLC0415
-    from workflows.executor import (  # noqa: PLC0415
-        IterativeExecutor,
-        RunnerRegistry,
+    from cli._workflow_runtime import (  # noqa: PLC0415
+        build_workflow_executor,
     )
 
-    bash_fn = make_bash(policy=runtime.path_policy, root=root)
-    bash_defn = get_tool_definition(bash_fn)
-    read_file_defn = get_tool_definition(
-        make_read_file(policy=runtime.path_policy, root=root)
-    )
-    write_file_defn = get_tool_definition(
-        make_write_file(policy=runtime.path_policy, root=root)
-    )
-    list_files_defn = get_tool_definition(
-        make_list_files(policy=runtime.path_policy, root=root)
-    )
-    browse_url_defn = get_tool_definition(
-        make_browse_url(policy=runtime.path_policy, root=root)
-    )
-    registry = RunnerRegistry()
-
-    def _executor_factory(**kwargs: Any) -> IterativeExecutor:
-        return IterativeExecutor(**kwargs)
-
-    register_builtins(
-        registry,
-        bash_defn=bash_defn,
-        authz=runtime.authz,
-        secrets=runtime.secrets,
-        sandbox=runtime.sandbox,
-        catalog=catalog,
-        engine=runtime.engine,
-        session_store=runtime.store,
-        config_builder=runtime.build_resolved_config,
-        read_file_defn=read_file_defn,
-        write_file_defn=write_file_defn,
-        list_files_defn=list_files_defn,
-        browse_url_defn=browse_url_defn,
-        workflow_store=store,
-        executor_factory=_executor_factory,
-    )
-    executor = IterativeExecutor(
+    executor = build_workflow_executor(
+        root=root,
+        runtime=runtime,
         workflow=workflow,
         run=forked_run,
         store=store,
-        registry=registry,
-        catalog=catalog,
     )
 
     try:
@@ -1045,6 +981,15 @@ async def _cmd_fork(
         return _emit_error_envelope(
             command="workflows fork",
             errors=[exc],
+            fmt=fmt,
+            out=out,
+            err=err,
+        )
+    except ExceptionGroup as group:
+        # bug-142: several validation errors on the reloaded workflow.
+        return _emit_error_envelope(
+            command="workflows fork",
+            errors=workflow_errors_in(group),
             fmt=fmt,
             out=out,
             err=err,
@@ -1550,8 +1495,16 @@ async def _run_with_follow(
     from workflows.run import WorkflowRunStatus  # noqa: PLC0415
 
     exec_task = asyncio.create_task(executor.run())
+    # bug-142: end the tail as soon as the executor finishes, even if it
+    # finished without writing a terminal event (e.g. the run-start
+    # validation gate rejected the workflow) — otherwise the tail polls
+    # forever. A thread-safe flag, set from the task's done callback.
+    executor_done = threading.Event()
+    exec_task.add_done_callback(lambda _t: executor_done.set())
     try:
-        await asyncio.to_thread(_drain_tail_to_writer, store, run_id, out)
+        await asyncio.to_thread(
+            _drain_tail_to_writer, store, run_id, out, stop=executor_done.is_set
+        )
     finally:
         # If the tail printer raised, still let the executor finish so
         # the JSONL terminates cleanly.
@@ -1566,7 +1519,13 @@ async def _run_with_follow(
     return 1
 
 
-def _drain_tail_to_writer(store: Any, run_id: Any, out: TextIO) -> None:
+def _drain_tail_to_writer(
+    store: Any,
+    run_id: Any,
+    out: TextIO,
+    *,
+    stop: Callable[[], bool] | None = None,
+) -> None:
     """Synchronous-thread JSONL tail printer.
 
     Runs inside `asyncio.to_thread` so the `time.sleep` polls in
@@ -1574,7 +1533,7 @@ def _drain_tail_to_writer(store: Any, run_id: Any, out: TextIO) -> None:
     """
     import json as _json  # noqa: PLC0415
 
-    for event in store.tail(run_id):
+    for event in store.tail(run_id, stop=stop):
         out.write(_json.dumps(event, sort_keys=True, default=str))
         out.write("\n")
         out.flush()

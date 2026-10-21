@@ -348,7 +348,13 @@ class WorkflowNodeStartedEvent(NodeScopedWorkflowEvent):
 
 
 class WorkflowNodeCompletedEvent(NodeScopedWorkflowEvent):
-    """The `workflow.node.completed` envelope."""
+    """The `workflow.node.completed` envelope.
+
+    The payload carries `{node_name, invocation_id, output}` plus
+    `branch_value` (`bool | str`) ONLY when the node is used as a
+    branch source (at least one outgoing edge has `branch:`); a str
+    value is a `kolsch/nodes/jev` choice (spec-136).
+    """
 
     kind: Literal[WorkflowEventKind.NODE_COMPLETED] = WorkflowEventKind.NODE_COMPLETED
 
@@ -374,6 +380,9 @@ class WorkflowNodePrunedEvent(NodeScopedWorkflowEvent):
     `{node_name, reason: "branch_not_taken", upstream_source,
     branch_value}` so JSONL forensics can correlate the prune back to
     the branchable source whose decision caused the cascade.
+    `branch_value` is `bool | str`: a bool for boolean sources, the
+    chosen option name (str) for a `kolsch/nodes/jev` choice
+    (spec-136 multi-way branching).
 
     Pruned events follow the source's
     [`WorkflowNodeCompletedEvent`][workflows.events.WorkflowNodeCompletedEvent]

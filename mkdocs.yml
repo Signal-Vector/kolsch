@@ -147,6 +147,7 @@ nav:
       - Build a workflow: how-to/build-a-workflow.md
       - Write a tool: how-to/write-a-tool.md
       - Write a workflow node: how-to/write-a-workflow-node.md
+      - Use Jev for decisions: how-to/use-jev.md
       - MCP operator server: how-to/mcp-operator-server.md
       - Chatting effectively: how-to/chatting-effectively.md
       - Workspace and setup: how-to/workspace-and-setup.md

@@ -1,6 +1,7 @@
 """Branch value extraction for the executor's edge dispatcher.
 
-Maps a completed node's captured output to the boolean the executor
+Maps a completed node's captured output to the value (a bool, or —
+for a `kolsch/nodes/jev` choice — an option-name str) the executor
 uses to filter outgoing edges by their `branch:` field. Single
 function — `compute_branch_value` — typed so the worklist dispatcher
 reads it once and gates on the return value.
@@ -20,13 +21,14 @@ __all__ = ["compute_branch_value"]
 
 _BASH_TYPE_REF = "kolsch/nodes/bash"
 _BRANCH_TYPE_REF = "kolsch/nodes/branch"
+_JEV_TYPE_REF = "kolsch/nodes/jev"
 
 
 def compute_branch_value(
     node_def: Any,
     captured: dict[str, Any],
-) -> bool | None:
-    """Extract the branchable boolean for edge dispatch.
+) -> bool | str | None:
+    """Extract the branch value for edge dispatch.
 
     Mapping by source node type:
 
@@ -40,6 +42,10 @@ def compute_branch_value(
       (the
       [`CatalogNodeRunner`][workflows.builtins.catalog_node_runner.CatalogNodeRunner]
       stores it under the `value` key for both return shapes).
+    - `kolsch/nodes/jev` (spec-136): `captured["value"]` — the chosen
+      option name (str) when `route_on` names a choice question, or
+      `noul >= noul_threshold` (bool) for a noul question. Absent
+      (`route_on` unset) → `None`.
     - Everything else (`noop`, `agent`, future leaves): `None`.
 
     The `isinstance(value, bool)` check is intentional — Python's
@@ -55,9 +61,14 @@ def compute_branch_value(
         captured: The captured output dict for that node.
 
     Returns:
-        The branchable boolean, or `None` for non-branchable nodes.
+        The branch value, or `None` for non-branchable nodes.
     """
     type_ref = getattr(node_def, "type", None)
+    if type_ref == _JEV_TYPE_REF:
+        jev_value = captured.get("value")
+        if isinstance(jev_value, (bool, str)):
+            return jev_value
+        return None
     if type_ref == _BASH_TYPE_REF:
         return bool(captured.get("exit_code") == 0)
     if type_ref == _BRANCH_TYPE_REF:

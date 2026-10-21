@@ -58,6 +58,11 @@ class EventType(StrEnum):
     TOOL_CALLED = "tool.called"
     TOOL_RESULT = "tool.result"
     TOOL_FAILED = "tool.failed"
+    # feat-139: a `hide_if_secrets_missing` tool was left out of the
+    # agent's tools because a secret is missing. Once per session per
+    # tool; emitted during exchange setup, before
+    # `thread.exchange_started`.
+    TOOL_UNAVAILABLE = "tool.unavailable"
 
     # Model interaction
     MODEL_REQUEST = "model.request"
@@ -315,6 +320,23 @@ class ToolFailedData(_DataModel):
     tool_name: str
     error: Error
     recovery_hint: str | None = None
+
+
+class ToolUnavailableData(_DataModel):
+    """`tool.unavailable.data` — a tool hidden for missing secrets (feat-139).
+
+    Written by the engine during exchange setup, at most once per
+    session per tool (deduplicated against the session's event log, so
+    it survives a restart). Only a `@tool(hide_if_secrets_missing=True)`
+    tool is ever hidden; default tools still fail registration with
+    `tool.setup_failed`. `missing_secrets` lists secret NAMES only —
+    never values. `recovery_hint` is the tool's `unavailable_hint` (or
+    a derived "set <NAMES> in the workspace .env").
+    """
+
+    tool_name: str
+    missing_secrets: list[str]
+    recovery_hint: str
 
 
 class ConfigSetData(_DataModel):

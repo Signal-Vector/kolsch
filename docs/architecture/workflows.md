@@ -96,7 +96,7 @@ workflow can `copy_of:` or reference.
 
 ## Node types
 
-Fifteen built-in node types ship with the platform, each
+Sixteen built-in node types ship with the platform, each
 registered at `kolsch/nodes/<name>`:
 
 - `bash` — run a shell command. Branchable on exit code.
@@ -114,6 +114,11 @@ registered at `kolsch/nodes/<name>`:
   the corresponding tools.
 - `browse_url` — fetch a rendered web page via the `browse_url`
   tool (opt-in `kolsch[browse]` extra: Playwright + Chromium).
+- `jev` — ask Jev (TypeSafe AI's decision model, via the
+  `jev_decide` tool) typed questions about some content. With
+  `route_on` it is a branch source: a `choice` question routes
+  multi-way (`branch: <option name>`), a `noul` question routes
+  true/false.
 - `agent` — invoke a catalogued Kolsch agent through the Agent Engine.
 - `workflow` — spawn a sub-workflow (nested runs share the trace
   id; depth is capped at 16).
@@ -134,7 +139,11 @@ field on every node type.
 `retry:` and `timeout:` are per-node modifiers, not node types.
 They wrap any runner (`with_retry`, `with_timeout`) at dispatch
 time. `retry` wraps first so the timeout deadline bounds the whole
-retry budget.
+retry budget. A node without its own `timeout:` gets the
+workspace default (`workflows.default_node_timeout_seconds` in
+`platform.yaml`, 240 s unless set) — on `kolsch workflows run`,
+`resume` and `fork` alike, since all three build their executor
+through the same `build_workflow_executor` (bug-141).
 
 ## DAG semantics
 
@@ -215,9 +224,12 @@ so authors see all the problems at once:
    reachable from a start. No bind-key collisions across
    multi-input edges. No unreachable nodes.
 3. **Branching.** `branch:` edges only fire off branchable sources
-   (`bash`, `branch` node, or authored `@node` returning
-   `bool` / `tuple[bool, BaseModel]`). A `branch` node must wire
-   both true and false arms.
+   (`bash`, `branch` node, authored `@node` returning
+   `bool` / `tuple[bool, BaseModel]`, or a `jev` node with
+   `route_on`). A `branch` node (and a `jev` noul route) must wire
+   both true and false arms. A `jev` choice route uses string arms —
+   one per option name, every option wired — and a string arm on a
+   boolean source is a type mismatch.
 4. **Jinja refs.** A Jinja AST walk of every string in the
    workflow checks that `nodes.<X>.<Y>` references name a defined
    node, that the referenced node is a transitive predecessor, that
@@ -270,6 +282,23 @@ cleanly. `kolsch workflows resume <run>` (or the API's resume
 endpoint) replays the JSONL, validates the operator response,
 writes the `workflow.run.resumed` and paused-node
 `workflow.node.completed` events, and re-enters the walk loop.
+
+**Resume and fork re-validate the workflow.** Both reload the
+workflow YAML and run the same validator gate as a fresh run
+before touching anything (bug-142). On every CLI path — `run`
+(including `--follow`), `resume` and `fork` — a rejected workflow
+prints the validator's errors and exits 1, with no traceback, and a
+rejected `run` or `fork` leaves no run behind (no phantom `pending`
+entry in `kolsch workflows list`). If the YAML was edited into an
+invalid state since the run started — or fails a newer validator
+rule — a resume is rejected with the validator's error, writes no
+event and leaves the run `waiting_for_input`; fix the YAML and
+resume again. A rejected fork writes nothing and leaves no forked
+run behind. The one kept run is a sub-workflow child whose own gate
+rejects it: the parent already points at it, so it stays, recorded
+`failed`. In chat, a rejected resume or `/fork` prints a one-line
+notice plus a pointer to `kolsch workflows validate <ref>` for the
+details.
 
 **Cancellation is cooperative across the whole run.** The Executor
 polls the cancellation token between nodes; each runner polls

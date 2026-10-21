@@ -1,0 +1,21 @@
+# expected_error: WorkflowBranchTypeMismatch
+# spec-136 — a string arm on a boolean source (YAML 1.2: yes is a string).
+nodes:
+  decide:
+    type: kolsch/nodes/branch
+    condition: "{{ true }}"
+  yes_handler:
+    type: kolsch/nodes/noop
+  no_handler:
+    type: kolsch/nodes/noop
+graph:
+  edges:
+    - from: decide
+      to: yes_handler
+      branch: true
+    - from: decide
+      to: no_handler
+      branch: false
+    - from: decide
+      to: yes_handler
+      branch: yes

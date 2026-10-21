@@ -51,6 +51,7 @@ from workflows.errors import (
     WorkflowResumeRejected,
     WorkflowRunNotFound,
     WorkflowRuntimeError,
+    WorkflowValidationError,
 )
 from workflows.events import (
     WorkflowNodeCompletedEvent,
@@ -113,6 +114,8 @@ BUILTIN_PHASE_MAP: Mapping[str, str] = {
     "compute": "3.6",
     "map": "3.7",
     "workflow": "3.7",
+    # spec-136 — the Jev decision node (and multi-way `branch:` arms).
+    "jev": "spec-136",
 }
 
 
@@ -576,6 +579,27 @@ class IterativeExecutor:
 
         run_id = self._run.run_id
         run_dir = self._store.directory(run_id)
+        # Run-start gate. The validator is the gate; the executor
+        # never enters the worklist with an invalid workflow. It runs
+        # BEFORE the PID write (bug-142) so a rejected root run leaves
+        # nothing behind: the caller minted it (`store.create` wrote
+        # only `meta.json`), and it is discarded here — no phantom
+        # `pending` run in `kolsch workflows list`. A rejected CHILD run
+        # (sub-workflow) is kept: the parent's
+        # `workflow.node.called_workflow` event already points at it.
+        from workflows.validator import (  # noqa: PLC0415
+            validate_workflow_or_raise,
+        )
+
+        try:
+            validate_workflow_or_raise(
+                self._workflow, self._catalog, file=self._run.workflow_ref
+            )
+        except (WorkflowValidationError, ExceptionGroup):
+            if self._run.parent is None:
+                self._discard_rejected_run(run_id)
+            raise
+
         # Write the executor's PID atomically so the engine-startup
         # orphan sweep can decide whether a `status=running` JSONL was
         # left behind by a crashed run. `tmp + rename` guarantees a
@@ -584,15 +608,6 @@ class IterativeExecutor:
         tmp_pid = run_dir.pid_path.with_suffix(".tmp")
         tmp_pid.write_text(str(os.getpid()), encoding="utf-8")
         tmp_pid.replace(run_dir.pid_path)
-        # Run-start gate. The validator is the gate; the executor
-        # never enters the worklist with an invalid workflow.
-        from workflows.validator import (  # noqa: PLC0415
-            validate_workflow_or_raise,
-        )
-
-        validate_workflow_or_raise(
-            self._workflow, self._catalog, file=self._run.workflow_ref
-        )
 
         # Capture the pre-run `sys.modules` key set so the cleanup
         # step at run end only removes entries that loaded WHILE this
@@ -715,6 +730,22 @@ class IterativeExecutor:
     # Resume entry point.
     # ------------------------------------------------------------------
 
+    def _discard_rejected_run(self, run_id: WorkflowRunId) -> None:
+        """Discard a run the validation gate rejected before its first event.
+
+        Best-effort (bug-142): a discard failure — e.g. a concurrent
+        writer appended an event (`discard_unstarted` refuses), or the
+        directory removal hit an `OSError` — is logged and swallowed so
+        it can never replace the validation error the operator must see.
+        Callers re-raise the original error.
+        """
+        try:
+            self._store.discard_unstarted(run_id)
+        except Exception:  # noqa: BLE001 — never mask the validation error
+            logger.warning(
+                "could not discard rejected workflow run %s", run_id, exc_info=True
+            )
+
     async def resume(self, *, response: dict[str, Any]) -> WorkflowRunStatus:
         """Resume a paused run with the user's response.
 
@@ -768,6 +799,20 @@ class IterativeExecutor:
                 run_id=str(run_id),
                 status=str(self._run.status),
             )
+
+        # bug-142: the same gate `run()` applies, on the RELOADED
+        # workflow (it may have been edited since the run paused, or
+        # fail newer validator rules). Before any side effect — no
+        # event, no status flip, no file write — so a rejected resume
+        # leaves the run `waiting_for_input`, retryable once the YAML
+        # is fixed. Raises the validator's own error(s) unchanged.
+        from workflows.validator import (  # noqa: PLC0415
+            validate_workflow_or_raise,
+        )
+
+        validate_workflow_or_raise(
+            self._workflow, self._catalog, file=self._run.workflow_ref
+        )
 
         # Read the open-invocation sidecar before any further side
         # effects so a missing / unreadable sidecar surfaces as
@@ -1105,6 +1150,23 @@ class IterativeExecutor:
                 "forked_from=ForkedFrom(...))"
             )
             raise ValueError(msg)
+
+        # bug-142: validate the reloaded workflow before anything else
+        # (parent lookup, replay, events). The caller minted this
+        # forked run already (`store.create` writes only `meta.json`);
+        # a rejected fork discards it so no phantom `pending` run is
+        # left behind. Raises the validator's own error(s) unchanged.
+        from workflows.validator import (  # noqa: PLC0415
+            validate_workflow_or_raise,
+        )
+
+        try:
+            validate_workflow_or_raise(
+                self._workflow, self._catalog, file=self._run.workflow_ref
+            )
+        except (WorkflowValidationError, ExceptionGroup):
+            self._discard_rejected_run(run_id)
+            raise
 
         parent_id = WorkflowRunId(str(self._run.forked_from.run_id))
         parent_dir = self._store.directory(parent_id)
@@ -1608,6 +1670,12 @@ class IterativeExecutor:
                         output = bash_exc.captured
                     else:
                         raise
+                self._check_branch_arms(
+                    node_name=node_name,
+                    node_def=node_def,
+                    output=output,
+                    inv_id=inv_id,
+                )
             except WorkflowPausedForInput as pause:
                 # Pause discipline. The `user_input` runner raised
                 # the typed pause signal AFTER the executor already
@@ -2219,7 +2287,7 @@ class IterativeExecutor:
 
         async def _run_body() -> dict[str, Any]:
             try:
-                return await runner.run(
+                output = await runner.run(
                     node_name=pending.node_name,
                     node_def=pending.node_def,
                     bound_inputs=pending.bound_inputs,
@@ -2227,9 +2295,16 @@ class IterativeExecutor:
                     ctx=pending.ctx,
                 )
             except BashNonZeroExit as bash_exc:
-                if self._bash_treats_nonzero_as_success(pending.node_name):
-                    return bash_exc.captured
-                raise
+                if not self._bash_treats_nonzero_as_success(pending.node_name):
+                    raise
+                output = bash_exc.captured
+            self._check_branch_arms(
+                node_name=pending.node_name,
+                node_def=pending.node_def,
+                output=output,
+                inv_id=pending.inv_id,
+            )
+            return output
 
         if touches_state:
             # State-mutation lock serialises the
@@ -2759,7 +2834,7 @@ class IterativeExecutor:
         self,
         *,
         node_name: str,
-        branch_value: bool | None,
+        branch_value: bool | str | None,
         inv_id: InvocationId,
     ) -> None:
         """Filter the source's outgoing edges by their `branch:` field.
@@ -2771,29 +2846,83 @@ class IterativeExecutor:
           None)` fire; `False` arms are pruned.
         - `branch_value is False`: edges with `edge.branch in
           (False, None)` fire; `True` arms are pruned.
+        - `branch_value` is a str (spec-136, a `kolsch/nodes/jev`
+          choice): edges whose `branch` equals the chosen option (or
+          is `None`) fire; every other arm is pruned. Same equality
+          test as the bool case.
 
         Pruned edges are added to `_pruned_edges` so
         `_render_bound_inputs` skips them and the cascade (run from
         the worklist immediately after dispatch) can suppress
-        descendants. The defensive raise covers the case where a
-        non-branchable source has a `branch:` edge in the graph (the
-        validator already blocks this at parse time — this is the
-        runtime belt-and-braces).
+        descendants. Arm/value consistency is checked earlier, inside
+        the node's failure path, by
+        [`_check_branch_arms`][workflows.executor.IterativeExecutor._check_branch_arms].
         """
+        _ = inv_id
         for edge in self._outgoing_edges(node_name):
             if edge.branch is None:
                 continue
-            if branch_value is None:
-                raise WorkflowNodeFailed(
-                    node=node_name,
-                    invocation_id=str(inv_id),
-                    cause=ValueError(
-                        f"node {node_name!r} has branch edge to "
-                        f"{edge.to!r} but produced no branch value"
-                    ),
-                )
             if edge.branch != branch_value:
                 self._pruned_edges.add((edge.from_, edge.to))
+
+    def _check_branch_arms(
+        self,
+        *,
+        node_name: str,
+        node_def: Any,
+        output: dict[str, Any],
+        inv_id: InvocationId,
+    ) -> None:
+        """Runtime belt-and-braces for the validator's branching rules.
+
+        Called right after the runner returns, INSIDE the node's
+        failure path, so a violation emits `workflow.node.failed`
+        instead of silently pruning every arm. It matters on paths
+        that re-enter the worklist without the validator (resume /
+        fork reload the YAML unvalidated):
+
+        - a `branch:` edge on a source that produced no branch value;
+        - an arm whose type (bool vs str) differs from the value's —
+          e.g. a pre-spec-136 `branch: yes` (now a str) on a boolean
+          source;
+        - a str value (a jev choice) that no arm names — e.g. Jev
+          returned an option the workflow doesn't wire. Str-only: a
+          boolean source may legitimately wire one arm.
+
+        Raises:
+            WorkflowNodeFailed: Any of the above.
+        """
+        routed = [e for e in self._outgoing_edges(node_name) if e.branch is not None]
+        if not routed:
+            return
+        branch_value = compute_branch_value(node_def, output)
+        if branch_value is None:
+            cause: Exception = ValueError(
+                f"node {node_name!r} has branch edge to {routed[0].to!r} "
+                "but produced no branch value"
+            )
+        elif mismatched := [
+            e
+            for e in routed
+            if isinstance(e.branch, bool) != isinstance(branch_value, bool)
+        ]:
+            cause = TypeError(
+                f"node {node_name!r} produced branch value {branch_value!r} "
+                f"but its edge to {mismatched[0].to!r} has branch "
+                f"{mismatched[0].branch!r} of a different type (bool vs "
+                "option name); validate the workflow"
+            )
+        elif isinstance(branch_value, str) and not any(
+            e.branch == branch_value for e in routed
+        ):
+            cause = ValueError(
+                f"node {node_name!r} chose unknown option {branch_value!r}: "
+                f"no outgoing edge has that branch "
+                f"(arms: {[e.branch for e in routed]!r})"
+            )
+        else:
+            return
+        raise WorkflowNodeFailed(node=node_name, invocation_id=str(inv_id), cause=cause)
 
     def _bash_treats_nonzero_as_success(self, node_name: str) -> bool:
         """Return `True` iff this bash node is branchable on exit code.
@@ -2810,7 +2939,7 @@ class IterativeExecutor:
         *,
         source: str,
         source_completion_event_id: Any,
-        branch_value: bool | None,
+        branch_value: bool | str | None,
     ) -> None:
         """Reverse-reachability cascade from `source`.
 
@@ -2868,7 +2997,7 @@ class IterativeExecutor:
         *,
         node_name: str,
         upstream_source: str,
-        branch_value: bool,
+        branch_value: bool | str,
         parent_event_id: Any,
     ) -> None:
         """Append a `WorkflowNodePrunedEvent` to the run's JSONL.

@@ -1,0 +1,31 @@
+# expected_error: WorkflowBranchUnknownArm
+# spec-136 — an arm names an option the choice question never produces.
+nodes:
+  route:
+    type: kolsch/nodes/jev
+    state: some ticket
+    questions:
+      team:
+        type: choice
+        instructions: Which team?
+        criteria:
+          billing: null
+          outage: null
+    route_on: team
+  billing_handler:
+    type: kolsch/nodes/noop
+  outage_handler:
+    type: kolsch/nodes/noop
+  sales_handler:
+    type: kolsch/nodes/noop
+graph:
+  edges:
+    - from: route
+      to: billing_handler
+      branch: billing
+    - from: route
+      to: outage_handler
+      branch: outage
+    - from: route
+      to: sales_handler
+      branch: sales

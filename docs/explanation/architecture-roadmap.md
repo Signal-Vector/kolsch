@@ -5,7 +5,7 @@ Planned features and architectural direction for Kolsch.
 ## Now
 
 - **Additional LLM connectors** — Anthropic direct, AWS Bedrock, and local model support (Ollama, vLLM). The connector protocol is stable; each new provider is a new implementation.
-- **More workflow node types** — expanding the built-in node catalog beyond the current 15 types.
+- **More workflow node types** — expanding the built-in node catalog beyond the current 16 types.
 - **YAML schema stabilization** — locking down agent and workflow YAML shapes so files don't break between releases.
 - **Bundle tooling** — `kolsch bundle init`, `kolsch bundle validate`, and better drift detection for the starter bundle.
 

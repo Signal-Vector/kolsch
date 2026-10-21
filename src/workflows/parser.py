@@ -5,7 +5,7 @@ bind-collision / timeout-sign checks land in the validator.
 
 Layout:
 
-- Per-built-in `*NodeDef` for the 15 reserved `kolsch/nodes/<name>`
+- Per-built-in `*NodeDef` for the 16 reserved `kolsch/nodes/<name>`
   types, each paired 1:1 with its `*Inputs(BaseModel)`.
 - [`CopyOfNodeDef`][workflows.parser.CopyOfNodeDef] for nodes that
   reuse another node's type via `copy_of:` (semantic resolution at
@@ -41,8 +41,10 @@ from pydantic import (
     ConfigDict,
     Field,
     ValidationError,
+    field_validator,
     model_validator,
 )
+from pydantic_core import PydanticCustomError
 
 from assets.refs import is_three_segment
 from kolsch._yamlio import YAMLError, load
@@ -78,6 +80,8 @@ __all__ = [
     "FilterInputs",
     "FilterNodeDef",
     "GraphDef",
+    "JevInputs",
+    "JevNodeDef",
     "ListFilesInputs",
     "ListFilesNodeDef",
     "MapInputs",
@@ -205,6 +209,12 @@ class BranchInputs(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="allow")
 
 
+class JevInputs(BaseModel):
+    """Receiver inputs for `kolsch/nodes/jev` (edge binds feed `inputs.*`)."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="allow")
+
+
 class ComputeInputs(BaseModel):
     """Receiver inputs for `kolsch/nodes/compute`."""
 
@@ -267,7 +277,7 @@ class _BaseNodeDef(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# The 14 built-in *NodeDef classes.
+# The built-in *NodeDef classes.
 # ---------------------------------------------------------------------------
 
 
@@ -461,6 +471,84 @@ class BranchNodeDef(_BaseNodeDef):
     condition: Any
 
 
+class JevNodeDef(_BaseNodeDef):
+    """`kolsch/nodes/jev` — typed Jev decision; optionally a multi-way route.
+
+    spec-136. Dispatches the `kolsch/tools/jev_decide` tool (so authz,
+    secrets and the tool's own validation all apply).
+
+    - `state` — the content judged: a string, object or array. Every
+      Jinja-marked string inside it (at any depth) is rendered at run
+      time against `inputs.*` / `state.*`.
+    - `questions` — same shape as the tool's `questions` (choice /
+      score / noul, optional `fail_below`), validated at parse against
+      the tool's own question models. Questions are literal (not
+      Jinja-rendered) so the validator can check routing statically.
+    - `model` — optional Jev model id; default `typesafe/jev-1.14`.
+    - `route_on` — optional question name. A `choice` question makes
+      the node a multi-way branch source (edges use `branch: <option>`);
+      a `noul` question makes it a boolean source (`noul >=
+      noul_threshold`).
+    """
+
+    type: Literal["kolsch/nodes/jev"]
+    state: Any
+    questions: dict[str, Any]
+    model: str = "typesafe/jev-1.14"
+    route_on: str | None = None
+    noul_threshold: float = Field(default=0.5, ge=0.0, le=1.0)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_boolean_option_keys(cls, data: Any) -> Any:
+        """Reject a choice option whose YAML key loaded as a boolean.
+
+        An unquoted `true:` / `false:` criteria key loads as a bool under
+        YAML 1.2 and can never be an option name. Raised as a pydantic
+        error so `load_workflow` attaches the real file path; without
+        this guard the failure would be an opaque "valid string" error.
+        """
+        if not isinstance(data, dict):
+            return data
+        questions = data.get("questions")
+        if not isinstance(questions, dict):
+            return data
+        for q_name, question in questions.items():
+            criteria = question.get("criteria") if isinstance(question, dict) else None
+            if not isinstance(criteria, dict):
+                continue
+            for key in criteria:
+                if isinstance(key, bool):
+                    error_type = "jev_boolean_option_name"
+                    template = (
+                        "question {question!r} has a criteria option {option!r} "
+                        "that YAML loaded as a boolean, not an option name; "
+                        "rename it to a non-boolean word such as is_true"
+                    )
+                    raise PydanticCustomError(
+                        error_type,
+                        template,
+                        {"question": str(q_name), "option": str(key).lower()},
+                    )
+        return data
+
+    @field_validator("questions")
+    @classmethod
+    def _validate_questions(cls, value: dict[str, Any]) -> dict[str, Any]:
+        """Validate against the `jev_decide` tool's own question models.
+
+        The starter-bundle tool file is the single source of truth for
+        the question shape; the error surfaces as the tool's pydantic
+        messages. The raw (validated) mapping is kept so the runner
+        hands the tool exactly what the author wrote.
+        """
+        from tools.builtins import load_jev_decide_module  # noqa: PLC0415
+
+        module = load_jev_decide_module()
+        module.JevDecideArgs.model_validate({"state": "", "questions": value})
+        return value
+
+
 class CopyOfNodeDef(_BaseNodeDef):
     """A node defined via `copy_of: <other_node_name>` rather than `type:`.
 
@@ -494,6 +582,7 @@ _BUILTIN_NODE_CLASSES: dict[str, type[_BaseNodeDef]] = {
     "workflow": WorkflowNodeDef,
     "map": MapNodeDef,
     "branch": BranchNodeDef,
+    "jev": JevNodeDef,
 }
 
 
@@ -513,6 +602,7 @@ NodeDefUnion = Union[  # noqa: UP007 — Annotated unions over Pydantic models
     WorkflowNodeDef,
     MapNodeDef,
     BranchNodeDef,
+    JevNodeDef,
     CopyOfNodeDef,
     CatalogNodeDef,
 ]
@@ -598,7 +688,9 @@ NodeDef = Annotated[NodeDefUnion, BeforeValidator(_dispatch_node_def)]
 class EdgeDef(BaseModel):
     """One graph edge.
 
-    Fields are `{from, to, binds, branch, when}`. Fan-in is
+    Fields are `{from, to, binds, branch, when}`. `branch` is a bool
+    for boolean sources or a str (an option name) for a
+    `kolsch/nodes/jev` choice source. Fan-in is
     structural — multiple edges sharing a `to:` value. Edge-level
     `condition:` was renamed to `when:`; supplying the old name
     surfaces a fix-path parse error.
@@ -616,7 +708,12 @@ class EdgeDef(BaseModel):
     from_: str = Field(alias="from")
     to: str
     binds: dict[str, Any] = Field(default_factory=dict)
-    branch: bool | None = None
+    # `bool` arms route on a boolean source (branch / bash / authored
+    # `@node`); `str` arms route on a `kolsch/nodes/jev` choice
+    # (spec-136 multi-way branching). YAML 1.2: only `true` / `false`
+    # load as bool — `yes` / `no` / quoted values stay str, and the
+    # validator rejects a type mismatch with the source.
+    branch: bool | str | None = None
     when: Any = None
 
     @model_validator(mode="before")

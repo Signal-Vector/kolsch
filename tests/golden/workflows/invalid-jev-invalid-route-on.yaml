@@ -1,0 +1,18 @@
+# expected_error: WorkflowJevInvalidRouteOn
+# spec-136 — route_on names a score question (fractional; can't pick a route).
+nodes:
+  route:
+    type: kolsch/nodes/jev
+    state: some ticket
+    questions:
+      urgency:
+        type: score
+        instructions: How urgent?
+        criteria: [low, mid, high]
+    route_on: urgency
+  after:
+    type: kolsch/nodes/noop
+graph:
+  edges:
+    - from: route
+      to: after

@@ -55,6 +55,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from cli.chat.services._task_teardown import cancel_and_wait
 from schemas.entities import Actor
 from schemas.events import Event, EventType
 from schemas.identifiers import EventId
@@ -796,19 +797,28 @@ class WorkflowsImpl(AbstractWorkflows):
         for task in list(self._per_run_drain_tasks.values()):
             if not task.done():
                 task.cancel()
-        if self._per_run_drain_tasks:
-            await asyncio.gather(
-                *self._per_run_drain_tasks.values(),
-                return_exceptions=True,
-            )
+        try:
+            if self._per_run_drain_tasks:
+                await asyncio.gather(
+                    *self._per_run_drain_tasks.values(),
+                    return_exceptions=True,
+                )
 
-        # Cancel the FIFO drain worker.
-        if self._workflow_drain_task is not None and not (
-            self._workflow_drain_task.done()
-        ):
-            self._workflow_drain_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._workflow_drain_task
+            # Cancel the FIFO drain worker.
+            if self._workflow_drain_task is not None and not (
+                self._workflow_drain_task.done()
+            ):
+                await cancel_and_wait(self._workflow_drain_task)
+        except asyncio.CancelledError:
+            # qol-143: the caller was cancelled mid-teardown. Still
+            # request cancellation of everything left so no task
+            # outlives a closed impl (a second `aclose()` is a no-op),
+            # then propagate the caller's cancel.
+            for task in list(self._per_run_drain_tasks.values()):
+                task.cancel()
+            if self._workflow_drain_task is not None:
+                self._workflow_drain_task.cancel()
+            raise
 
     # ------------------------------------------------------------------
     # feat-127 — retire live work for a `/new` session switch.
@@ -908,10 +918,11 @@ class WorkflowsImpl(AbstractWorkflows):
         emitting one more ``append_event`` after the caller repoints the ids.
 
         The force waits are BOUNDED: a coroutine can swallow its
-        ``CancelledError`` (a node body's ``except BaseException``, or the
-        delivery landing inside ``_finalize_terminal``'s bridge-await
-        suppress) and survive the cancel — an unbounded await there would
-        hang ``/new`` inside its own safety net. Python cannot force-kill a
+        ``CancelledError`` (e.g. a node body's ``except BaseException``;
+        since bug-140 ``_finalize_terminal``'s bridge await re-raises a
+        cancel aimed at its own task) and survive the cancel — an
+        unbounded await there would hang ``/new`` inside its own safety
+        net. Python cannot force-kill a
         swallower; proceeding after the bound is the accepted residual, and
         the unconditional re-arm keeps the impl usable either way (a
         surviving old task has re-parked on ``queue.get()`` — a harmless
@@ -1071,6 +1082,11 @@ class WorkflowsImpl(AbstractWorkflows):
         workflow can't kill the drain.
         """
         while True:
+            # bug-140 defence in depth: never pick up more work once
+            # `aclose()` has begun, even if some await on the run path
+            # swallowed the cancel aimed at this task.
+            if self._closed:
+                return
             spec = await self._workflow_queue.get()
             if self._retiring:
                 # feat-127: a `/new` switch is retiring live work — drop this
@@ -1492,7 +1508,15 @@ class WorkflowsImpl(AbstractWorkflows):
                 # (wiring bug / infra failure). Do not clobber a
                 # previously-captured message.
                 if record.error_message is None:
-                    record.error_message = str(_run_exc)[:400]
+                    # bug-142: the run-start validation gate raises one
+                    # `ExceptionGroup` for a multi-error workflow — its own
+                    # str is just "Workflow validation failed (N
+                    # sub-exceptions)"; surface the actual errors.
+                    if isinstance(_run_exc, ExceptionGroup):
+                        detail = "; ".join(str(e) for e in _run_exc.exceptions)
+                    else:
+                        detail = str(_run_exc)
+                    record.error_message = detail[:400]
                 # The executor writes its own terminal event on the way
                 # out; the bridge drain will convert it. If it didn't
                 # (construction-time raise, wiring bug), close the card
@@ -1543,8 +1567,25 @@ class WorkflowsImpl(AbstractWorkflows):
             # so the sentinel isn't dropped when the queue is full.
             with contextlib.suppress(Exception):
                 await bridge_queue.put(_STOP_SENTINEL)
-        with contextlib.suppress(asyncio.CancelledError, Exception):
+        try:
             await bridge_task
+        except asyncio.CancelledError:
+            # bug-140: a CancelledError here is either the BRIDGE task's
+            # own cancellation (e.g. `aclose()` cancelling per-run drains
+            # — expected, swallow) or a cancel aimed at THIS task (the
+            # shared FIFO drain being torn down while it waits for the
+            # bridge). Swallowing the latter consumed the cancel: the
+            # drain looped back to `queue.get()` and `aclose()` awaited
+            # it forever. Same discrimination as bug-128's site in
+            # `_run_one_workflow`.
+            # The flat `> 0` is deliberate (unlike the baseline-relative
+            # `cancel_and_wait`): the drain must die on ANY task-cancel,
+            # including a stale count from an earlier unconsumed one.
+            current = asyncio.current_task()
+            if current is not None and current.cancelling() > 0:
+                raise
+        except Exception:  # noqa: BLE001, S110 — bridge failures are logged by the bridge
+            pass
 
         # Drop the per-run trackers.
         self._workflow_cancels.pop(run_id, None)

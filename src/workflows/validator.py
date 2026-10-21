@@ -50,6 +50,8 @@ from workflows.errors import (
     WorkflowBindCollision,
     WorkflowBranchMissingArm,
     WorkflowBranchOnNonBranchable,
+    WorkflowBranchTypeMismatch,
+    WorkflowBranchUnknownArm,
     WorkflowError,
     WorkflowExtendsPolicyForbidden,
     WorkflowFromAssetTypeError,
@@ -57,6 +59,8 @@ from workflows.errors import (
     WorkflowFromShapeError,
     WorkflowInvalidConcurrency,
     WorkflowInvalidTimeout,
+    WorkflowJevAmbiguousOptionName,
+    WorkflowJevInvalidRouteOn,
     WorkflowJinjaRefUnknown,
     WorkflowMapperWorkerNotAddressable,
     WorkflowNodeImportFailed,
@@ -81,6 +85,7 @@ from workflows.parser import (
     DeleteStateNodeDef,
     EdgeDef,
     FilterNodeDef,
+    JevNodeDef,
     ListFilesNodeDef,
     MapNodeDef,
     NoopNodeDef,
@@ -99,6 +104,7 @@ __all__ = [
     "ValidationResult",
     "validate_workflow",
     "validate_workflow_or_raise",
+    "workflow_errors_in",
 ]
 
 
@@ -265,6 +271,24 @@ def validate_workflow(
         errors=tuple(errors),
         warnings=tuple(warnings),
     )
+
+
+def workflow_errors_in(group: BaseExceptionGroup[BaseException]) -> list[WorkflowError]:
+    """The `WorkflowError`s inside a `validate_workflow_or_raise` group.
+
+    The validator raises ONE `ExceptionGroup` for a multi-error
+    workflow. Operator surfaces (CLI, chat) render its members; a group
+    carrying anything other than `WorkflowError`s is not a validation
+    result, so it is re-raised unchanged rather than half-rendered.
+
+    Raises:
+        BaseExceptionGroup: `group` itself, when any member is not a
+            `WorkflowError`.
+    """
+    errors = [exc for exc in group.exceptions if isinstance(exc, WorkflowError)]
+    if len(errors) != len(group.exceptions):
+        raise group
+    return errors
 
 
 def validate_workflow_or_raise(
@@ -561,61 +585,139 @@ def _check_branching(
 ) -> tuple[list[WorkflowValidationError], list[WorkflowValidationWarning]]:
     """Branching invariants on branch-capable sources.
 
-    The branchable set is `kolsch/nodes/branch`, `kolsch/nodes/bash`
-    (the exit code drives dispatch), and authored Python `@node`
-    modules whose introspected return annotation is `bool` or
-    `tuple[bool, BaseModel]`. Authored Python whose return type is a
-    plain `BaseModel` is NOT branchable — `branch:` edges from such
-    nodes raise `WorkflowBranchOnNonBranchable`.
+    The boolean branchable set is `kolsch/nodes/branch`,
+    `kolsch/nodes/bash` (the exit code drives dispatch), authored
+    Python `@node` modules whose introspected return annotation is
+    `bool` or `tuple[bool, BaseModel]`, and a `kolsch/nodes/jev` node
+    whose `route_on` names a `noul` question. A `kolsch/nodes/jev`
+    node whose `route_on` names a `choice` question is a multi-way
+    (str) source (spec-136). Authored Python whose return type is a
+    plain `BaseModel`, and a jev node without `route_on`, are NOT
+    branchable — `branch:` edges from such nodes raise
+    `WorkflowBranchOnNonBranchable`.
 
-    `WorkflowBranchMissingArm` applies only to
-    [`BranchNodeDef`][workflows.parser.BranchNodeDef] — the branch
-    node type's contract requires both arms wired. Bash and authored
-    Python may legitimately use only one arm (e.g. a guarded retry
-    that prunes the failure path); the runtime treats the missing
-    arm as "no edges fire" without complaint.
+    Arm typing: a str `branch:` on a boolean source, or a bool
+    `branch:` on a choice source, raises `WorkflowBranchTypeMismatch`.
+    A choice route's arms must be option names
+    (`WorkflowBranchUnknownArm`), and every option needs at least one
+    arm (`WorkflowBranchMissingArm` with the option as `missing_arm`).
+
+    `WorkflowBranchMissingArm` for `true` / `false` applies to
+    [`BranchNodeDef`][workflows.parser.BranchNodeDef] and to a jev
+    noul route — both contracts require both arms wired. Bash and
+    authored Python may legitimately use only one arm (e.g. a guarded
+    retry that prunes the failure path); the runtime treats the
+    missing arm as "no edges fire" without complaint.
     """
     errors: list[WorkflowValidationError] = []
     warnings: list[WorkflowValidationWarning] = []
 
+    # Jev nodes: `route_on` validity applies whether or not the node
+    # has outgoing edges. Records each valid route's kind + options.
+    choice_options: dict[str, tuple[str, ...]] = {}
+    noul_routes: set[str] = set()
+    # A jev node whose `route_on` is itself invalid already has its
+    # error; its arms are not re-reported as non-branchable.
+    invalid_routes: set[str] = set()
+    for name, node in workflow.nodes.items():
+        if isinstance(node, JevNodeDef) and node.route_on is not None:
+            route_errors = _check_jev_route_on(
+                name=name,
+                node=node,
+                file=file,
+                choice_options=choice_options,
+                noul_routes=noul_routes,
+            )
+            if route_errors:
+                invalid_routes.add(name)
+                errors.extend(route_errors)
+
     if workflow.graph is None:
         return errors, warnings
 
-    branchable_names: set[str] = set()
-    require_both_arms: set[str] = set()
+    bool_sources: set[str] = set(noul_routes)
+    require_both_arms: set[str] = set(noul_routes)
     for name, node in workflow.nodes.items():
         if isinstance(node, BranchNodeDef):
-            branchable_names.add(name)
+            bool_sources.add(name)
             require_both_arms.add(name)
             continue
         if isinstance(node, BashNodeDef):
-            branchable_names.add(name)
+            bool_sources.add(name)
             continue
         if isinstance(node, CatalogNodeDef) and _is_branchable_catalog_node(
             node=node, catalog=catalog
         ):
-            branchable_names.add(name)
+            bool_sources.add(name)
 
     edges_by_source: dict[str, list[EdgeDef]] = {}
     for edge in workflow.graph.edges:
         edges_by_source.setdefault(edge.from_, []).append(edge)
 
     for source, outbound in edges_by_source.items():
-        if source not in branchable_names:
-            for edge in outbound:
-                if edge.branch is not None:
+        routed = [edge for edge in outbound if edge.branch is not None]
+        if not routed or source in invalid_routes:
+            continue
+        if source in choice_options:
+            options = choice_options[source]
+            for edge in routed:
+                if isinstance(edge.branch, bool):
                     errors.append(
-                        WorkflowBranchOnNonBranchable(
+                        WorkflowBranchTypeMismatch(
                             file=file,
                             line=0,
                             from_node=source,
                             to_node=edge.to,
+                            expected="option-name (choice)",
+                            actual=edge.branch,
                         )
                     )
+                elif edge.branch not in options:
+                    errors.append(
+                        WorkflowBranchUnknownArm(
+                            file=file,
+                            line=0,
+                            node=source,
+                            arm=str(edge.branch),
+                            options=options,
+                        )
+                    )
+            wired = {edge.branch for edge in routed}
+            errors.extend(
+                WorkflowBranchMissingArm(
+                    file=file, line=0, node=source, missing_arm=option
+                )
+                for option in options
+                if option not in wired
+            )
+            continue
+        if source not in bool_sources:
+            errors.extend(
+                WorkflowBranchOnNonBranchable(
+                    file=file,
+                    line=0,
+                    from_node=source,
+                    to_node=edge.to,
+                )
+                for edge in routed
+            )
+            continue
+        errors.extend(
+            WorkflowBranchTypeMismatch(
+                file=file,
+                line=0,
+                from_node=source,
+                to_node=edge.to,
+                expected="boolean",
+                actual=edge.branch,
+            )
+            for edge in routed
+            if not isinstance(edge.branch, bool)
+        )
 
-    for branch_node in require_both_arms:
+    for branch_node in sorted(require_both_arms):
         outbound = edges_by_source.get(branch_node, [])
-        branch_values = {e.branch for e in outbound if e.branch is not None}
+        branch_values = {e.branch for e in outbound if isinstance(e.branch, bool)}
         for required in (True, False):
             if required not in branch_values:
                 errors.append(
@@ -628,6 +730,61 @@ def _check_branching(
                 )
 
     return errors, warnings
+
+
+_YAML_BOOLEAN_WORDS = frozenset({"true", "false"})
+
+
+def _check_jev_route_on(
+    *,
+    name: str,
+    node: JevNodeDef,
+    file: str,
+    choice_options: dict[str, tuple[str, ...]],
+    noul_routes: set[str],
+) -> list[WorkflowValidationError]:
+    """Validate a jev node's `route_on`; record a valid route's kind.
+
+    `route_on` must name a defined `choice` or `noul` question. A
+    routed choice may not have an option YAML 1.2 would read as a
+    boolean (`true` / `false`, any case) — an edge `branch: true`
+    could never equal it.
+    """
+    route_on = str(node.route_on)
+    question = node.questions.get(route_on)
+    if not isinstance(question, dict):
+        return [
+            WorkflowJevInvalidRouteOn(
+                file=file,
+                line=0,
+                node=name,
+                route_on=route_on,
+                reason="no question with that name is defined",
+            )
+        ]
+    q_type = question.get("type")
+    if q_type == "noul":
+        noul_routes.add(name)
+        return []
+    if q_type != "choice":
+        return [
+            WorkflowJevInvalidRouteOn(
+                file=file,
+                line=0,
+                node=name,
+                route_on=route_on,
+                reason=f"the question is a {q_type!r} question, not choice or noul",
+            )
+        ]
+    options = tuple(str(option) for option in question.get("criteria") or {})
+    ambiguous = [o for o in options if o.lower() in _YAML_BOOLEAN_WORDS]
+    if ambiguous:
+        return [
+            WorkflowJevAmbiguousOptionName(file=file, line=0, node=name, option=option)
+            for option in ambiguous
+        ]
+    choice_options[name] = options
+    return []
 
 
 def _is_branchable_catalog_node(*, node: CatalogNodeDef, catalog: AssetCatalog) -> bool:

@@ -321,6 +321,15 @@ class WorkflowSubRunner:
             # `child_status="failed"` reflects the abnormal termination,
             # and a secondary failure in the emit must never shadow the
             # original error.
+            #
+            # bug-142: the child run is kept (the parent's marker points
+            # at it), so record it FAILED too — otherwise a child the
+            # run-start gate rejected stays `pending` forever in
+            # `workflows list`. Unconditional on this arm: if the child
+            # did write a terminal event, `read` prefers the JSONL tail
+            # over the meta status anyway.
+            with contextlib.suppress(Exception):
+                self._store.update_status(child_run.run_id, WorkflowRunStatus.FAILED)
             with contextlib.suppress(Exception):
                 await self._emit_called_completed(
                     ctx=ctx,
