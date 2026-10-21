@@ -380,7 +380,7 @@ def test_validate_ref_rule_skips_non_refs(
         ),
     )
     assert _validate_json(tmp_path, capsys) == [
-        {"ref": "acme/skills/noisy", "ok": True, "errors": []},
+        {"ref": "acme/skills/noisy", "ok": True, "errors": [], "details": []},
     ]
 
 
@@ -466,3 +466,138 @@ def test_validate_ref_rule_dedupes_and_skips_escapes(
         ),
     )
     assert _validate_json(tmp_path, capsys)[0]["errors"] == ["missing-ref:scripts/a.py"]
+
+
+def test_validate_ref_rule_unprobeable_tokens_do_not_raise(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A segment longer than NAME_MAX makes ``exists()`` raise
+    ``OSError``; the token is treated as not a ref instead of
+    crashing validation."""
+    _platform_yaml(tmp_path)
+    _make_bundle(tmp_path, "acme")
+    long = "a" * 300
+    _write_skill_md(
+        tmp_path,
+        "acme",
+        "long",
+        body=f"See `{long}/x.py` and [x]({long}.md).\n",
+    )
+    assert _validate_json(tmp_path, capsys)[0]["errors"] == []
+
+
+def test_validate_ref_rule_percent_encoded_link_resolves(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Link targets are percent-decoded before resolution; the code
+    reports the target as written."""
+    _platform_yaml(tmp_path)
+    _make_bundle(tmp_path, "acme")
+    skill_md = _write_skill_md(
+        tmp_path, "acme", "enc", body="Read [notes](references/with%20space.md).\n"
+    )
+    assert _validate_json(tmp_path, capsys)[0]["errors"] == [
+        "missing-ref:references/with%20space.md"
+    ]
+    (skill_md.parent / "references").mkdir()
+    (skill_md.parent / "references" / "with space.md").write_text(
+        "x\n", encoding="utf-8"
+    )
+    assert _validate_json(tmp_path, capsys)[0]["errors"] == []
+
+
+# ---------------------------------------------------------------------------
+# bug-149 — actionable frontmatter diagnostics.
+# ---------------------------------------------------------------------------
+
+_YAML_ERROR_FM = (
+    'name: humanize\ndescription: Use when rewriting. Triggers on: "x", "y".\n'
+)
+
+
+def _write_raw_skill(root: Path, bundle: str, name: str, text: str) -> Path:
+    skill_dir = root / "bundles" / bundle / "skills" / name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    skill_md = skill_dir / "SKILL.md"
+    skill_md.write_text(text, encoding="utf-8")
+    return skill_md
+
+
+def test_validate_frontmatter_missing_reports_only_that_code(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _platform_yaml(tmp_path)
+    _make_bundle(tmp_path, "acme")
+    _write_raw_skill(tmp_path, "acme", "bare", "# Skill: bare\n\nDoes things.\n")
+
+    (row,) = _validate_json(tmp_path, capsys)
+    assert row["errors"] == ["frontmatter-missing"]
+    assert row["details"] == [
+        {
+            "code": "frontmatter-missing",
+            "message": "no YAML frontmatter (SKILL.md must start with a `---` line)",
+        }
+    ]
+
+
+def test_validate_frontmatter_yaml_error_carries_position_and_hint(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _platform_yaml(tmp_path)
+    _make_bundle(tmp_path, "acme")
+    _write_skill_md(tmp_path, "acme", "humanize", raw_frontmatter=_YAML_ERROR_FM)
+
+    (row,) = _validate_json(tmp_path, capsys)
+    assert row["errors"] == ["frontmatter-unparseable"]
+    column = len("description: Use when rewriting. Triggers on:")
+    expected = (
+        f"SKILL.md line 3, column {column}: mapping values are not allowed "
+        "in this context; values containing ': ' must be quoted"
+    )
+    assert row["details"] == [{"code": "frontmatter-unparseable", "message": expected}]
+
+    assert main(["--root", str(tmp_path), "skills", "validate"]) == 1
+    assert f"[FAIL] acme/skills/humanize: {expected}\n" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [
+        (
+            "---\nname: x\ndescription: y\n\nBody, never closed.\n",
+            "frontmatter opened on line 1 but never closed with `---`",
+        ),
+        ("---\n- a\n- b\n---\n\nBody.\n", "frontmatter must be a YAML mapping"),
+    ],
+)
+def test_validate_frontmatter_unparseable_other_kinds(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    text: str,
+    message: str,
+) -> None:
+    _platform_yaml(tmp_path)
+    _make_bundle(tmp_path, "acme")
+    _write_raw_skill(tmp_path, "acme", "odd", text)
+
+    (row,) = _validate_json(tmp_path, capsys)
+    assert row["errors"] == ["frontmatter-unparseable"]
+    assert row["details"][0]["message"] == message
+
+
+def test_validate_empty_frontmatter_block_reports_name_and_description(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A well-formed but empty block is not a frontmatter error."""
+    _platform_yaml(tmp_path)
+    _make_bundle(tmp_path, "acme")
+    _write_raw_skill(tmp_path, "acme", "empty", "---\n---\n\n# Body\n\nText.\n")
+
+    (row,) = _validate_json(tmp_path, capsys)
+    assert row["errors"] == ["missing-name", "missing-description"]
+    assert [d["code"] for d in row["details"]] == row["errors"]

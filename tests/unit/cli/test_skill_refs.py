@@ -41,8 +41,14 @@ def test_non_path_code_spans_are_not_candidates(token: str) -> None:
 def test_path_shaped_code_spans_are_candidates_and_dot_slash_stripped() -> None:
     body = "Run `scripts/extract.py`, read `./references/methodology.md`.\n"
     assert _iter_candidates(body) == [
-        _RefCandidate(text="scripts/extract.py", kind="span"),
-        _RefCandidate(text="references/methodology.md", kind="span"),
+        _RefCandidate(
+            text="scripts/extract.py", kind="span", path="scripts/extract.py"
+        ),
+        _RefCandidate(
+            text="references/methodology.md",
+            kind="span",
+            path="references/methodology.md",
+        ),
     ]
 
 
@@ -53,9 +59,9 @@ def test_link_targets_are_candidates_without_fragment_or_query() -> None:
         "And [anchor only](#top).\n"
     )
     assert _iter_candidates(body) == [
-        _RefCandidate(text="FORMS.md", kind="link"),
-        _RefCandidate(text="references/a.md", kind="link"),
-        _RefCandidate(text="assets/logo.png", kind="link"),
+        _RefCandidate(text="FORMS.md", kind="link", path="FORMS.md"),
+        _RefCandidate(text="references/a.md", kind="link", path="references/a.md"),
+        _RefCandidate(text="assets/logo.png", kind="link", path="assets/logo.png"),
     ]
 
 
@@ -82,3 +88,15 @@ def test_link_inside_code_span_is_not_a_link() -> None:
 
 def test_repeats_are_kept_for_the_resolver_to_dedupe() -> None:
     assert _texts("`scripts/a.py` `scripts/a.py`\n") == ["scripts/a.py"] * 2
+
+
+def test_link_targets_are_percent_decoded_for_resolution_only() -> None:
+    assert _iter_candidates("[x](references/with%20space.md)\n") == [
+        _RefCandidate(
+            text="references/with%20space.md",
+            kind="link",
+            path="references/with space.md",
+        ),
+    ]
+    # Code spans are literal text, never decoded.
+    assert _iter_candidates("`scripts/a%20b.py`\n")[0].path == "scripts/a%20b.py"

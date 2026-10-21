@@ -30,7 +30,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, TextIO
 
 from assets.refs import build_ref
-from assets.skill_metadata import parse_skill_frontmatter
+from assets.skill_metadata import (
+    FrontmatterError,
+    parse_skill_frontmatter,
+    parse_skill_frontmatter_detailed,
+)
 from cli._skill_refs import find_missing_skill_refs
 from errors import AssetsNotFound, WorkspaceNotInitialized
 from kolsch._yamlio import dump, load
@@ -1357,6 +1361,7 @@ def _install_into_new_bundle(
 # (cli._setup._maybe_warn_invalid_skills). Stable strings so JSON
 # consumers + log scrapers can match on them.
 _ERR_FILE_MISSING = "file-missing"
+_ERR_FRONTMATTER_MISSING = "frontmatter-missing"
 _ERR_FRONTMATTER_UNPARSEABLE = "frontmatter-unparseable"
 _ERR_MISSING_NAME = "missing-name"
 _ERR_MISSING_DESCRIPTION = "missing-description"
@@ -1368,14 +1373,45 @@ _ERR_BODY_EMPTY = "body-empty"
 _ERR_MISSING_REF_PREFIX = "missing-ref:"
 
 
+@dataclass(frozen=True)
+class SkillIssue:
+    """One validation finding: a stable ``code`` plus a human ``message``."""
+
+    code: str
+    message: str
+
+
 def validate_skill_entry(entry: AssetEntry, *, workspace_root: Path) -> list[str]:
     """Return a list of error codes (empty when the skill is well-formed).
 
+    The codes of
+    [`validate_skill_entry_detailed`][cli.skills.validate_skill_entry_detailed],
+    in the same order — see there for the checks.
+    """
+    return [
+        issue.code
+        for issue in validate_skill_entry_detailed(entry, workspace_root=workspace_root)
+    ]
+
+
+def validate_skill_entry_detailed(
+    entry: AssetEntry, *, workspace_root: Path
+) -> list[SkillIssue]:
+    """Return the skill's validation issues (empty when well-formed).
+
     Pure function — no I/O beyond the SKILL.md read and ``exists()``
-    checks for body references. Used by both ``kolsch skills
-    validate`` (CLI op) and the setup-time warning hook in
-    :mod:`cli._setup`. Sharing the primitive keeps the two surfaces
-    from drifting in what they consider valid.
+    checks for body references. The single source of truth for
+    ``kolsch skills validate`` (CLI op) and the setup-time warning
+    hook in :mod:`cli._setup`, so the two surfaces can't drift in
+    what they consider valid.
+
+    Frontmatter is re-parsed from ``entry.path`` with
+    [`parse_skill_frontmatter_detailed`][assets.skill_metadata.parse_skill_frontmatter_detailed]:
+    no leading ``---`` yields ``frontmatter-missing``; an
+    unterminated block, invalid YAML, or a non-mapping yields
+    ``frontmatter-unparseable`` (the message carries the YAML
+    error's file line, column and problem). While either is present,
+    ``missing-name`` / ``missing-description`` are not reported.
 
     ``workspace_root`` is the base for ``bundles/…`` body references
     (the form a skill uses when it tells the model to run a script
@@ -1383,61 +1419,80 @@ def validate_skill_entry(entry: AssetEntry, *, workspace_root: Path) -> list[str
     is decided solely by ``cli._skill_refs.find_missing_skill_refs``;
     each missing one yields ``missing-ref:<ref>``.
     """
-    errors: list[str] = []
+    codes: list[str] = []
     path = Path(entry.path)
     if not path.is_file():
         # No file → can't validate anything else; short-circuit so
         # downstream checks don't crash trying to read a missing
         # file. The catalog held a path that no longer exists.
-        return [_ERR_FILE_MISSING]
+        return [SkillIssue(_ERR_FILE_MISSING, _humanise_error(_ERR_FILE_MISSING))]
 
-    metadata = entry.metadata
-    if not isinstance(metadata, dict) or not metadata:
-        errors.append(_ERR_FRONTMATTER_UNPARSEABLE)
+    parsed = parse_skill_frontmatter_detailed(path)
+    metadata = parsed.metadata
+    fm_issue: SkillIssue | None = None
+    if parsed.error is not None:
         # Continue — we still check the body even if frontmatter is
         # gone, so the user sees every issue at once.
+        fm_issue = _frontmatter_issue(parsed.error)
+    else:
+        name = metadata.get("name")
+        if not isinstance(name, str) or not name:
+            codes.append(_ERR_MISSING_NAME)
+        description = metadata.get("description")
+        if not isinstance(description, str) or not description:
+            codes.append(_ERR_MISSING_DESCRIPTION)
 
-    name = metadata.get("name") if isinstance(metadata, dict) else None
-    if not isinstance(name, str) or not name:
-        errors.append(_ERR_MISSING_NAME)
-    description = metadata.get("description") if isinstance(metadata, dict) else None
-    if not isinstance(description, str) or not description:
-        errors.append(_ERR_MISSING_DESCRIPTION)
+    allowed = metadata.get("allowed-tools")
+    if allowed is None:
+        allowed = metadata.get("allowed_tools")
+    if allowed is not None and not isinstance(allowed, list):
+        codes.append(_ERR_ALLOWED_TOOLS_NOT_LIST)
 
-    if isinstance(metadata, dict):
-        allowed = metadata.get("allowed-tools")
-        if allowed is None:
-            allowed = metadata.get("allowed_tools")
-        if allowed is not None and not isinstance(allowed, list):
-            errors.append(_ERR_ALLOWED_TOOLS_NOT_LIST)
+    dmi = metadata.get("disable_model_invocation")
+    if dmi is not None and not isinstance(dmi, bool):
+        codes.append(_ERR_DISABLE_FLAG_NOT_BOOL)
 
-        dmi = metadata.get("disable_model_invocation")
-        if dmi is not None and not isinstance(dmi, bool):
-            errors.append(_ERR_DISABLE_FLAG_NOT_BOOL)
-
-        license_value = metadata.get("license")
-        if license_value is not None and not isinstance(license_value, str):
-            errors.append(_ERR_LICENSE_NOT_STRING)
-        compat = metadata.get("compatibility")
-        if compat is not None and not isinstance(compat, str):
-            errors.append(_ERR_COMPATIBILITY_NOT_STRING)
+    license_value = metadata.get("license")
+    if license_value is not None and not isinstance(license_value, str):
+        codes.append(_ERR_LICENSE_NOT_STRING)
+    compat = metadata.get("compatibility")
+    if compat is not None and not isinstance(compat, str):
+        codes.append(_ERR_COMPATIBILITY_NOT_STRING)
 
     body = _read_skill_body(path)
     if not body.strip():
-        errors.append(_ERR_BODY_EMPTY)
+        codes.append(_ERR_BODY_EMPTY)
 
-    errors.extend(
+    codes.extend(
         f"{_ERR_MISSING_REF_PREFIX}{ref}"
         for ref in find_missing_skill_refs(
             body, skill_dir=path.parent, workspace_root=workspace_root
         )
     )
-    return errors
+    issues = [SkillIssue(code, _humanise_error(code)) for code in codes]
+    return [fm_issue, *issues] if fm_issue is not None else issues
+
+
+_YAML_QUOTING_HINT = "values containing ': ' must be quoted"
+
+
+def _frontmatter_issue(error: FrontmatterError) -> SkillIssue:
+    """Map a frontmatter parse failure to its code + detailed message."""
+    if error.kind == "missing":
+        return SkillIssue(_ERR_FRONTMATTER_MISSING, error.message)
+    message = error.message
+    if error.kind == "yaml":
+        if error.line is not None and error.column is not None:
+            message = f"SKILL.md line {error.line}, column {error.column}: {message}"
+        if "mapping values are not allowed" in error.message:
+            message = f"{message}; {_YAML_QUOTING_HINT}"
+    return SkillIssue(_ERR_FRONTMATTER_UNPARSEABLE, message)
 
 
 _ERROR_DESCRIPTIONS: dict[str, str] = {
     _ERR_FILE_MISSING: "SKILL.md not found at catalogued path",
-    _ERR_FRONTMATTER_UNPARSEABLE: "frontmatter is empty or unparseable",
+    _ERR_FRONTMATTER_MISSING: "no YAML frontmatter",
+    _ERR_FRONTMATTER_UNPARSEABLE: "frontmatter could not be parsed",
     _ERR_MISSING_NAME: "frontmatter missing required `name` field",
     _ERR_MISSING_DESCRIPTION: "frontmatter missing required `description` field",
     _ERR_ALLOWED_TOOLS_NOT_LIST: "`allowed-tools` must be a list",
@@ -1497,8 +1552,9 @@ def _cmd_validate(
     results: list[dict[str, Any]] = [
         {
             "ref": e.ref,
-            "ok": not (errs := validate_skill_entry(e, workspace_root=root)),
-            "errors": errs,
+            "ok": not (issues := validate_skill_entry_detailed(e, workspace_root=root)),
+            "errors": [i.code for i in issues],
+            "details": [{"code": i.code, "message": i.message} for i in issues],
         }
         for e in entries
     ]
@@ -1516,7 +1572,7 @@ def _cmd_validate(
         if row["ok"]:
             out.write(f"[OK]   {row['ref']}\n")
         else:
-            humanised = ", ".join(_humanise_error(c) for c in row["errors"])
+            humanised = ", ".join(d["message"] for d in row["details"])
             out.write(f"[FAIL] {row['ref']}: {humanised}\n")
 
     return 1 if any(not r["ok"] for r in results) else 0

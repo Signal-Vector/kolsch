@@ -12,6 +12,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
+from urllib.parse import unquote
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -32,7 +33,10 @@ _BUNDLES_DIR = "bundles"
 @dataclass(frozen=True)
 class _RefCandidate:
     text: str
+    """The ref as written (after step 2) — what ``missing-ref:`` reports."""
     kind: Literal["span", "link"]
+    path: str
+    """The filesystem path to check: ``text``, percent-decoded for links."""
 
 
 def _iter_candidates(body: str) -> list[_RefCandidate]:
@@ -68,7 +72,8 @@ def _iter_candidates(body: str) -> list[_RefCandidate]:
                 continue
             if kind == "span" and "/" not in text:
                 continue
-            found.append(_RefCandidate(text=text, kind=kind))
+            path = unquote(text) if kind == "link" else text
+            found.append(_RefCandidate(text=text, kind=kind, path=path))
     return found
 
 
@@ -83,7 +88,9 @@ def find_missing_skill_refs(
        link targets (``[text](target)``, ``#fragment``/``?query``
        dropped). Lines inside fenced code blocks (`` ``` `` / ``~~~``)
        are not scanned; a link inside a code span is not a link.
-    2. **Normalise** — strip one leading ``./``.
+    2. **Normalise** — strip one leading ``./``. Link targets are
+       percent-decoded (``with%20space.md``) for resolution only;
+       steps 3 and 5 use the target as written.
     3. **Skip** anything that isn't fully path-safe
        (``^[\w.\-+@%/]+$``: no scheme ``:``, HTML/placeholders
        ``<>{}[]$``, globs ``*?``, ``…``, ``~``, spaces, ``foo()``),
@@ -98,24 +105,47 @@ def find_missing_skill_refs(
        (example paths, host names) and are skipped.
     5. **Report** — refs whose resolved path doesn't exist,
        deduplicated.
+
+    A token the filesystem can't even probe (``OSError`` such as a
+    segment longer than ``NAME_MAX``, or ``ValueError`` for an
+    embedded NUL) is treated as not a ref, so malformed content never
+    makes validation raise.
     """
     skill_base = skill_dir.resolve()
     bundles_base = (workspace_root / _BUNDLES_DIR).resolve()
     missing: list[str] = []
     seen: set[str] = set()
     for cand in _iter_candidates(body):
-        first = cand.text.split("/", 1)[0]
-        if first == _BUNDLES_DIR:
-            base, resolved = bundles_base, (workspace_root / cand.text).resolve()
-        elif (
-            cand.kind == "link" or first in _ANCHOR_DIRS or (skill_dir / first).exists()
-        ):
-            base, resolved = skill_base, (skill_dir / cand.text).resolve()
-        else:
+        try:
+            is_missing = _is_missing(
+                cand,
+                skill_dir=skill_dir,
+                skill_base=skill_base,
+                workspace_root=workspace_root,
+                bundles_base=bundles_base,
+            )
+        except (OSError, ValueError):
             continue
-        if not resolved.is_relative_to(base):
-            continue
-        if not resolved.exists() and cand.text not in seen:
+        if is_missing and cand.text not in seen:
             seen.add(cand.text)
             missing.append(cand.text)
     return missing
+
+
+def _is_missing(
+    cand: _RefCandidate,
+    *,
+    skill_dir: Path,
+    skill_base: Path,
+    workspace_root: Path,
+    bundles_base: Path,
+) -> bool:
+    """Rule step 4 for one candidate: ``True`` iff it's a ref and absent."""
+    first = cand.path.split("/", 1)[0]
+    if first == _BUNDLES_DIR:
+        base, resolved = bundles_base, (workspace_root / cand.path).resolve()
+    elif cand.kind == "link" or first in _ANCHOR_DIRS or (skill_dir / first).exists():
+        base, resolved = skill_base, (skill_dir / cand.path).resolve()
+    else:
+        return False
+    return resolved.is_relative_to(base) and not resolved.exists()

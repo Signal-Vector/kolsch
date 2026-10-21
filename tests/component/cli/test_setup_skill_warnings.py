@@ -243,3 +243,41 @@ async def test_setup_rerun_resolves_bundles_refs_from_workspace_root(
         == 0
     )
     assert f"kolsch/skills/ws-ref: missing-ref:{ref}" in broken_io.out.getvalue()
+
+
+async def test_setup_rerun_shows_frontmatter_detail_in_parentheses(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """bug-149 — frontmatter codes carry their detail on the setup
+    advisory line; other codes stay compact."""
+    monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
+    monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
+    await run_setup(
+        argparse.Namespace(non_interactive=True, root=tmp_path),
+        _make_test_io(tmp_path),
+    )
+    skills = tmp_path / "bundles" / "kolsch" / "skills"
+    (skills / "bad-yaml").mkdir(parents=True)
+    (skills / "bad-yaml" / "SKILL.md").write_text(
+        '---\nname: bad-yaml\ndescription: Use it. Triggers on: "x".\n---\n\n'
+        "Run `scripts/gone.py`.\n",
+        encoding="utf-8",
+    )
+    (skills / "no-fm").mkdir()
+    (skills / "no-fm" / "SKILL.md").write_text("# Skill\n\nBody.\n", encoding="utf-8")
+
+    io_ = _make_test_io(tmp_path)
+    assert (
+        await run_setup(argparse.Namespace(non_interactive=True, root=tmp_path), io_)
+        == 0
+    )
+    out = io_.out.getvalue()
+    assert (
+        "kolsch/skills/bad-yaml: frontmatter-unparseable (SKILL.md line 3, column "
+    ) in out
+    assert "must be quoted), missing-ref:scripts/gone.py\n" in out
+    assert (
+        "kolsch/skills/no-fm: frontmatter-missing (no YAML frontmatter "
+        "(SKILL.md must start with a `---` line))\n"
+    ) in out
