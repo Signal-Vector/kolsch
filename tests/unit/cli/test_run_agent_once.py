@@ -30,6 +30,7 @@ from uuid import uuid4
 from cli._setup import _TestRunResult, make_default_setup_io
 from cli.main import _cmd_run, _run_agent_once
 from engine import AgentExecutionError
+from errors import AssetsNotFound, PlatformError
 from schemas import (
     Actor,
     AgentId,
@@ -133,20 +134,30 @@ class _Engine:
 
 
 class _RT:
-    def __init__(self, engine: _Engine) -> None:
+    def __init__(
+        self, engine: _Engine, *, resolve_error: PlatformError | None = None
+    ) -> None:
         self.llm_providers_config: dict[str, object] = {}
         self.engine = engine
         self.store = _Store()
+        self._resolve_error = resolve_error
 
     async def build_resolved_config(
         self, ref: str, call_overrides: object = None
     ) -> ResolvedAgentConfig:
+        if self._resolve_error is not None:
+            raise self._resolve_error
         return _config()
 
 
-def _install(monkeypatch: pytest.MonkeyPatch, engine: _Engine) -> None:
+def _install(
+    monkeypatch: pytest.MonkeyPatch,
+    engine: _Engine,
+    *,
+    resolve_error: PlatformError | None = None,
+) -> None:
     async def _fake_bootstrap(root: object = None) -> object:
-        return _RT(engine)
+        return _RT(engine, resolve_error=resolve_error)
 
     monkeypatch.setattr(_MAIN, "bootstrap_runtime", _fake_bootstrap)
 
@@ -251,6 +262,37 @@ def test_core_stream_success_rc_0(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert outcome.rc == 0
     assert outcome.failed_event is None
+
+
+def test_core_config_resolve_failure_has_no_session(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # The setup banner's `kolsch sessions list` fallback keys on this.
+    _install(monkeypatch, _Engine(), resolve_error=AssetsNotFound("no such agent"))
+
+    outcome = asyncio.run(_run_agent_once(_args()))
+
+    assert outcome.rc == 2
+    assert outcome.session_id is None
+    assert outcome.failed_event is None
+    assert outcome.exc is None
+    assert capsys.readouterr().err != ""  # diagnostic still printed by the core
+
+
+def test_core_skill_validation_failure_keeps_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # `--skill` validation runs after the session exists.
+    _install(monkeypatch, _Engine())
+    args = _args()
+    args.skill = ["nope/skills/missing"]
+
+    outcome = asyncio.run(_run_agent_once(args))
+
+    assert outcome.rc == 2
+    assert outcome.session_id == _SESSION_ID
+    assert outcome.failed_event is None
+    assert outcome.exc is None
 
 
 # ---------------------------------------------------------------------------

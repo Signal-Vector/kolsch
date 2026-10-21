@@ -267,6 +267,30 @@ completion (e.g., skeleton created but no provider connected — the
 mock starter agent still works). These are distinct from runtime
 exit codes.
 
+## If the setup test run fails
+
+Setup's last step runs the starter agent once. If that exchange
+fails, setup exits `4` and prints a "completed partially" banner
+instead of "Kolsch is ready". The banner shows:
+
+- whether the workspace and the starter agent were created on this
+  run or were already there;
+- the failed run's session id (`Session:`);
+- the error code and message recorded in that session's event log,
+  plus a one-line excerpt of the underlying error (`Detail:`) when
+  there is one.
+
+The first "Next steps" entry is the exact command to open that
+session's full event log:
+
+```bash
+kolsch sessions events <the printed session id>
+```
+
+Fix the cause (for example, re-run `kolsch connect <provider>` for a
+bad key), then re-run `kolsch setup` (it is idempotent and skips what
+is already done) or run the agent directly with `kolsch run`.
+
 ## Where to read next
 
 - Tutorial: [first-agent.md](../tutorials/first-agent.md) — the

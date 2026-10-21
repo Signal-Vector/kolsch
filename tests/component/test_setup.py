@@ -925,7 +925,8 @@ async def test_make_default_setup_io_wires_production_defaults(
     tmp_path: Path,
 ) -> None:
     """The production IO factory wires StdinSetupPrompter + default
-    connect-IO factory + the real `_cmd_run` handler. Constructing it
+    connect-IO factory + the real run handler (over `_run_agent_once`).
+    Constructing it
     is enough to exercise the wiring path."""
     from cli._setup import StdinSetupPrompter, make_default_setup_io
 
@@ -1350,6 +1351,186 @@ async def test_tc_ux_13_user_declining_test_run_still_succeeds(
 
 
 # ===========================================================================
+# bug-147 — the failure banner reports what setup actually did
+# ===========================================================================
+
+_B147_SESSION = "ses_0cd8df9d-2c6e-4c21-bbff-dbb9d559de79"
+_B147_ENVELOPE: dict[str, object] = {
+    "type": "platform.internal_error",
+    "message": "Internal platform error: openai.BadRequestError",
+    "where": "engine.execute.boundary",
+    "detail": {
+        "original_type": "openai.BadRequestError",
+        "args": [
+            "Error code: 400 - {'type': 'error', 'error': {'type': "
+            "'MissingSessionID', 'message': 'Request is missing "
+            "x-opencode-session and cannot be routed efficiently.'}}"
+        ],
+    },
+    "cause": None,
+}
+
+
+def _failing_handler(
+    result: _TestRunResult,
+) -> Callable[[argparse.Namespace], Awaitable[_TestRunResult]]:
+    async def _handler(args: argparse.Namespace) -> _TestRunResult:
+        _ = args
+        return result
+
+    return _handler
+
+
+async def _run_failing_setup(tmp_path: Path, result: _TestRunResult) -> tuple[int, str]:
+    captured = io.StringIO()
+    io_ = _make_test_io(
+        root=tmp_path, out=captured, run_handler=_failing_handler(result)
+    )
+    rc = await run_setup(argparse.Namespace(non_interactive=True, root=tmp_path), io_)
+    return rc, captured.getvalue()
+
+
+def _banner(out: str) -> str:
+    marker = "Kolsch setup completed partially"
+    assert marker in out, out
+    return out[out.index(marker) :]
+
+
+def _clear_provider_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
+    monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
+
+
+async def test_b147_rerun_banner_reports_existing_state_and_durable_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test 3: a re-run against an existing workspace + helper whose test
+    run fails says "already initialized" / "already present", names the
+    session, and renders the durable envelope's code, message and
+    original text."""
+    _clear_provider_env(monkeypatch)
+    first = await run_setup(
+        argparse.Namespace(non_interactive=True, root=tmp_path),
+        _make_test_io(root=tmp_path),
+    )
+    assert first == 0
+
+    rc, out = await _run_failing_setup(
+        tmp_path,
+        _TestRunResult(rc=2, session_id=_B147_SESSION, error=dict(_B147_ENVELOPE)),
+    )
+    banner = _banner(out)
+
+    assert rc == 4
+    assert "Kolsch is ready" not in out
+    assert f"Workspace: {tmp_path}  (already initialized)" in banner
+    assert "Agent:     kolsch/agents/helper  (already present)" in banner
+    assert "initialized successfully" not in banner
+    assert "(created)" not in banner
+    assert f"Session:   {_B147_SESSION}" in banner
+    assert "Cause:     platform.internal_error — " in banner
+    assert "Error:     Internal platform error: openai.BadRequestError" in banner
+    detail_lines = [ln for ln in banner.splitlines() if ln.startswith("Detail:")]
+    assert len(detail_lines) == 1
+    assert "MissingSessionID" in detail_lines[0]
+    # The first next step is the exact events command for that session.
+    next_steps = banner.split("Next steps:\n", 1)[1].splitlines()
+    assert next_steps[0].startswith(f"  kolsch sessions events {_B147_SESSION}")
+    assert "kolsch sessions list" not in banner
+    assert "<id>" not in banner
+    assert "rc=2" not in banner
+
+
+async def test_b147_fresh_workspace_without_code_says_created(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test 4a: a fresh workspace reports both as created; the no-code
+    Cause line says "test exchange failed" once and no `<id>`."""
+    _clear_provider_env(monkeypatch)
+    rc, out = await _run_failing_setup(
+        tmp_path, _TestRunResult(rc=2, session_id=_B147_SESSION, error=None)
+    )
+    banner = _banner(out)
+
+    assert rc == 4
+    assert f"Workspace: {tmp_path}  (created)" in banner
+    assert "Agent:     kolsch/agents/helper  (created)" in banner
+    assert out.count("test exchange failed") <= 1
+    assert "<id>" not in out
+    assert "Error:" not in banner
+    assert "Detail:" not in banner
+    assert f"kolsch sessions events {_B147_SESSION}" in banner
+
+
+async def test_b147_no_session_falls_back_to_sessions_list(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test 4b: without a session id there is no Session line and the
+    next step falls back to `kolsch sessions list`."""
+    _clear_provider_env(monkeypatch)
+    rc, out = await _run_failing_setup(tmp_path, _TestRunResult(rc=2))
+    banner = _banner(out)
+
+    assert rc == 4
+    assert "Session:" not in banner
+    assert "kolsch sessions events" not in banner
+    next_steps = banner.split("Next steps:\n", 1)[1].splitlines()
+    assert next_steps[0].startswith("  kolsch sessions list")
+    assert "<id>" not in out
+
+
+async def test_b147_detail_is_one_truncated_line_and_never_the_traceback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test 4c + 4d: a long multi-line `detail.args[0]` renders as one
+    `Detail:` line of at most 300 chars ending in `…`; `detail.traceback`
+    never appears."""
+    _clear_provider_env(monkeypatch)
+    long_text = "\n".join(f"line {i} " + "x" * 40 for i in range(25))
+    assert len(long_text) > 1000
+    envelope = {
+        "type": "platform.internal_error",
+        "message": "Internal platform error: ValueError",
+        "where": "engine.execute.boundary",
+        "detail": {
+            "original_type": "ValueError",
+            "args": [long_text],
+            "traceback": "Traceback (most recent call last):\n  SECRET_FRAME_MARKER",
+        },
+        "cause": None,
+    }
+    rc, out = await _run_failing_setup(
+        tmp_path, _TestRunResult(rc=2, session_id=_B147_SESSION, error=envelope)
+    )
+    banner = _banner(out)
+
+    assert rc == 4
+    detail_lines = [ln for ln in banner.splitlines() if ln.startswith("Detail:")]
+    assert len(detail_lines) == 1
+    value = detail_lines[0].removeprefix("Detail:").strip()
+    assert len(value) <= 300
+    assert value.endswith("…")
+    assert value.startswith("line 0 ")
+    assert "line 1 " in value  # newline collapsed to a space, not cut
+    assert "Traceback" not in out
+    assert "SECRET_FRAME_MARKER" not in out
+
+
+def test_b147_one_line_helper() -> None:
+    from cli._setup import _one_line
+
+    assert _one_line("a\n  b\tc") == "a b c"
+    assert _one_line("x" * 300) == "x" * 300
+    cut = _one_line("x" * 301)
+    assert len(cut) == 300
+    assert cut.endswith("…")
+
+
+# ===========================================================================
 # _classify_failure unit table (acceptance criterion 4 — five codes)
 # ===========================================================================
 
@@ -1385,6 +1566,13 @@ def test_classify_failure_table_covers_documented_codes() -> None:
     # None → default hint.
     none_hint = _classify_failure(None)
     assert "test exchange failed" in none_hint.lower()
+
+    # bug-147: no hint carries a placeholder session id — the banner
+    # prints the real `kolsch sessions events <session id>` command.
+    all_codes: list[str | None] = [c for c, _ in cases]
+    all_codes += ["model.context_overflow", "model.bad_request", None, "x.unknown"]
+    for hint_code in all_codes:
+        assert "<id>" not in _classify_failure(hint_code), hint_code
 
 
 # ===========================================================================

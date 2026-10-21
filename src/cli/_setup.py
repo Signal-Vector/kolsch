@@ -96,6 +96,21 @@ class _StepEResult:
 
 
 @dataclass(frozen=True)
+class _StepSummary:
+    """What steps B and D actually did — feeds the failure banner.
+
+    `workspace_created` is Step B's `_PROCEEDED` (skeleton written this
+    run) vs `_SKIPPED` (already initialized); `agent_created` is Step
+    D's `_PROCEEDED` (helper materialized this run) vs `_SKIPPED`
+    (already present — a declined helper never reaches the failure
+    banner because Step E then skips).
+    """
+
+    workspace_created: bool
+    agent_created: bool
+
+
+@dataclass(frozen=True)
 class _TestRunResult:
     """What `_SetupIO.run_handler` returns for Step E's test exchange.
 
@@ -263,18 +278,22 @@ async def run_setup(args: argparse.Namespace, io: _SetupIO) -> int:
 
     partial = False
     step_e_result: _StepEResult | None = None
+    # Each step's result token, keyed by step letter — the failure
+    # banner reports what B and D actually did on this run.
+    step_results: dict[str, str] = {}
 
-    for step_name, step_fn in (
-        ("A workspace location", _step_a_workspace_location),
-        ("B workspace skeleton", _step_b_skeleton),
-        ("C LLM provider", _step_c_provider),
-        ("D starter agent", _step_d_starter_agent),
+    for step_key, step_name, step_fn in (
+        ("A", "A workspace location", _step_a_workspace_location),
+        ("B", "B workspace skeleton", _step_b_skeleton),
+        ("C", "C LLM provider", _step_c_provider),
+        ("D", "D starter agent", _step_d_starter_agent),
     ):
         try:
             result = await step_fn(io, non_interactive=non_interactive)
         except KeyboardInterrupt:
             io.err.write(f"\nsetup aborted at step {step_name}\n")
             return _EXIT_PARTIAL
+        step_results[step_key] = result
         if result == "partial":
             partial = True
 
@@ -290,7 +309,11 @@ async def run_setup(args: argparse.Namespace, io: _SetupIO) -> int:
     # partial-completion banner and returns 4, regardless of whether
     # earlier steps reported partial.
     if step_e_result.outcome is _StepEOutcome.FAILED:
-        _step_f_banner_failure(io, step_e_result)
+        summary = _StepSummary(
+            workspace_created=step_results.get("B") == _PROCEEDED,
+            agent_created=step_results.get("D") == _PROCEEDED,
+        )
+        _step_f_banner_failure(io, step_e_result, summary)
         return _EXIT_PARTIAL
 
     # Success path — passed OR actively skipped both render a "ready"
@@ -330,9 +353,19 @@ def _classify_failure(failure_code: str | None) -> str:
       connected; run `kolsch connect <provider>`."
     - `model.timeout` → "the model took too long to respond. Try
       again or pick a faster model."
-    - Default (any other code) → "the test exchange failed; check
-      `kolsch sessions events <id>` for details, then re-run setup
-      or `kolsch run` directly."
+    - `model.rate_limited` → "wait a few seconds and re-run, or
+      pick a less-trafficked model."
+    - `model.context_overflow` → "pick a model with a larger
+      context, or shorten the input."
+    - `model.bad_request` → "the model rejected the request as
+      malformed"; points at the failed session's events.
+    - Default (any other code) → "the test exchange failed; inspect
+      the failed session's events (see Next steps below), then
+      re-run setup or `kolsch run` directly."
+
+    No hint names a placeholder session id — the failure banner
+    prints the real `kolsch sessions events <id>` command under
+    "Next steps".
     """
     table = {
         "model.server_error": (
@@ -360,13 +393,14 @@ def _classify_failure(failure_code: str | None) -> str:
         ),
         "model.bad_request": (
             "the model rejected the request as malformed. "
-            "Check `kolsch sessions events <id>` for the response detail."
+            "Inspect the failed session's events (see Next steps below) "
+            "for the response detail."
         ),
     }
     return table.get(
         failure_code or "",
-        "the test exchange failed; check `kolsch sessions events <id>` "
-        "for details, then re-run setup or `kolsch run` directly.",
+        "the test exchange failed; inspect the failed session's events "
+        "(see Next steps below), then re-run setup or `kolsch run` directly.",
     )
 
 
@@ -870,28 +904,82 @@ def _step_f_banner_success(io: _SetupIO, *, test_skipped: bool = False) -> None:
     io.out.write("Docs:      docs/tutorials/first-agent.md\n")
 
 
-def _step_f_banner_failure(io: _SetupIO, result: _StepEResult) -> None:
+def _step_f_banner_failure(
+    io: _SetupIO, result: _StepEResult, summary: _StepSummary
+) -> None:
     """The partial-completion banner — printed when Step E failed.
 
-    Names the failed step, the workspace path, and the
-    classifier-driven hint. Never prints "Kolsch is ready" on this
-    path; the user must see that something needs attention.
+    Rendered only from what setup actually observed: the B/D step
+    results (`summary`) and the test run's session id + durable
+    `thread.exchange_failed` error envelope (`result`). Never prints
+    "Kolsch is ready" on this path; the user must see that something
+    needs attention. Never prints `detail.traceback`.
     """
     agent_ref = f"{_STARTER_BUNDLE}/agents/{_STARTER_AGENT}"
     hint = _classify_failure(result.failure_code)
+    error = result.error or {}
+    workspace_status = "created" if summary.workspace_created else "already initialized"
+    agent_status = "created" if summary.agent_created else "already present"
     io.out.write("\n")
     io.out.write("Kolsch setup completed partially — test run failed.\n\n")
-    io.out.write(f"Workspace: {io.root}  (initialized successfully)\n")
-    io.out.write(f"Agent:     {agent_ref}  (created)\n")
+    io.out.write(f"Workspace: {io.root}  ({workspace_status})\n")
+    io.out.write(f"Agent:     {agent_ref}  ({agent_status})\n")
+    if result.session_id is not None:
+        io.out.write(f"Session:   {result.session_id}\n")
     if result.failure_code:
         io.out.write(f"Cause:     {result.failure_code} — {hint}\n")
     else:
-        io.out.write(f"Cause:     test exchange failed — {hint}\n")
+        io.out.write(f"Cause:     {hint}\n")
+    message = error.get("message")
+    if isinstance(message, str) and message:
+        io.out.write(f"Error:     {_one_line(message)}\n")
+    original = _original_error_text(error)
+    if original is not None:
+        io.out.write(f"Detail:    {_one_line(original)}\n")
     io.out.write("\nNext steps:\n")
-    io.out.write("  kolsch sessions list                 # find the failed session\n")
+    if result.session_id is not None:
+        io.out.write(
+            f"  kolsch sessions events {result.session_id}"
+            "   # full event log of the failed run\n"
+        )
+    else:
+        io.out.write(
+            "  kolsch sessions list                 # find the failed session\n"
+        )
     io.out.write(f'  kolsch run {agent_ref} --input content="<retry>"\n')
     io.out.write("\n")
     io.out.write("Docs: docs/tutorials/first-agent.md\n")
+
+
+def _original_error_text(error: dict[str, Any]) -> str | None:
+    """The wrapped exception's own text from a durable error envelope.
+
+    `PlatformInternalError` / `WrappedError` carry it as
+    `detail["args"][0]`; returns it only when that is a non-empty
+    string. Deliberately never reads `detail["traceback"]`.
+    """
+    detail = error.get("detail")
+    if not isinstance(detail, dict):
+        return None
+    args = detail.get("args")
+    if not isinstance(args, list) or not args:
+        return None
+    first = args[0]
+    if not isinstance(first, str) or not first.strip():
+        return None
+    return first
+
+
+def _one_line(text: str, limit: int = 300) -> str:
+    """Flatten `text` to one line of at most `limit` characters.
+
+    Whitespace runs (newlines included) collapse to single spaces; a
+    longer result is cut and ends with `…` (counted in `limit`).
+    """
+    flat = " ".join(text.split())
+    if len(flat) <= limit:
+        return flat
+    return flat[: limit - 1].rstrip() + "…"
 
 
 # ---------------------------------------------------------------------------
@@ -1702,7 +1790,9 @@ def make_default_setup_io(*, root: Path) -> _SetupIO:
                 error = raw
         return _TestRunResult(
             rc=outcome.rc,
-            session_id=str(outcome.session_id) if outcome.session_id else None,
+            session_id=(
+                str(outcome.session_id) if outcome.session_id is not None else None
+            ),
             error=error,
         )
 
