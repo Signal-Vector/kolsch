@@ -37,7 +37,9 @@ except ImportError:  # pragma: no cover — runtime path without crewai
     CrewAIFramework = None  # type: ignore[assignment, misc]
 from engine.framework import (
     Framework,
+    LLMCallable,
     LLMDriver,
+    LLMFactory,
     LLMHandle,
     LLMRequest,
     LLMResponse,
@@ -60,7 +62,9 @@ __all__ = [
     "EventObserver",
     "ExecutionContext",
     "Framework",
+    "LLMCallable",
     "LLMDriver",
+    "LLMFactory",
     "LLMHandle",
     "LLMRequest",
     "LLMResponse",

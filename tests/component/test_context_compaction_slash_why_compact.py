@@ -63,7 +63,7 @@ async def test_why_compact_dumps_summary_json(tmp_path: Path) -> None:
         '"event_count": 1}}'
     )
 
-    async def factory(_spec: Any) -> Any:
+    async def factory(_spec: Any, *, context: Any = None) -> Any:
         return recording
 
     provider = ReferenceSummaryCompactionProvider(
@@ -124,7 +124,7 @@ async def test_why_compact_shows_revoked_by_from_separate_revocation_event(
         '"last_event_id": "f", "event_count": 1}}'
     )
 
-    async def factory(_spec: Any) -> Any:
+    async def factory(_spec: Any, *, context: Any = None) -> Any:
         return recording
 
     provider = ReferenceSummaryCompactionProvider(
@@ -181,7 +181,7 @@ async def test_why_compact_prefers_payload_revoked_by_over_cross_reference(
         '"last_event_id": "f", "event_count": 1}}'
     )
 
-    async def factory(_spec: Any) -> Any:
+    async def factory(_spec: Any, *, context: Any = None) -> Any:
         return recording
 
     provider = ReferenceSummaryCompactionProvider(
@@ -259,7 +259,7 @@ async def test_why_compact_short_prefix_lookup(tmp_path: Path) -> None:
         '"last_event_id": "f", "event_count": 1}}'
     )
 
-    async def factory(_spec: Any) -> Any:
+    async def factory(_spec: Any, *, context: Any = None) -> Any:
         return recording
 
     provider = ReferenceSummaryCompactionProvider(

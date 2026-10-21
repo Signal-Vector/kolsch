@@ -51,7 +51,7 @@ async def test_uncompact_revokes_most_recent_active_compaction(
         '"last_event_id": "f", "event_count": 1}}'
     )
 
-    async def factory(_spec: Any) -> Any:
+    async def factory(_spec: Any, *, context: Any = None) -> Any:
         return recording
 
     provider = ReferenceSummaryCompactionProvider(

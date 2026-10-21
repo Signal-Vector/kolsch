@@ -119,6 +119,7 @@ async def test_compact_empty_events_returns_noop() -> None:
         config={},
     )
     outcome = await provider.compact(
+        llm_context=None,
         events=[],
         keep_head=0,
         keep_tail=1000,
@@ -153,7 +154,7 @@ async def test_compact_end_to_end_invokes_summariser() -> None:
     )
     llm = _MockLLM(body)
 
-    async def factory(_spec: Any) -> Any:
+    async def factory(_spec: Any, *, context: Any = None) -> Any:
         return llm
 
     provider = ReferenceSummaryCompactionProvider(
@@ -161,6 +162,7 @@ async def test_compact_end_to_end_invokes_summariser() -> None:
         config={},
     )
     outcome = await provider.compact(
+        llm_context=None,
         events=events,
         keep_head=0,
         keep_tail=5,
@@ -197,7 +199,7 @@ async def test_compact_caps_refs_at_max_refs() -> None:
     )
     llm = _MockLLM(body)
 
-    async def factory(_spec: Any) -> Any:
+    async def factory(_spec: Any, *, context: Any = None) -> Any:
         return llm
 
     provider = ReferenceSummaryCompactionProvider(
@@ -205,6 +207,7 @@ async def test_compact_caps_refs_at_max_refs() -> None:
         config={},
     )
     outcome = await provider.compact(
+        llm_context=None,
         events=events,
         keep_head=0,
         keep_tail=1,

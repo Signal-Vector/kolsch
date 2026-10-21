@@ -78,8 +78,8 @@ questions. Each maps to a Protocol method:
   fields (context_length, supports_tools, etc.) populated where
   the provider's API exposes them, `None` otherwise.
 - **How do we construct a `crewai.LLM` for this provider's
-  models?** → `build_llm(model_id, provider_config, api_key)`
-  returns a configured `crewai.LLM`. For OpenAI-compatible
+  models?** → `build_llm(model_id, provider_config, api_key,
+  parameters, *, context)` returns a configured `crewai.LLM`. For OpenAI-compatible
   providers this is essentially one call:
   `crewai.LLM(model=f"<litellm-prefix>/{model_id}",
   api_key=api_key, base_url=provider_config.base_url, ...)`. For
@@ -102,12 +102,14 @@ with the open question visible.
 ```python
 # src/llm/providers/<name>.py
 
-from typing import ClassVar
+from collections.abc import Mapping
+from typing import Any, ClassVar
 import crewai
 
 from src.llm.protocol import (
     AuthPromptSpec, PromptField,
     Credentials, ValidationResult,
+    LLMCallContext,
     ModelEntry,
     ProviderConfig,
 )
@@ -154,7 +156,13 @@ class <Name>Connector:
         model_id: str,
         provider_config: ProviderConfig,
         api_key: str | None,
+        parameters: Mapping[str, Any] | None = None,
+        *,
+        context: LLMCallContext | None = None,
     ) -> crewai.LLM:
+        # `context` (bug-144) identifies the owning session; forward
+        # `context.conversation_key` as provider session metadata if
+        # the provider wants it, otherwise ignore it.
         return crewai.LLM(
             model=f"<litellm-prefix>/{model_id}",
             api_key=api_key,
@@ -244,13 +252,51 @@ module docstring explains the choice inline.
 
 ### 2.6. OpenAI-compatible connectors: use `build_openai_compatible_llm`
 
-*(bug-138.)* A connector that lands on `OpenAICompatibleCompletion`
-(the `openrouter/` and `hosted_vllm/` routes above) should build its
-client with `build_openai_compatible_llm(provider=..., model_id=...,
-**kwargs)` from `_openai_compat.py`, not `crewai.LLM(...)` directly.
-It constructs the same CrewAI class with the same kwargs, but as
-`KolschOpenAICompatibleCompletion`, which applies kolsch's
-**conditional strict tool-schema policy**:
+*(bug-138, bug-144.)* A connector that lands on
+`OpenAICompatibleCompletion` (the `openrouter/` and `hosted_vllm/`
+routes above) should build its client with
+`build_openai_compatible_llm(...)` from `_openai_compat.py`, not
+`crewai.LLM(...)` directly:
+
+```python
+class <Name>Connector:
+    type_name: ClassVar[str] = "<name>"
+    # Header NAMES that carry the session's conversation key; `()` for
+    # none. Users override it per provider with
+    # `llm_providers.<name>.request_policy.session_headers`.
+    DEFAULT_REQUEST_POLICY: ClassVar[OpenAICompatRequestPolicy] = (
+        OpenAICompatRequestPolicy(session_headers=("x-<name>-session",))
+    )
+
+    async def build_llm(self, model_id, provider_config, api_key,
+                        parameters=None, *, context=None) -> crewai.LLM:
+        return build_openai_compatible_llm(
+            provider="hosted_vllm",          # or "openrouter"
+            model_id=model_id,
+            provider_config=provider_config,
+            api_key=api_key,
+            default_timeout=_DEFAULT_TIMEOUT_SECONDS,
+            parameters=parameters,
+            context=context,
+            default_policy=self.DEFAULT_REQUEST_POLICY,
+        )
+```
+
+The builder:
+
+- resolves the request policy (connector default, overridden by
+  `request_policy` in `platform.yaml`) and sends each session header
+  with `context.conversation_key` as its value. If the policy has
+  session headers and `context` is `None` it raises
+  `llm.client_init_failed` — never mint a substitute id;
+- sends `User-Agent: kolsch/<version>` (`llm.user_agent.kolsch_user_agent`);
+- drops agent-YAML `parameters` that collide with connector-owned
+  kwargs (`INFRA_KEYS`: routing keys plus `default_headers`,
+  `extra_headers`, `headers`, `client_params`, `organization`,
+  `project`, `default_query`, `api_base`), so YAML can't hijack
+  routing, the session headers, or the User-Agent;
+- builds the client as `KolschOpenAICompatibleCompletion`, which
+  applies kolsch's **conditional strict tool-schema policy**:
 
 - CrewAI's stock conversion forces `"strict": true` and closes every
   object schema to `{properties: {}, additionalProperties: false}`.
@@ -268,7 +314,20 @@ The override is per subclass instance (no global CrewAI patch), so a
 `tests/unit/test_tool_schema_strict_policy.py` guards the private
 CrewAI seam (`OpenAICompletion._convert_tools_for_interference`) —
 re-check `_openai_compat.py` whenever that guard fails after a crewai
-bump.
+bump. `tests/component/test_llm_session_headers.py` proves the session
+headers and User-Agent reach the wire.
+
+### 2.7. Migration note — `build_llm(..., *, context)` (bug-144)
+
+`ProviderConnector.build_llm` gained a keyword-only
+`context: LLMCallContext | None = None`. This is a declared protocol
+change: connectors are registered in-tree only, so every connector
+(and test double) was updated in the same change and there is no
+runtime signature probing. A connector that has no use for
+per-conversation metadata accepts and ignores it (see
+`claude_code.py`); one that needs the conversation key reads
+`context.conversation_key` and raises a typed `PlatformError` when
+`context` is `None`.
 
 ---
 

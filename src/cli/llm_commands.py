@@ -35,6 +35,7 @@ from llm import (
     ProviderConfig,
     connected_metadata_sources,
     known_types,
+    provider_config_from_yaml,
 )
 from llm import (
     get as registry_get,
@@ -803,31 +804,10 @@ def _provider_configs_from_payload(
     for name, raw in (payload.get("llm_providers") or {}).items():
         if not isinstance(raw, dict):
             continue
-        # `type:` defaults to the provider dictionary key (e.g. an
-        # entry keyed `opencode` with no explicit `type:` resolves to
-        # the `opencode` connector). Explicit `type:` still wins —
-        # only set it when the connector type differs from the key
-        # you chose. See bug-055.
-        out[name] = ProviderConfig(
-            name=name,
-            type=raw.get("type") or name,
-            api_key_secret=raw.get("api_key_secret"),
-            base_url=raw.get("base_url"),
-            timeout_seconds=raw.get("timeout_seconds"),
-            extras={
-                k: v
-                for k, v in raw.items()
-                if k
-                not in {
-                    "type",
-                    "api_key_secret",
-                    "base_url",
-                    "timeout_seconds",
-                    "models",
-                }
-            },
-            models=list(raw.get("models") or []),
-        )
+        # bug-144: the ONE shared factory (also used by
+        # `platform_runtime.runtime`) — applies the bug-055 `type:` default
+        # and validates `request_policy`.
+        out[name] = provider_config_from_yaml(name, raw)
     return out
 
 

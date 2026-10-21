@@ -152,7 +152,7 @@ async def test_tc_bug_echo_01_real_provider_does_not_echo(tmp_path: Path) -> Non
         _ = request
         return LLMResponse(content=_DISTINCTIVE)
 
-    async def stub_factory(spec: Any) -> Any:
+    async def stub_factory(spec: Any, *, context: Any = None) -> Any:
         _ = spec
         return stub_llm_callable
 

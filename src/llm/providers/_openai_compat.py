@@ -45,12 +45,25 @@ which go out verbatim.
 Known unhandled shapes (pydantic emits neither): a dict-valued
 `const` / `enum` containing `"type": "object"`, and a `$ref` with
 sibling keys (the siblings are not inspected).
+
+**Request policy + identity (bug-144).** Each OpenAI-compatible
+connector declares a
+[`OpenAICompatRequestPolicy`][llm.providers._openai_compat.OpenAICompatRequestPolicy]
+as its `DEFAULT_REQUEST_POLICY` class attribute;
+`llm_providers.<name>.request_policy` in `platform.yaml` overrides it
+([`resolve_request_policy`][llm.providers._openai_compat.resolve_request_policy]).
+The builder sends every policy `session_headers` name with the
+[`LLMCallContext`][llm.protocol.LLMCallContext]'s `conversation_key`
+as its value, plus `User-Agent: kolsch/<version>`, as client
+`default_headers`. Agent-YAML `parameters` can't override any of them
+([`INFRA_KEYS`][llm.providers._openai_compat.INFRA_KEYS]).
 """
 
 from __future__ import annotations
 
 import copy
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 from crewai.llms.providers.openai_compatible.completion import (
@@ -61,9 +74,14 @@ from crewai.utilities.pydantic_schema_utils import (
     resolve_refs,
 )
 
+from errors import LlmClientInitFailed
+from llm.user_agent import kolsch_user_agent
+
 if TYPE_CHECKING:
     import crewai
     from crewai.tools.base_tool import BaseTool
+
+    from llm.protocol import LLMCallContext, ProviderConfig
 
 # JSON Schema keywords OpenAI's strict mode rejects outright (e.g.
 # "'minProperties' is not permitted"). A schema using any of them is
@@ -280,24 +298,165 @@ class KolschOpenAICompatibleCompletion(OpenAICompatibleCompletion):
         return result
 
 
-def build_openai_compatible_llm(
+# Keys the connector sets itself when building the client. Agent-YAML
+# `ModelSpec.parameters` values that collide with these are dropped —
+# the connector always wins on routing so a mistyped YAML can't hijack
+# the model, key, base_url, or timeout via a `parameters:` entry.
+# `provider` / `is_litellm` steer CrewAI's client construction
+# (bug-138); a stray agent-YAML value would otherwise collide with the
+# connector's own `provider=` kwarg. The header-bearing kwargs
+# (`default_headers`, `extra_headers`, `headers`, and `client_params`,
+# which CrewAI merges over the client's `default_headers`) are
+# connector-owned too, so agent YAML can't replace the request-policy
+# session headers or the kolsch User-Agent (bug-144). `organization` /
+# `project` (sent as `OpenAI-Organization` / `OpenAI-Project` headers),
+# `default_query` (query params) and `api_base` (a `base_url` alias)
+# are blocked for the same reason: they shape the request's routing
+# and identity, which only the connector owns.
+INFRA_KEYS: Final = frozenset(
+    {
+        "model",
+        "api_key",
+        "base_url",
+        "api_base",
+        "timeout",
+        "provider",
+        "is_litellm",
+        "default_headers",
+        "extra_headers",
+        "headers",
+        "client_params",
+        "organization",
+        "project",
+        "default_query",
+    }
+)
+
+
+def connector_extras(parameters: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Return agent-YAML `parameters` minus the connector-owned keys.
+
+    See [`INFRA_KEYS`][llm.providers._openai_compat.INFRA_KEYS].
+    """
+    if not parameters:
+        return {}
+    return {k: v for k, v in parameters.items() if k not in INFRA_KEYS}
+
+
+@dataclass(frozen=True)
+class OpenAICompatRequestPolicy:
+    """How an OpenAI-compatible connector attributes requests (bug-144).
+
+    Attributes:
+        session_headers: Header names whose value is the call's
+            `LLMCallContext.conversation_key` (e.g. OpenCode Go's
+            `x-opencode-session`). Names only — a policy can never
+            carry a static header value, so no secret can enter config.
+    """
+
+    session_headers: tuple[str, ...] = ()
+
+
+def resolve_request_policy(
+    connector_default: OpenAICompatRequestPolicy,
+    provider_config: ProviderConfig,
+) -> OpenAICompatRequestPolicy:
+    """Apply `provider_config.request_policy` over the connector's default.
+
+    A `None` override (or a `None` `session_headers`) keeps the
+    connector's default; an explicit list — including `[]` — replaces
+    it. The override was validated by
+    [`provider_config_from_yaml`][llm.protocol.provider_config_from_yaml].
+    """
+    override = provider_config.request_policy
+    if override is None or override.session_headers is None:
+        return connector_default
+    return OpenAICompatRequestPolicy(session_headers=override.session_headers)
+
+
+def request_headers(
+    policy: OpenAICompatRequestPolicy,
+    context: LLMCallContext | None,
+    *,
+    provider_name: str,
+    model_id: str,
+) -> dict[str, str]:
+    """Build the client `default_headers` for one LLM construction.
+
+    Returns the policy's session headers (each carrying
+    `context.conversation_key`) plus `User-Agent: kolsch/<version>`.
+
+    Raises:
+        LlmClientInitFailed: the policy needs a conversation key but
+            `context` is `None`. No substitute id is ever minted.
+    """
+    headers: dict[str, str] = {}
+    if policy.session_headers:
+        if context is None:
+            raise LlmClientInitFailed(
+                provider=provider_name,
+                model=model_id,
+                reason=(
+                    "request policy sends session headers "
+                    f"{list(policy.session_headers)} but no LLMCallContext "
+                    "was supplied; kolsch never invents a conversation key"
+                ),
+                where="llm.providers._openai_compat.request_headers",
+            )
+        headers = dict.fromkeys(policy.session_headers, context.conversation_key)
+    headers["User-Agent"] = kolsch_user_agent()
+    return headers
+
+
+def build_openai_compatible_llm(  # noqa: PLR0913 — keyword-only builder; one arg per connector concern
     *,
     provider: Literal["openrouter", "hosted_vllm"],
     model_id: str,
-    **kwargs: Any,  # noqa: ANN401 — forwarded verbatim to the CrewAI client
+    provider_config: ProviderConfig,
+    api_key: str | None,
+    default_timeout: float,
+    parameters: Mapping[str, Any] | None,
+    context: LLMCallContext | None,
+    default_policy: OpenAICompatRequestPolicy,
 ) -> crewai.LLM:
-    """Build the OpenAI-compatible CrewAI client with the strict policy applied.
+    """Build the OpenAI-compatible CrewAI client with kolsch's policies applied.
 
-    Equivalent to `crewai.LLM(model=f"{provider}/{model_id}", **kwargs)`
+    Equivalent to `crewai.LLM(model=f"{provider}/{model_id}", ...)`
     — which CrewAI dispatches to
     `OpenAICompatibleCompletion(model=model_id, provider=provider,
-    **kwargs)` for both prefixes — except the instance is
-    [`KolschOpenAICompatibleCompletion`][llm.providers._openai_compat.KolschOpenAICompatibleCompletion].
+    ...)` for both prefixes — except:
+
+    - the instance is
+      [`KolschOpenAICompatibleCompletion`][llm.providers._openai_compat.KolschOpenAICompatibleCompletion]
+      (bug-138 strict tool-schema policy);
+    - `default_headers` carry the resolved request policy's session
+      headers and the kolsch User-Agent (bug-144);
+    - agent-YAML `parameters` are forwarded minus
+      [`INFRA_KEYS`][llm.providers._openai_compat.INFRA_KEYS].
+
+    Raises:
+        LlmClientInitFailed: the resolved policy sends session headers
+            and `context` is `None`.
     """
+    policy = resolve_request_policy(default_policy, provider_config)
+    headers = request_headers(
+        policy,
+        context,
+        provider_name=provider_config.name,
+        model_id=model_id,
+    )
     llm = KolschOpenAICompatibleCompletion(
         model=model_id,
         provider=provider,
-        **kwargs,
+        api_key=api_key,
+        base_url=provider_config.base_url,
+        timeout=(
+            provider_config.timeout_seconds
+            if provider_config.timeout_seconds is not None
+            else default_timeout
+        ),
+        default_headers=headers,
+        **connector_extras(parameters),
     )
     # `crewai.LLM.__new__` returns its native provider instances under
     # the same cast; callers and the `ProviderConnector` Protocol

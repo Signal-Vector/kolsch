@@ -78,6 +78,7 @@ def test_register_compaction_variant_adds_to_registry() -> None:
             model_context_length: int,
             thread_id: Any,
             config: dict[str, Any],
+            llm_context: Any,
         ) -> Any:
             raise NotImplementedError
 
@@ -104,6 +105,7 @@ async def test_reference_summary_compact_no_op_on_empty_events() -> None:
         config={},
     )
     outcome = await provider.compact(
+        llm_context=None,
         events=[],
         keep_head=0,
         keep_tail=100,

@@ -165,7 +165,7 @@ async def _build(tmp_path: Path) -> tuple[AgentEngine, SessionStore]:
     ref_id_holder = {"id": "ev_placeholder"}
     summariser = _Summariser(lambda: ref_id_holder["id"])
 
-    async def factory(_spec: Any) -> Any:
+    async def factory(_spec: Any, *, context: Any = None) -> Any:
         return summariser
 
     provider = ReferenceSummaryCompactionProvider(llm_for_model=factory, config={})

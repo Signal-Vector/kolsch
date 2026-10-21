@@ -62,7 +62,8 @@ from schemas import (
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-    from engine.framework import LLMRequest, LLMResponse
+    from engine.framework import LLMFactory, LLMRequest, LLMResponse
+    from llm.protocol import LLMCallContext
 
 
 _log = logging.getLogger("engine.fallback")
@@ -293,12 +294,10 @@ class StreamState:
 # ---------------------------------------------------------------------------
 
 
-# Type aliases for clarity. The factory is async because production
-# build_llm is async (it calls Secrets.resolve); tests can wrap a
-# sync callable in `_sync_factory` below.
-if TYPE_CHECKING:
-    LLMCallable = Callable[["LLMRequest"], Awaitable["LLMResponse"]]
-    LLMFactory = Callable[[ModelSpec], Awaitable[LLMCallable]]
+# The factory is async because production build_llm is async (it
+# calls Secrets.resolve). `LLMFactory` / `LLMCallable` live in
+# `engine.framework`; the factory takes a keyword-only `context`
+# (bug-144) the handle supplies on every attempt.
 
 
 class FallbackLLMHandle:
@@ -324,6 +323,13 @@ class FallbackLLMHandle:
     stream-post-token-emitted (the engine sets
     `stream_pre_first_token` on the request context to gate
     fallback at the outer level — see the engine's streaming path).
+
+    `context` is the exchange's
+    [`LLMCallContext`][llm.protocol.LLMCallContext] (bug-144): the
+    SAME object is passed to `llm_factory` for the primary and every
+    fallback attempt, so a provider sees one stable conversation key
+    for the whole exchange. Exposed read-only via
+    [`context`][engine._fallback.FallbackLLMHandle.context].
     """
 
     def __init__(
@@ -336,12 +342,14 @@ class FallbackLLMHandle:
         llm_factory: LLMFactory,
         config_event_id: str | None,
         stream_state: StreamState | None = None,
+        context: LLMCallContext | None,
     ) -> None:
         self._emit = emit
         self._agent_id = agent_id
         self._primary_spec = primary_spec
         self._chain = chain
         self._llm_factory = llm_factory
+        self._context = context
         self._config_event_id = config_event_id
         # Populated by the engine's streaming path; None for
         # non-streaming exchanges. When set, the orchestrator's
@@ -364,6 +372,16 @@ class FallbackLLMHandle:
         """
         return self._primary_spec
 
+    @property
+    def context(self) -> LLMCallContext | None:
+        """The exchange's `LLMCallContext` (read-only), or `None` in tests.
+
+        bug-144: the same object every `llm_factory` call receives. A
+        framework that never calls the handle (spec-121's subprocess
+        path) reads the conversation key from here.
+        """
+        return self._context
+
     async def __call__(self, request: LLMRequest) -> LLMResponse:
         all_specs = [self._primary_spec, *self._chain]
         attempts: list[dict[str, Any]] = []
@@ -385,7 +403,7 @@ class FallbackLLMHandle:
             # Lazy LLM construction — only built when we actually
             # need this entry.
             try:
-                llm_callable = await self._llm_factory(spec)
+                llm_callable = await self._llm_factory(spec, context=self._context)
             except PlatformError as exc:
                 # Treat client-build failures as fallback-triggering
                 # for the chain entries — a fallback to an

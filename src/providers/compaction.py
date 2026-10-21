@@ -32,9 +32,10 @@ from kernel import ValidationError, ValidationResult
 from schemas import EventType
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Callable
 
-    from engine import LLMRequest, LLMResponse
+    from engine import LLMFactory
+    from llm.protocol import LLMCallContext
     from schemas import ModelSpec, ThreadId
     from schemas.events import ContextCompactedData, Event
 
@@ -346,6 +347,7 @@ class ContextCompactionProvider(Protocol):
         model_context_length: int,
         thread_id: ThreadId,
         config: dict[str, Any],
+        llm_context: LLMCallContext | None,
     ) -> ContextCompactedData:
         """Produce a compaction payload for `events`.
 
@@ -358,6 +360,11 @@ class ContextCompactionProvider(Protocol):
                 against this.
             thread_id: The thread whose context is being compacted.
             config: Variant-specific args from `platform.yaml`.
+            llm_context: The owning session's
+                [`LLMCallContext`][llm.protocol.LLMCallContext]
+                (bug-144), forwarded to `llm_for_model` for any
+                summariser call. The engine always passes one; `None`
+                is for direct test invocations only.
         """
         ...
 
@@ -383,13 +390,7 @@ class ReferenceSummaryCompactionProvider:
     def __init__(
         self,
         *,
-        llm_for_model: (
-            Callable[
-                [ModelSpec],
-                Awaitable[Callable[[LLMRequest], Awaitable[LLMResponse]]],
-            ]
-            | None
-        ),
+        llm_for_model: LLMFactory | None,
         config: dict[str, Any],
     ) -> None:
         self._llm_for_model = llm_for_model
@@ -404,6 +405,7 @@ class ReferenceSummaryCompactionProvider:
         model_context_length: int,  # noqa: ARG002 — interface arg; budgeting lands in a later phase
         thread_id: ThreadId,  # noqa: ARG002 — interface arg; not needed by reference_summary
         config: dict[str, Any],
+        llm_context: LLMCallContext | None,
     ) -> ContextCompactedData:
         """Summarise the middle of ``events`` into a reference-summary payload.
 
@@ -528,7 +530,7 @@ class ReferenceSummaryCompactionProvider:
             )
             raise RuntimeError(msg)
         model_spec = _resolve_summarizer_spec(summarizer_model_cfg)
-        llm = await self._llm_for_model(model_spec)
+        llm = await self._llm_for_model(model_spec, context=llm_context)
 
         summariser_input = _build_summariser_prompt(
             middle,
@@ -1125,13 +1127,7 @@ def register_compaction_variant(
 def make_compaction_provider(
     *,
     config: dict[str, Any],
-    llm_for_model: (
-        Callable[
-            [ModelSpec],
-            Awaitable[Callable[[LLMRequest], Awaitable[LLMResponse]]],
-        ]
-        | None
-    ),
+    llm_for_model: LLMFactory | None,
 ) -> ContextCompactionProvider | None:
     """Dispatch by `config['variant']` — silent-disable on empty config.
 

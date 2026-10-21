@@ -373,14 +373,16 @@ Register a factory that implements the
 (`src/providers/compaction.py`). Minimum surface:
 
 ```python
+from engine import LLMFactory
+from llm import LLMCallContext
 from providers.compaction import (
     register_compaction_variant,
     ContextCompactionProvider,
 )
 
 class MyVariant:
-    def __init__(self, *, llm_for_model, config):
-        ...
+    def __init__(self, *, llm_for_model: LLMFactory | None, config):
+        self._llm_for_model = llm_for_model
 
     async def compact(
         self,
@@ -391,12 +393,25 @@ class MyVariant:
         model_context_length,
         thread_id,
         config,         # variant-specific args from platform.yaml
+        llm_context: LLMCallContext | None,  # the owning session (bug-144)
     ) -> ContextCompactedData:
-        # produce a ContextCompactedData; the engine emits it.
+        # If you call a summariser model, forward the context so the
+        # provider sees the session's conversation key:
+        #   llm = await self._llm_for_model(spec, context=llm_context)
+        # Then produce a ContextCompactedData; the engine emits it.
         ...
 
 register_compaction_variant("my_variant", MyVariant)
 ```
+
+!!! warning "Migration (bug-144): `compact` gained a required `llm_context` keyword"
+    The engine now always calls `compact(..., llm_context=<LLMCallContext>)`,
+    and the `llm_for_model` factory takes a keyword-only `context`
+    (`await llm_for_model(spec, context=llm_context)`). A variant written
+    to the old signature raises `TypeError` on every call; the
+    compaction ladder catches it and **silently** falls back to
+    mechanical truncation (only a warning is logged). Add the
+    `llm_context` parameter and forward it to `llm_for_model`.
 
 Then in `platform.yaml`:
 

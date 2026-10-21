@@ -112,7 +112,7 @@ async def test_sub_agent_compaction_isolated_to_child_thread(tmp_path: Any) -> N
                 raw={},
             )
 
-    async def factory(_spec: Any) -> Any:
+    async def factory(_spec: Any, *, context: Any = None) -> Any:
         return _SummariserLLM()
 
     provider = ReferenceSummaryCompactionProvider(

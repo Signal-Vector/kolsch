@@ -66,6 +66,7 @@ class ModelRequestEvent:
 
     event_index: int  # 0-based line index in the source JSONL
     call_id: str
+    session_id: str  # envelope session id — the replayed calls' owner
     model_provider: str
     model_id: str
     parameters: dict[str, Any]
@@ -97,6 +98,7 @@ def load_model_requests(session_path: Path) -> list[ModelRequestEvent]:
                 ModelRequestEvent(
                     event_index=idx,
                     call_id=data.get("call_id", ""),
+                    session_id=str(event.get("session_id") or ""),
                     model_provider=model_blob.get("provider", ""),
                     model_id=model_blob.get("model", ""),
                     parameters=dict(model_blob.get("parameters") or {}),
@@ -232,7 +234,11 @@ async def replay_kolsch(
     importlib.import_module("llm.providers")
     from engine._crewai_adapter import make_build_llm_factory  # noqa: PLC0415
     from engine.framework import LLMRequest, Message  # noqa: PLC0415
-    from llm import ProviderConfig  # noqa: PLC0415
+    from llm import (  # noqa: PLC0415
+        LLMCallContext,
+        ProviderConfig,
+        provider_config_from_yaml,
+    )
     from providers.secrets import DotenvSecretsProvider  # noqa: PLC0415
     from schemas import ModelSpec  # noqa: PLC0415
 
@@ -245,26 +251,7 @@ async def replay_kolsch(
     for name, entry in (raw.get("llm_providers") or {}).items():
         if not isinstance(entry, dict):
             continue
-        llm_providers_config[name] = ProviderConfig(
-            name=name,
-            type=entry.get("type", ""),
-            api_key_secret=entry.get("api_key_secret"),
-            base_url=entry.get("base_url"),
-            timeout_seconds=entry.get("timeout_seconds"),
-            extras={
-                k: v
-                for k, v in entry.items()
-                if k
-                not in {
-                    "type",
-                    "api_key_secret",
-                    "base_url",
-                    "timeout_seconds",
-                    "models",
-                }
-            },
-            models=list(entry.get("models") or []),
-        )
+        llm_providers_config[name] = provider_config_from_yaml(name, entry)
 
     factory = make_build_llm_factory(
         llm_providers_config=llm_providers_config,
@@ -279,7 +266,15 @@ async def replay_kolsch(
             parameters=ev.parameters,
         )
         try:
-            call = await factory(spec)
+            # bug-144: replay on behalf of the recorded session, so the
+            # provider sees the same derived conversation key the
+            # original calls carried.
+            call = await factory(
+                spec,
+                context=(
+                    LLMCallContext.for_session(ev.session_id) if ev.session_id else None
+                ),
+            )
         except Exception as exc:  # noqa: BLE001 — replay tool, capture verbatim
             results.append(
                 CallResult(

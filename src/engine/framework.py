@@ -16,9 +16,13 @@ CrewAI cannot deliver are the failure mode to avoid.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Sequence
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
+
+if TYPE_CHECKING:
+    from llm.protocol import LLMCallContext
+    from schemas import ModelSpec
 
 # ---------------------------------------------------------------------------
 # Value types — what flows across the seams
@@ -228,3 +232,33 @@ class Framework(Protocol):
 #: this is bound to `MockLLM.agenerate`; the CrewAI adapter binds it
 #: to a litellm-backed function.
 LLMDriver = Callable[[dict[str, Any]], Awaitable[Any]]
+
+
+#: A per-attempt LLM callable — what an
+#: [`LLMFactory`][engine.framework.LLMFactory] produces for one spec.
+LLMCallable = Callable[[LLMRequest], Awaitable[LLMResponse]]
+
+
+class LLMFactory(Protocol):
+    """Builds the per-attempt LLM callable for a `ModelSpec`.
+
+    The engine's fallback orchestrator calls this lazily once per
+    chain entry; compaction calls it for its summariser model.
+    Production wires `engine._crewai_adapter.make_build_llm_factory`.
+
+    `context` is keyword-only and has no default so every caller states
+    it explicitly: production callers pass the owning session's
+    [`LLMCallContext`][llm.protocol.LLMCallContext]; `None` comes only
+    from test doubles. Implementations forward it to `llm.build_llm`
+    (bug-144).
+    """
+
+    def __call__(
+        self,
+        spec: ModelSpec,
+        /,
+        *,
+        context: LLMCallContext | None,
+    ) -> Awaitable[LLMCallable]:
+        """Return (asynchronously) the LLM callable for `spec`."""
+        ...

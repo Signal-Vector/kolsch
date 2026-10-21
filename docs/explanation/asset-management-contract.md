@@ -280,6 +280,8 @@ llm_providers:                          # Phase 1.1 — populated by `kolsch con
     api_key_secret: OPENCODE_API_KEY
     base_url: https://opencode.example.com/v1
     timeout_seconds: 60
+    request_policy:                    # bug-144 — optional; omit for the connector default
+      session_headers: ["x-opencode-session"]   # header NAMES carrying the session key; [] disables
     discovered_at: "2026-05-29T14:23:01Z"
     models:
       - id: gpt-oss-120b
@@ -307,6 +309,23 @@ Eight top-level sections (provider modules + storage + bus + defaults +
 `llm_providers` + `model_aliases`). Defaults become the system-defaults
 layer of any agent config (the first layer the resolver merges; see §6
 below).
+
+**`llm_providers.<name>.request_policy`** (bug-144, optional) overrides
+the connector's default request policy. Its only key,
+`session_headers`, lists HTTP header names (RFC 7230 tokens) that are
+sent with the session's derived conversation key as their value;
+`[]` sends none, and omitting the block keeps the connector default
+(`opencode`: `x-opencode-session`; `openrouter`: none). `Authorization`,
+`Proxy-Authorization`, `Cookie`, `User-Agent`, `Content-Type`,
+`Content-Length` and `Host` are rejected case-insensitively, duplicates
+are dropped, and unknown keys are rejected — there is no way to set a
+header value, so no secret can live here. Validation is **fail-fast and
+global**: one malformed `request_policy` raises `config.invalid`
+(naming the provider and path) at runtime boot and in
+`kolsch connect` / `refresh`, blocking every provider until fixed. All
+of these paths build entries through the one factory
+`llm.provider_config_from_yaml`. See
+[LLM providers §6.2](llm-providers.md#62-request_policy-per-provider-session-headers).
 
 The **defaults require no external services**: `storage.entity_backend:
 sqlite` and `event_bus.backend: in_process` mean a fresh install runs

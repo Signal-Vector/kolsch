@@ -162,7 +162,7 @@ def _fallback_handle(
 ) -> FallbackLLMHandle:
     spec = ModelSpec(provider="mock", model="test")
 
-    async def _factory(_: ModelSpec) -> Any:
+    async def _factory(_: ModelSpec, *, context: Any = None) -> Any:
         return llm
 
     return FallbackLLMHandle(
@@ -171,6 +171,7 @@ def _fallback_handle(
         primary_spec=spec,
         chain=[],
         llm_factory=_factory,
+        context=None,
         config_event_id=f"ev_{uuid4()}",
     )
 

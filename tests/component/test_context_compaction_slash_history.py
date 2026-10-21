@@ -64,7 +64,7 @@ async def test_compaction_history_lists_compactions_with_revoked(
         '"last_event_id": "f", "event_count": 1}}'
     )
 
-    async def factory(_spec: Any) -> Any:
+    async def factory(_spec: Any, *, context: Any = None) -> Any:
         return recording
 
     provider = ReferenceSummaryCompactionProvider(

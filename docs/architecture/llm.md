@@ -28,8 +28,8 @@ for the duration of the exchange.
 ## Types
 
 `ProviderConnector` is the protocol every connector implements. It
-exposes `build_llm(model_id, provider_config, api_key) -> crewai.LLM`
-plus `discover_models(credentials, base_url)`,
+exposes `build_llm(model_id, provider_config, api_key, parameters,
+*, context) -> crewai.LLM` plus `discover_models(credentials, base_url)`,
 `validate_credentials()`, and `auth_prompt_spec()` for the
 `kolsch connect` flow.
 
@@ -39,8 +39,18 @@ registered types today are `claude_code`, `opencode`, and `openrouter`.
 
 `ProviderConfig` is the per-connector configuration block under
 `platform.yaml`'s `llm_providers`. It holds the API key reference,
-the base URL, the default model, and any provider-specific
-parameters.
+the base URL, the model catalog, an optional `request_policy`
+override, and any provider-specific parameters. Every entry is built
+and validated by one factory, `provider_config_from_yaml`, shared by
+the runtime and `kolsch connect` / `refresh`.
+
+`LLMCallContext` is the per-call request context the engine passes to
+every `build_llm`: the owning `session_id`, a derived
+`conversation_key` (v1: equal to the session id), and the `agent_id`.
+OpenAI-compatible connectors forward the key in the headers their
+request policy names (OpenCode: `x-opencode-session`) and identify
+themselves as `User-Agent: kolsch/<version>`. See
+[LLM providers §3.6](../explanation/llm-providers.md#36-per-call-request-context-request-policy-and-user-agent-bug-144).
 
 `EchoLLMDriver` is the deterministic dev LLM used by tests. It
 sits at a different layer than a `ProviderConnector` — it's an
@@ -65,6 +75,12 @@ session setup, auth header signing); the framework owns the client
 for the exchange's duration. Two exchanges on the same thread can
 target different models because neither holds onto the other's
 client.
+
+**Conversation identity is derived, not stored.** The key a provider
+sees for a conversation is computed from the session id, never minted
+by a connector, so it can always be rebuilt from the event log. It is
+stable within a session (and across resume), new after `/new`, and
+separate for each spawned workflow-node session.
 
 **Fallback is a list on the config.** A `ResolvedAgentConfig`
 declares `fallback_models` — an ordered list of backup `ModelSpec`s
