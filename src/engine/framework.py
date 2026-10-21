@@ -244,8 +244,7 @@ class LLMFactory(Protocol):
 
     The engine's fallback orchestrator calls this lazily once per
     chain entry; compaction calls it for its summariser model.
-    Production wires
-    [`make_build_llm_factory`][engine._crewai_adapter.make_build_llm_factory].
+    Production wires `engine._crewai_adapter.make_build_llm_factory`.
 
     `context` is keyword-only and has no default so every caller states
     it explicitly: production callers pass the owning session's

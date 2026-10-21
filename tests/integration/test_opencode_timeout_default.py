@@ -25,9 +25,12 @@ from __future__ import annotations
 
 import httpx
 
-from llm.protocol import Credentials, ProviderConfig
+from llm.protocol import Credentials, LLMCallContext, ProviderConfig
 from llm.providers import opencode as opencode_module
 from llm.providers.opencode import OpenCodeConnector
+
+# bug-144: connectors that send session headers need a context.
+_CTX = LLMCallContext.for_session("ses_test")
 
 
 def _provider_config(
@@ -79,6 +82,7 @@ async def test_tc_opencode_timeout_02_build_llm_uses_default_when_unset() -> Non
         "qwen3.6-plus",
         _provider_config(timeout_seconds=None),
         api_key="sk-test",
+        context=_CTX,
     )
     assert llm.timeout == 180.0
 
@@ -100,6 +104,7 @@ async def test_tc_opencode_timeout_03_explicit_override_still_honoured() -> None
         "qwen3.6-plus",
         _provider_config(timeout_seconds=60),
         api_key="sk-test",
+        context=_CTX,
     )
     assert llm.timeout == 60
 

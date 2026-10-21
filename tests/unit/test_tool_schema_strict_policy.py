@@ -32,13 +32,14 @@ from crewai.utilities.pydantic_schema_utils import (
 )
 from pydantic import BaseModel
 
-from llm import ProviderConfig
+from llm import LLMCallContext, ProviderConfig
 from llm.providers._openai_compat import (
     KolschOpenAICompatibleCompletion,
     is_strict_compatible,
 )
 from llm.providers.opencode import OpenCodeConnector
 from llm.providers.openrouter import OpenRouterConnector
+from llm.user_agent import kolsch_user_agent
 
 if TYPE_CHECKING:
     from types import ModuleType
@@ -125,13 +126,16 @@ def _config(name: str) -> ProviderConfig:
     )
 
 
+_CTX = LLMCallContext.for_session("ses_strict_policy")
+
+
 async def _connector_llm(connector: str) -> Any:
     if connector == "openrouter":
         return await OpenRouterConnector().build_llm(
-            "openai/gpt-4o-mini", _config("openrouter"), "sk-dummy"
+            "openai/gpt-4o-mini", _config("openrouter"), "sk-dummy", context=_CTX
         )
     return await OpenCodeConnector().build_llm(
-        "qwen3.6-plus", _config("opencode"), "sk-dummy"
+        "qwen3.6-plus", _config("opencode"), "sk-dummy", context=_CTX
     )
 
 
@@ -295,12 +299,16 @@ async def test_connector_drops_infra_keys_from_parameters(connector: str) -> Non
     llm: Any  # typed `crewai.LLM` by the Protocol; really the policy subclass
     if connector == "openrouter":
         llm = await OpenRouterConnector().build_llm(
-            "openai/gpt-4o-mini", _config("openrouter"), "sk-dummy", parameters
+            "openai/gpt-4o-mini",
+            _config("openrouter"),
+            "sk-dummy",
+            parameters,
+            context=_CTX,
         )
         assert llm.provider == "openrouter"
     else:
         llm = await OpenCodeConnector().build_llm(
-            "qwen3.6-plus", _config("opencode"), "sk-dummy", parameters
+            "qwen3.6-plus", _config("opencode"), "sk-dummy", parameters, context=_CTX
         )
         assert llm.provider == "hosted_vllm"
     assert isinstance(llm, KolschOpenAICompatibleCompletion)
@@ -340,7 +348,13 @@ async def test_connector_builds_policy_client_equivalent_to_stock(
     assert type(stock) is OpenAICompatibleCompletion
     for attr in ("model", "provider", "base_url", "api_key", "timeout"):
         assert getattr(ours, attr) == getattr(stock, attr), attr
-    assert ours.default_headers == stock.default_headers
+    # bug-144: kolsch adds its User-Agent (and opencode's session
+    # header) on top of whatever CrewAI's provider defaults carry.
+    expected = dict(stock.default_headers or {})
+    expected["User-Agent"] = kolsch_user_agent()
+    if connector == "opencode":
+        expected["x-opencode-session"] = _CTX.conversation_key
+    assert ours.default_headers == expected
 
 
 def test_isolation_plain_crewai_llm_still_stock() -> None:

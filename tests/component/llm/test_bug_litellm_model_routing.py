@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import pytest
 
-from llm import ProviderConfig
+from llm import LLMCallContext, ProviderConfig
 from llm.providers.opencode import OpenCodeConnector
 
 
@@ -60,7 +60,7 @@ async def test_tc_bug_litellm_routing_uses_hosted_vllm_prefix(
         extras={},
         models=[],
     )
-    llm = await connector.build_llm(model_id, config, "sk-test")
+    llm = await connector.build_llm(model_id, config, "sk-test", context=_CTX)
 
     # The chosen route (acceptance criterion 5 — assert the model
     # field uses the route that actually works).
@@ -80,6 +80,10 @@ async def test_tc_bug_litellm_routing_uses_hosted_vllm_prefix(
     assert llm.timeout == 30
 
 
+# bug-144: connectors that send session headers need a context.
+_CTX = LLMCallContext.for_session("ses_test")
+
+
 async def test_tc_bug_litellm_routing_constructed_llm_is_usable() -> None:
     """End-to-end sanity: the constructed ``crewai.LLM`` is the actual
     OpenAI-compatible CrewAI native class — not the LiteLLM fallback,
@@ -96,7 +100,7 @@ async def test_tc_bug_litellm_routing_constructed_llm_is_usable() -> None:
         extras={},
         models=[],
     )
-    llm = await connector.build_llm("qwen3.6-plus", config, "sk-test")
+    llm = await connector.build_llm("qwen3.6-plus", config, "sk-test", context=_CTX)
     # `is_litellm` is the CrewAI flag distinguishing native vs.
     # LiteLLM-fallback construction. Native = no litellm dep needed.
     assert getattr(llm, "is_litellm", False) is False, (

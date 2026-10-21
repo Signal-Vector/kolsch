@@ -23,7 +23,11 @@ The public surface re-exports:
   [`ModelMetadata`][llm.protocol.ModelMetadata],
   [`ModelPricing`][llm.protocol.ModelPricing],
   [`ProviderConfig`][llm.protocol.ProviderConfig],
-  [`LLMCallContext`][llm.protocol.LLMCallContext]).
+  [`LLMCallContext`][llm.protocol.LLMCallContext],
+  [`RequestPolicyConfig`][llm.protocol.RequestPolicyConfig]).
+- [`provider_config_from_yaml`][llm.protocol.provider_config_from_yaml] —
+  the one factory that builds and validates a `ProviderConfig` from a
+  `platform.yaml` `llm_providers` entry.
 - `llm.registry` — explicit registration and lookup. Providers
   register themselves in `llm.providers` at import time.
 
@@ -43,7 +47,9 @@ from llm.protocol import (
     PromptField,
     ProviderConfig,
     ProviderConnector,
+    RequestPolicyConfig,
     ValidationResult,
+    provider_config_from_yaml,
 )
 from llm.registry import (
     connected_metadata_sources,
@@ -63,10 +69,12 @@ __all__ = [
     "PromptField",
     "ProviderConfig",
     "ProviderConnector",
+    "RequestPolicyConfig",
     "ValidationResult",
     "build_llm",
     "connected_metadata_sources",
     "get",
     "known_types",
+    "provider_config_from_yaml",
     "register",
 ]

@@ -25,7 +25,7 @@ from engine import LLMRequest, LLMResponse
 from engine._fallback import FallbackLLMHandle
 from engine.framework import Message
 from errors import ModelServerError
-from llm import LLMCallContext, ProviderConfig, registry
+from llm import LLMCallContext, ProviderConfig, provider_config_from_yaml, registry
 from schemas import ModelSpec
 
 _SRC = Path(__file__).resolve().parents[3] / "src"
@@ -214,3 +214,35 @@ def test_llm_call_context_every_production_site_passes_context() -> None:
         if isinstance(value, ast.Constant) and value.value is None:
             offenders.append(f"{rel}:{lineno} {name}(...) passes `{kw}=None`")
     assert not offenders, "\n".join(offenders)
+
+
+# ---------------------------------------------------------------------------
+# Phase 2 — a session-header policy refuses to run without a context
+# ---------------------------------------------------------------------------
+
+
+async def test_llm_call_context_none_raises_for_session_header_policy() -> None:
+    from errors import LlmClientInitFailed
+    from llm.providers.opencode import OpenCodeConnector
+
+    cfg = provider_config_from_yaml("opencode", {"base_url": "https://x.invalid/v1"})
+    with pytest.raises(LlmClientInitFailed) as info:
+        await OpenCodeConnector().build_llm("m", cfg, "sk-test", context=None)
+    assert "x-opencode-session" in info.value.detail["reason"]
+    assert info.value.detail["provider"] == "opencode"
+
+
+async def test_llm_call_context_none_bubbles_typed_through_build_llm() -> None:
+    """`llm.build_llm` re-raises the connector's typed error unchanged."""
+    from errors import LlmClientInitFailed
+    from llm import build_llm
+
+    cfg = provider_config_from_yaml("opencode", {"base_url": "https://x.invalid/v1"})
+    with pytest.raises(LlmClientInitFailed) as info:
+        await build_llm(
+            ModelSpec(provider="opencode", model="m"),
+            cfg,
+            object(),
+            context=None,
+        )
+    assert "LLMCallContext" in info.value.detail["reason"]

@@ -381,7 +381,7 @@ async def bootstrap_runtime(  # noqa: PLR0915 — linear runtime-assembly sequen
     # local name that would shadow this function's `llm` parameter —
     # the side-effect is what we want.
     importlib.import_module("llm.providers")
-    from llm import ProviderConfig  # noqa: PLC0415
+    from llm import provider_config_from_yaml  # noqa: PLC0415
 
     llm_providers_config: dict[str, ProviderConfig] = {}
     try:
@@ -391,30 +391,11 @@ async def bootstrap_runtime(  # noqa: PLR0915 — linear runtime-assembly sequen
     for provider_name, raw in (raw_llm or {}).items():
         if not isinstance(raw, dict):
             continue
-        # `type:` defaults to the provider dictionary key (e.g. an
-        # entry keyed `opencode` with no explicit `type:` resolves to
-        # the `opencode` connector). Explicit `type:` still wins —
-        # only set it when the connector type differs from the key
-        # you chose. See bug-055.
-        llm_providers_config[provider_name] = ProviderConfig(
-            name=provider_name,
-            type=raw.get("type") or provider_name,
-            api_key_secret=raw.get("api_key_secret"),
-            base_url=raw.get("base_url"),
-            timeout_seconds=raw.get("timeout_seconds"),
-            extras={
-                k: v
-                for k, v in raw.items()
-                if k
-                not in {
-                    "type",
-                    "api_key_secret",
-                    "base_url",
-                    "timeout_seconds",
-                    "models",
-                }
-            },
-            models=list(raw.get("models") or []),
+        # bug-144: the ONE shared factory (also used by
+        # `cli.llm_commands`) — applies the bug-055 `type:` default
+        # and validates `request_policy`.
+        llm_providers_config[provider_name] = provider_config_from_yaml(
+            provider_name, raw
         )
 
     # Wire build_llm via `llm_for_model=` so an agent whose ModelSpec

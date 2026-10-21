@@ -108,7 +108,10 @@ from llm.providers._errors import (
     classify_http_response,
     classify_transport_error,
 )
-from llm.providers._openai_compat import build_openai_compatible_llm
+from llm.providers._openai_compat import (
+    OpenAICompatRequestPolicy,
+    build_openai_compatible_llm,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -126,24 +129,6 @@ if TYPE_CHECKING:
 _DEFAULT_TIMEOUT_SECONDS = 180.0
 _HTTP_CLIENT_ERROR_MIN = 400
 
-# Keys the connector sets itself when building `crewai.LLM`. Agent-YAML
-# `ModelSpec.parameters` values that collide with these are dropped —
-# the connector always wins on routing so a mistyped YAML can't hijack
-# the model, key, base_url, or timeout via a `parameters:` entry.
-# `provider` / `is_litellm` steer CrewAI's client construction
-# (bug-138); a stray agent-YAML value would otherwise collide with the
-# connector's own `provider=` kwarg.
-_INFRA_KEYS = frozenset(
-    {"model", "api_key", "base_url", "timeout", "provider", "is_litellm"}
-)
-
-
-def _extras(parameters: Mapping[str, Any] | None) -> dict[str, Any]:
-    """Return `parameters` with `_INFRA_KEYS` filtered out."""
-    if not parameters:
-        return {}
-    return {k: v for k, v in parameters.items() if k not in _INFRA_KEYS}
-
 
 class OpenCodeConnector:
     """The OpenCode provider — OpenAI-compatible REST.
@@ -154,9 +139,19 @@ class OpenCodeConnector:
 
     Attributes:
         type_name: The registry key — `"opencode"`.
+        DEFAULT_REQUEST_POLICY: The connector's request policy (bug-144);
+            `llm_providers.<name>.request_policy` overrides it.
     """
 
     type_name: ClassVar[str] = "opencode"
+    # bug-144: OpenCode Go rejects chat completions without a stable
+    # per-conversation `x-opencode-session` (400 MissingSessionID).
+    # Override per provider via `llm_providers.<name>.request_policy`.
+    DEFAULT_REQUEST_POLICY: ClassVar[OpenAICompatRequestPolicy] = (
+        OpenAICompatRequestPolicy(
+            session_headers=("x-opencode-session",),
+        )
+    )
 
     def __init__(
         self,
@@ -279,7 +274,7 @@ class OpenCodeConnector:
         api_key: str | None,
         parameters: Mapping[str, Any] | None = None,
         *,
-        context: LLMCallContext | None = None,  # noqa: ARG002 — accepted per the bug-144 protocol; not yet forwarded
+        context: LLMCallContext | None = None,
     ) -> crewai.LLM:
         """Construct a `crewai.LLM` pointed at OpenCode.
 
@@ -289,22 +284,23 @@ class OpenCodeConnector:
         `crewai.LLM`. Infrastructure keys are dropped silently so
         agent YAML can't accidentally hijack routing.
 
-        `context` is the owning session's `LLMCallContext` (bug-144
-        protocol); accepted but not yet forwarded.
+        `context` is the owning session's `LLMCallContext` (bug-144):
+        each `DEFAULT_REQUEST_POLICY` (or `request_policy` override)
+        session header carries its `conversation_key`, and the request
+        identifies as `kolsch/<version>`. A policy with session headers
+        and `context=None` raises `LlmClientInitFailed`.
         """
         # bug-138: same client `crewai.LLM(model="hosted_vllm/...")` builds,
         # with kolsch's conditional strict tool-schema policy applied.
         return build_openai_compatible_llm(
             provider="hosted_vllm",
             model_id=model_id,
+            provider_config=provider_config,
             api_key=api_key,
-            base_url=provider_config.base_url,
-            timeout=(
-                provider_config.timeout_seconds
-                if provider_config.timeout_seconds is not None
-                else _DEFAULT_TIMEOUT_SECONDS
-            ),
-            **_extras(parameters),
+            default_timeout=_DEFAULT_TIMEOUT_SECONDS,
+            parameters=parameters,
+            context=context,
+            default_policy=self.DEFAULT_REQUEST_POLICY,
         )
 
     # ---- Internals ---------------------------------------------------------

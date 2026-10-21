@@ -46,7 +46,7 @@ from llm import (
     build_llm,
     registry,
 )
-from llm.protocol import Credentials, is_metadata_source
+from llm.protocol import Credentials, LLMCallContext, is_metadata_source
 from llm.providers.opencode import OpenCodeConnector
 from llm.providers.openrouter import OpenRouterConnector
 from schemas.config import ModelSpec
@@ -64,6 +64,10 @@ if TYPE_CHECKING:
 # ===========================================================================
 # Helpers
 # ===========================================================================
+
+
+# bug-144: connectors that send session headers need a context.
+_CTX = LLMCallContext.for_session("ses_test")
 
 
 def _mock_transport(handler: SyncHandler) -> httpx.MockTransport:
@@ -850,7 +854,9 @@ async def test_openrouter_build_llm_emits_litellm_prefixed_model() -> None:
         extras={},
         models=[],
     )
-    llm = await connector.build_llm("anthropic/claude-opus-4-7", config, "sk-x")
+    llm = await connector.build_llm(
+        "anthropic/claude-opus-4-7", config, "sk-x", context=_CTX
+    )
     # crewai.LLM normalises `model=` into (provider, model) — verify both.
     assert llm.provider == "openrouter"
     assert llm.model == "anthropic/claude-opus-4-7"
@@ -874,7 +880,7 @@ async def test_opencode_build_llm_emits_hosted_vllm_prefixed_model() -> None:
         extras={},
         models=[],
     )
-    llm = await connector.build_llm("gpt-oss-120b", config, "sk-y")
+    llm = await connector.build_llm("gpt-oss-120b", config, "sk-y", context=_CTX)
     assert llm.provider == "hosted_vllm"
     assert llm.model == "gpt-oss-120b"
 
@@ -901,6 +907,7 @@ async def test_openrouter_build_llm_forwards_parameters() -> None:
         config,
         "sk-x",
         parameters={"max_tokens": 4000, "temperature": 0.3},
+        context=_CTX,
     )
     assert llm.max_tokens == 4000
     assert llm.temperature == 0.3
@@ -923,6 +930,7 @@ async def test_opencode_build_llm_forwards_parameters() -> None:
         config,
         "sk-y",
         parameters={"max_tokens": 4000, "temperature": 0.5},
+        context=_CTX,
     )
     assert llm.max_tokens == 4000
     assert llm.temperature == 0.5
@@ -955,6 +963,7 @@ async def test_openrouter_build_llm_drops_infrastructure_keys_from_parameters() 
             "timeout": 0.001,
             "max_tokens": 100,
         },
+        context=_CTX,
     )
     # Infrastructure keys come from the connector, not from parameters.
     assert llm.provider == "openrouter"
