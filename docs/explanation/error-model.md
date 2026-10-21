@@ -493,7 +493,7 @@ losing a bus message doesn't fail an exchange.)
 | `agent.capability_mismatch` | Fatal | `{required, available}` | `engine.preflight.check_capabilities` |
 | `model.retry_exhausted` | Fatal | `{attempts: [Error]}` | `engine.execute.model_call` |
 | `model.malformed_response` | Recoverable | `{raw_response, parse_error}` | `engine.execute.model_call` |
-| `model.upstream_error` | Recoverable | `{provider, http_status, response}` | `engine.execute.model_call` |
+| `model.upstream_error` | Recoverable | `{provider, http_status, response}` | `engine.execute.model_call` (incl. the engine safety net's name table for rate-limit / connection errors, §6.3, and the CrewAI adapter's `ConnectionError` translation); `llm.connector.call` (HTTP 402 / 409 at the call seam, bug-145); `engine._classify.cause_chain` (402 / 409 via the safety net's status branch) |
 | `exchange.cancelled` | Fatal | `{cancelled_at_event_id}` | `engine.execute.loop` |
 | `exchange.timeout` | Fatal | `{timeout_seconds, elapsed_seconds}` | `engine.execute.loop` |
 | `assembly.procedure_failed` | Fatal | `{assembly_version, failed_step}` | `engine.assemble_context` |
@@ -694,7 +694,7 @@ Phase 1.3 patch §2.2; the levels below MUST match.
 | `model.context_overflow` | Recoverable | `{provider, model, requested_tokens, max_tokens?}` | connector's call layer |
 | `model.not_found` | Recoverable | `{provider, model, status_code, reason}` | connector's call layer (HTTP 404) |
 | `model.authentication_failed` | Fatal | `{provider, model, status_code}` | connector's call layer (HTTP 401/403) |
-| `model.bad_request` | Fatal | `{provider, model, status_code, reason}` | connector's call layer (HTTP 400) |
+| `model.bad_request` | Fatal | `{provider, model, status_code, reason}` | connector's call layer (HTTP 400, 413, 422, and any other status >= 400 not mapped to another code) |
 | `model.binary_unavailable` | Fatal | `{provider, model, reason}` | native connector's call layer (local CLI missing / logged out) |
 | `llm.all_models_failed` | Fatal | `{primary, attempts: [{model, error_code, detail}], reason}` | engine model loop, after exhausting the chain |
 | `config.fallback_duplicate` | Diagnostic | `{agent, model, positions}` | Layer 1 validator at agent load (warning surface) |

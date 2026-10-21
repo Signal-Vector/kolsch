@@ -353,22 +353,31 @@ fallback_models:
   - haiku
 ```
 
-Run it again with the primary simulated unavailable: temporarily
-point `model:` at a model id your provider doesn't serve, or pick a
-rate-limited model. (A bad API key won't do it: an authentication
-failure is Fatal, because the same key would fail on every entry, so
-it never falls back.)
+That's the whole configuration. Runs look the same as before until
+the primary fails in a way another model could get past. The chain
+advances on **Recoverable** provider failures:
 
-```bash
-uv run kolsch run kolsch/agents/helper --input content="say hi"
-```
+- rate limits (HTTP 429),
+- server errors (HTTP 5xx),
+- timeouts and connection failures,
+- a model the provider reports as not found (HTTP 404),
+- a context overflow.
 
-Two new events in `kolsch sessions events`:
+It does **not** advance on **Fatal** ones, which would fail the same
+way on every entry:
+
+- a rejected API key (HTTP 401/403),
+- a request the provider rejects as malformed (HTTP 400). Some
+  providers also answer an unknown model id with a 400 rather than a
+  404, and that never falls back either.
+
+Which status a provider sends for a given problem is up to the
+provider, so there's no reliable way to stage a fallback on demand.
+When one does happen, `kolsch sessions events` shows two extra events:
 
 - A `model.fallback` recording the transition to Haiku, with
   `reason` naming the primary's error (for example
-  `model.rate_limited`, or `model.not_found` for an id the provider
-  doesn't serve).
+  `model.rate_limited`).
 - The successful `model.response` attributed to Haiku.
 
 Each `model.fallback` is one transition, in order. If the whole

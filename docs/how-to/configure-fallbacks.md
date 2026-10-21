@@ -83,7 +83,9 @@ maps each HTTP failure to a code as the call returns:
 - `model.timeout` — the provider didn't answer in time, the
   connection failed, or HTTP 408.
 - `model.context_overflow` — the request didn't fit the model's
-  context window (HTTP 400, 413 or 422 with an overflow message).
+  context window. This covers any error status whose body carries a
+  context-overflow message (a 400 matches broader wording than other
+  statuses), and CrewAI's own context-length error.
 - `model.not_found` — HTTP 404. Usually the provider retired or
   renamed the model; another entry can still answer. Run
   `kolsch refresh <provider>` to re-read its catalog, and check the
