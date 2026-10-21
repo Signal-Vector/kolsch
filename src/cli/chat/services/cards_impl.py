@@ -30,6 +30,7 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+from cli.chat.services._task_teardown import cancel_and_wait
 from schemas.entities import Actor
 from schemas.events import Event, EventType
 from schemas.identifiers import CardId, EventId, new_card_id
@@ -319,17 +320,24 @@ class CardsImpl(AbstractCards):
         # post-aclose snapshot events from being scheduled.
         for card in list(self._live_cards.values()):
             card._cancel_snapshot_timer()
-        # Cancel any pending fire-and-forget notice tasks.
-        for task in list(self._pending_tasks):
-            if not task.done():
+        try:
+            # Cancel any pending fire-and-forget notice tasks.
+            for task in list(self._pending_tasks):
+                if not task.done():
+                    await cancel_and_wait(task, suppress_errors=True)
+            # Cancel the drain worker.
+            if self._drain_task is not None and not self._drain_task.done():
+                await cancel_and_wait(self._drain_task)
+        except asyncio.CancelledError:
+            # qol-143: the caller was cancelled mid-teardown. Still
+            # request cancellation of everything left so no task
+            # outlives a closed impl (a second `aclose()` is a no-op),
+            # then propagate the caller's cancel.
+            for task in list(self._pending_tasks):
                 task.cancel()
-                with contextlib.suppress(asyncio.CancelledError, Exception):
-                    await task
-        # Cancel the drain worker.
-        if self._drain_task is not None and not self._drain_task.done():
-            self._drain_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._drain_task
+            if self._drain_task is not None:
+                self._drain_task.cancel()
+            raise
 
     # ------------------------------------------------------------------
     # Internals

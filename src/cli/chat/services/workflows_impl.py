@@ -55,6 +55,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from cli.chat.services._task_teardown import cancel_and_wait
 from schemas.entities import Actor
 from schemas.events import Event, EventType
 from schemas.identifiers import EventId
@@ -796,19 +797,28 @@ class WorkflowsImpl(AbstractWorkflows):
         for task in list(self._per_run_drain_tasks.values()):
             if not task.done():
                 task.cancel()
-        if self._per_run_drain_tasks:
-            await asyncio.gather(
-                *self._per_run_drain_tasks.values(),
-                return_exceptions=True,
-            )
+        try:
+            if self._per_run_drain_tasks:
+                await asyncio.gather(
+                    *self._per_run_drain_tasks.values(),
+                    return_exceptions=True,
+                )
 
-        # Cancel the FIFO drain worker.
-        if self._workflow_drain_task is not None and not (
-            self._workflow_drain_task.done()
-        ):
-            self._workflow_drain_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._workflow_drain_task
+            # Cancel the FIFO drain worker.
+            if self._workflow_drain_task is not None and not (
+                self._workflow_drain_task.done()
+            ):
+                await cancel_and_wait(self._workflow_drain_task)
+        except asyncio.CancelledError:
+            # qol-143: the caller was cancelled mid-teardown. Still
+            # request cancellation of everything left so no task
+            # outlives a closed impl (a second `aclose()` is a no-op),
+            # then propagate the caller's cancel.
+            for task in list(self._per_run_drain_tasks.values()):
+                task.cancel()
+            if self._workflow_drain_task is not None:
+                self._workflow_drain_task.cancel()
+            raise
 
     # ------------------------------------------------------------------
     # feat-127 — retire live work for a `/new` session switch.
@@ -1568,6 +1578,9 @@ class WorkflowsImpl(AbstractWorkflows):
             # drain looped back to `queue.get()` and `aclose()` awaited
             # it forever. Same discrimination as bug-128's site in
             # `_run_one_workflow`.
+            # The flat `> 0` is deliberate (unlike the baseline-relative
+            # `cancel_and_wait`): the drain must die on ANY task-cancel,
+            # including a stale count from an earlier unconsumed one.
             current = asyncio.current_task()
             if current is not None and current.cancelling() > 0:
                 raise
