@@ -51,6 +51,7 @@ from workflows.errors import (
     WorkflowResumeRejected,
     WorkflowRunNotFound,
     WorkflowRuntimeError,
+    WorkflowValidationError,
 )
 from workflows.events import (
     WorkflowNodeCompletedEvent,
@@ -578,6 +579,27 @@ class IterativeExecutor:
 
         run_id = self._run.run_id
         run_dir = self._store.directory(run_id)
+        # Run-start gate. The validator is the gate; the executor
+        # never enters the worklist with an invalid workflow. It runs
+        # BEFORE the PID write (bug-142) so a rejected root run leaves
+        # nothing behind: the caller minted it (`store.create` wrote
+        # only `meta.json`), and it is discarded here — no phantom
+        # `pending` run in `kolsch workflows list`. A rejected CHILD run
+        # (sub-workflow) is kept: the parent's
+        # `workflow.node.called_workflow` event already points at it.
+        from workflows.validator import (  # noqa: PLC0415
+            validate_workflow_or_raise,
+        )
+
+        try:
+            validate_workflow_or_raise(
+                self._workflow, self._catalog, file=self._run.workflow_ref
+            )
+        except (WorkflowValidationError, ExceptionGroup):
+            if self._run.parent is None:
+                self._discard_rejected_run(run_id)
+            raise
+
         # Write the executor's PID atomically so the engine-startup
         # orphan sweep can decide whether a `status=running` JSONL was
         # left behind by a crashed run. `tmp + rename` guarantees a
@@ -586,15 +608,6 @@ class IterativeExecutor:
         tmp_pid = run_dir.pid_path.with_suffix(".tmp")
         tmp_pid.write_text(str(os.getpid()), encoding="utf-8")
         tmp_pid.replace(run_dir.pid_path)
-        # Run-start gate. The validator is the gate; the executor
-        # never enters the worklist with an invalid workflow.
-        from workflows.validator import (  # noqa: PLC0415
-            validate_workflow_or_raise,
-        )
-
-        validate_workflow_or_raise(
-            self._workflow, self._catalog, file=self._run.workflow_ref
-        )
 
         # Capture the pre-run `sys.modules` key set so the cleanup
         # step at run end only removes entries that loaded WHILE this
@@ -717,6 +730,22 @@ class IterativeExecutor:
     # Resume entry point.
     # ------------------------------------------------------------------
 
+    def _discard_rejected_run(self, run_id: WorkflowRunId) -> None:
+        """Discard a run the validation gate rejected before its first event.
+
+        Best-effort (bug-142): a discard failure — e.g. a concurrent
+        writer appended an event (`discard_unstarted` refuses), or the
+        directory removal hit an `OSError` — is logged and swallowed so
+        it can never replace the validation error the operator must see.
+        Callers re-raise the original error.
+        """
+        try:
+            self._store.discard_unstarted(run_id)
+        except Exception:  # noqa: BLE001 — never mask the validation error
+            logger.warning(
+                "could not discard rejected workflow run %s", run_id, exc_info=True
+            )
+
     async def resume(self, *, response: dict[str, Any]) -> WorkflowRunStatus:
         """Resume a paused run with the user's response.
 
@@ -770,6 +799,20 @@ class IterativeExecutor:
                 run_id=str(run_id),
                 status=str(self._run.status),
             )
+
+        # bug-142: the same gate `run()` applies, on the RELOADED
+        # workflow (it may have been edited since the run paused, or
+        # fail newer validator rules). Before any side effect — no
+        # event, no status flip, no file write — so a rejected resume
+        # leaves the run `waiting_for_input`, retryable once the YAML
+        # is fixed. Raises the validator's own error(s) unchanged.
+        from workflows.validator import (  # noqa: PLC0415
+            validate_workflow_or_raise,
+        )
+
+        validate_workflow_or_raise(
+            self._workflow, self._catalog, file=self._run.workflow_ref
+        )
 
         # Read the open-invocation sidecar before any further side
         # effects so a missing / unreadable sidecar surfaces as
@@ -1107,6 +1150,23 @@ class IterativeExecutor:
                 "forked_from=ForkedFrom(...))"
             )
             raise ValueError(msg)
+
+        # bug-142: validate the reloaded workflow before anything else
+        # (parent lookup, replay, events). The caller minted this
+        # forked run already (`store.create` writes only `meta.json`);
+        # a rejected fork discards it so no phantom `pending` run is
+        # left behind. Raises the validator's own error(s) unchanged.
+        from workflows.validator import (  # noqa: PLC0415
+            validate_workflow_or_raise,
+        )
+
+        try:
+            validate_workflow_or_raise(
+                self._workflow, self._catalog, file=self._run.workflow_ref
+            )
+        except (WorkflowValidationError, ExceptionGroup):
+            self._discard_rejected_run(run_id)
+            raise
 
         parent_id = WorkflowRunId(str(self._run.forked_from.run_id))
         parent_dir = self._store.directory(parent_id)

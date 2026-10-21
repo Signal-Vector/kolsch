@@ -1498,7 +1498,15 @@ class WorkflowsImpl(AbstractWorkflows):
                 # (wiring bug / infra failure). Do not clobber a
                 # previously-captured message.
                 if record.error_message is None:
-                    record.error_message = str(_run_exc)[:400]
+                    # bug-142: the run-start validation gate raises one
+                    # `ExceptionGroup` for a multi-error workflow — its own
+                    # str is just "Workflow validation failed (N
+                    # sub-exceptions)"; surface the actual errors.
+                    if isinstance(_run_exc, ExceptionGroup):
+                        detail = "; ".join(str(e) for e in _run_exc.exceptions)
+                    else:
+                        detail = str(_run_exc)
+                    record.error_message = detail[:400]
                 # The executor writes its own terminal event on the way
                 # out; the bridge drain will convert it. If it didn't
                 # (construction-time raise, wiring bug), close the card

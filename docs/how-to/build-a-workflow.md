@@ -215,6 +215,12 @@ workflow (`user_input` nodes), the run exits early with
 kolsch workflows resume <wrk_id> --input response=<text>
 ```
 
+Resume (and `fork`) re-validate the workflow YAML first. If you
+edited the workflow into an invalid state while the run was
+paused, the resume is rejected with the validation error and the
+run stays paused — fix the YAML and resume again. Resumed and
+forked runs use the same per-node default timeout as `run`.
+
 ## How to see what happened
 
 Every run gets `runs/<wrk_id>/events.jsonl` under the workspace

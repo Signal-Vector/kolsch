@@ -1394,11 +1394,13 @@ async def _handler_fork(arg_text: str, ctx: SlashContext) -> ControlSignal:
         WorkflowResumeRejected,
         WorkflowRunNotFound,
         WorkflowRuntimeError,
+        WorkflowValidationError,
     )
     from workflows.ids import WorkflowRunId  # noqa: PLC0415
     from workflows.parser import load_workflow  # noqa: PLC0415
     from workflows.run import WorkflowRunStatus  # noqa: PLC0415
     from workflows.run_store import WorkflowRunStore  # noqa: PLC0415
+    from workflows.validator import workflow_errors_in  # noqa: PLC0415
 
     if ctx.state is None:
         ctx.stdout.write("/fork requires a chat runtime; not available here.\n")
@@ -1467,6 +1469,7 @@ async def _handler_fork(arg_text: str, ctx: SlashContext) -> ControlSignal:
     )
     # Chained-fork support — point pending at the fork so a
     # subsequent `/fork` re-roots from this fork's events.
+    previous_pending = state.pending_workflow_run_id
     state.pending_workflow_run_id = str(forked_run.run_id)
 
     try:
@@ -1482,6 +1485,20 @@ async def _handler_fork(arg_text: str, ctx: SlashContext) -> ControlSignal:
     except WorkflowRunNotFound as exc:
         message = getattr(exc, "caller_message", None) or str(exc)
         ctx.stdout.write(f"/fork: {message}\n")
+        return ControlSignal.CONTINUE
+    except (WorkflowValidationError, ExceptionGroup) as exc:
+        # bug-142: the reloaded workflow fails validation. The fork is
+        # rejected before its first event and its run dir is discarded,
+        # so don't leave `pending` pointing at it.
+        errors = workflow_errors_in(exc) if isinstance(exc, ExceptionGroup) else [exc]
+        state.pending_workflow_run_id = previous_pending
+        for error in errors:
+            message = getattr(error, "caller_message", None) or str(error)
+            ctx.stdout.write(f"/fork: {message}\n")
+        ctx.stdout.write(
+            f"/fork: run `kolsch workflows validate {parent_run.workflow_ref}` "
+            "to see what's wrong.\n"
+        )
         return ControlSignal.CONTINUE
     except (
         WorkflowRuntimeError,
