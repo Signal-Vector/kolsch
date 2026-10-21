@@ -257,6 +257,8 @@ async def test_build_llm_connector_failure_wraps_as_client_init() -> None:
                 provider_config: object,
                 api_key: object,
                 parameters: object = None,
+                *,
+                context: object = None,
             ) -> object:
                 msg = "boom"
                 raise RuntimeError(msg)
@@ -995,6 +997,8 @@ async def test_build_llm_threads_spec_parameters_through_to_connector() -> None:
             provider_config: ProviderConfig,
             api_key: str | None,
             parameters: Any = None,
+            *,
+            context: Any = None,
         ) -> Any:
             received["model_id"] = model_id
             received["parameters"] = parameters
@@ -1054,6 +1058,8 @@ async def test_build_llm_omits_parameters_when_spec_has_empty_dict() -> None:
             provider_config: ProviderConfig,
             api_key: str | None,
             parameters: Any = None,
+            *,
+            context: Any = None,
         ) -> Any:
             received["parameters"] = parameters
             return object()

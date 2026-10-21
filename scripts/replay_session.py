@@ -66,6 +66,7 @@ class ModelRequestEvent:
 
     event_index: int  # 0-based line index in the source JSONL
     call_id: str
+    session_id: str  # envelope session id — the replayed calls' owner
     model_provider: str
     model_id: str
     parameters: dict[str, Any]
@@ -97,6 +98,7 @@ def load_model_requests(session_path: Path) -> list[ModelRequestEvent]:
                 ModelRequestEvent(
                     event_index=idx,
                     call_id=data.get("call_id", ""),
+                    session_id=str(event.get("session_id", "")),
                     model_provider=model_blob.get("provider", ""),
                     model_id=model_blob.get("model", ""),
                     parameters=dict(model_blob.get("parameters") or {}),
@@ -232,7 +234,7 @@ async def replay_kolsch(
     importlib.import_module("llm.providers")
     from engine._crewai_adapter import make_build_llm_factory  # noqa: PLC0415
     from engine.framework import LLMRequest, Message  # noqa: PLC0415
-    from llm import ProviderConfig  # noqa: PLC0415
+    from llm import LLMCallContext, ProviderConfig  # noqa: PLC0415
     from providers.secrets import DotenvSecretsProvider  # noqa: PLC0415
     from schemas import ModelSpec  # noqa: PLC0415
 
@@ -279,7 +281,15 @@ async def replay_kolsch(
             parameters=ev.parameters,
         )
         try:
-            call = await factory(spec)
+            # bug-144: replay on behalf of the recorded session, so the
+            # provider sees the same derived conversation key the
+            # original calls carried.
+            call = await factory(
+                spec,
+                context=(
+                    LLMCallContext.for_session(ev.session_id) if ev.session_id else None
+                ),
+            )
         except Exception as exc:  # noqa: BLE001 — replay tool, capture verbatim
             results.append(
                 CallResult(

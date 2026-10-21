@@ -242,7 +242,7 @@ async def test_fresh_session_no_events_returns_none_without_llm_call(
     """
     summariser = _CountingSummariser()
 
-    async def factory(_spec: Any) -> Any:
+    async def factory(_spec: Any, *, context: Any = None) -> Any:
         return summariser
 
     provider = ReferenceSummaryCompactionProvider(llm_for_model=factory, config={})
@@ -276,7 +276,7 @@ async def test_under_threshold_returns_none_no_compaction_emitted(
     the eager check returns ``None`` and emits nothing."""
     summariser = _CountingSummariser()
 
-    async def factory(_spec: Any) -> Any:
+    async def factory(_spec: Any, *, context: Any = None) -> Any:
         return summariser
 
     provider = ReferenceSummaryCompactionProvider(llm_for_model=factory, config={})
@@ -322,7 +322,7 @@ async def test_over_threshold_emits_context_compacted_auto_resume(
     it apart from a per-exchange compaction."""
     summariser = _CountingSummariser()
 
-    async def factory(_spec: Any) -> Any:
+    async def factory(_spec: Any, *, context: Any = None) -> Any:
         return summariser
 
     provider = ReferenceSummaryCompactionProvider(llm_for_model=factory, config={})
@@ -382,7 +382,7 @@ async def test_summariser_fails_twice_falls_through_to_mechanical(
     ``CONTEXT_COMPACTED`` with ``summary.trigger="auto_truncation"``."""
     summariser = _RaisingSummariser()
 
-    async def factory(_spec: Any) -> Any:
+    async def factory(_spec: Any, *, context: Any = None) -> Any:
         return summariser
 
     provider = ReferenceSummaryCompactionProvider(llm_for_model=factory, config={})
@@ -451,7 +451,7 @@ async def test_concurrent_with_manual_compact_serialises_cleanly(
     ``compacted_event_ids`` list (no torn parent chain)."""
     summariser = _CountingSummariser()
 
-    async def factory(_spec: Any) -> Any:
+    async def factory(_spec: Any, *, context: Any = None) -> Any:
         return summariser
 
     provider = ReferenceSummaryCompactionProvider(llm_for_model=factory, config={})

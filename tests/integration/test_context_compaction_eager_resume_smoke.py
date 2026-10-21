@@ -137,7 +137,7 @@ async def _build(
     async def default_llm(_request: LLMRequest) -> LLMResponse:
         return LLMResponse(content="ok", tool_calls=None, usage={}, raw={})
 
-    async def factory(_spec: Any) -> Any:
+    async def factory(_spec: Any, *, context: Any = None) -> Any:
         return summariser
 
     provider = ReferenceSummaryCompactionProvider(llm_for_model=factory, config={})

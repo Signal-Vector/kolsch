@@ -22,7 +22,8 @@ The public surface re-exports:
   [`ModelEntry`][llm.protocol.ModelEntry],
   [`ModelMetadata`][llm.protocol.ModelMetadata],
   [`ModelPricing`][llm.protocol.ModelPricing],
-  [`ProviderConfig`][llm.protocol.ProviderConfig]).
+  [`ProviderConfig`][llm.protocol.ProviderConfig],
+  [`LLMCallContext`][llm.protocol.LLMCallContext]).
 - `llm.registry` — explicit registration and lookup. Providers
   register themselves in `llm.providers` at import time.
 
@@ -34,6 +35,7 @@ from llm.build_llm import build_llm
 from llm.protocol import (
     AuthPromptSpec,
     Credentials,
+    LLMCallContext,
     MetadataSourceConnector,
     ModelEntry,
     ModelMetadata,
@@ -53,6 +55,7 @@ from llm.registry import (
 __all__ = [
     "AuthPromptSpec",
     "Credentials",
+    "LLMCallContext",
     "MetadataSourceConnector",
     "ModelEntry",
     "ModelMetadata",

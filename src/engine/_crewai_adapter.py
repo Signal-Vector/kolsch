@@ -33,8 +33,8 @@ if TYPE_CHECKING:
 
     import crewai
 
-    from engine.framework import LLMRequest
-    from llm import ProviderConfig
+    from engine.framework import LLMCallable, LLMFactory, LLMRequest
+    from llm import LLMCallContext, ProviderConfig
     from providers import SecretsProvider
     from schemas import ModelSpec
 
@@ -426,7 +426,7 @@ def make_build_llm_factory(
     *,
     llm_providers_config: dict[str, ProviderConfig],
     secrets: SecretsProvider,
-) -> Callable[[ModelSpec], Awaitable[Callable[[LLMRequest], Awaitable[LLMResponse]]]]:
+) -> LLMFactory:
     """Return the per-spec LLM factory the engine wires via `llm_for_model=`.
 
     Behaviour:
@@ -441,7 +441,8 @@ def make_build_llm_factory(
       (Fatal) if the spec's provider isn't in
       `llm_providers_config` — the engine surfaces that as
       `thread.exchange_failed` with a clear message rather than the
-      silent-echo bug.
+      silent-echo bug. The factory's keyword-only `context` (bug-144)
+      is forwarded verbatim to `build_llm`; the mock branch ignores it.
 
     The factory is async per the engine's LLMFactory contract.
     Imports of `llm.build_llm` and `dev_llm` are lazy so the
@@ -451,7 +452,10 @@ def make_build_llm_factory(
 
     async def factory(
         spec: ModelSpec,
-    ) -> Callable[[LLMRequest], Awaitable[LLMResponse]]:
+        /,
+        *,
+        context: LLMCallContext | None,
+    ) -> LLMCallable:
         if spec.provider == "mock":
             from engine.dev_llm import EchoLLMDriver  # noqa: PLC0415
 
@@ -463,6 +467,7 @@ def make_build_llm_factory(
             llm_providers_config.get(spec.provider),
             secrets,
             configured_providers=sorted(llm_providers_config),
+            context=context,
         )
         return make_llm_callable(crewai_llm)
 

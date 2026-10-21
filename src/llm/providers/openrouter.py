@@ -79,6 +79,8 @@ if TYPE_CHECKING:
 
     import crewai
 
+    from llm.protocol import LLMCallContext
+
 _DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 _DEFAULT_TIMEOUT_SECONDS = 30.0
 _HTTP_CLIENT_ERROR_MIN = 400
@@ -259,6 +261,8 @@ class OpenRouterConnector:
         provider_config: ProviderConfig,
         api_key: str | None,
         parameters: Mapping[str, Any] | None = None,
+        *,
+        context: LLMCallContext | None = None,  # noqa: ARG002 — accepted per the bug-144 protocol; not yet forwarded
     ) -> crewai.LLM:
         """Construct a `crewai.LLM` routed through OpenRouter.
 
@@ -266,6 +270,9 @@ class OpenRouterConnector:
         forwarded to `crewai.LLM`. Infrastructure keys are dropped
         silently so agent YAML can't accidentally hijack routing —
         see `_INFRA_KEYS` at module level.
+
+        `context` is the owning session's `LLMCallContext` (bug-144
+        protocol); accepted but not yet forwarded.
         """
         # bug-138: same client `crewai.LLM(model="openrouter/...")` builds,
         # with kolsch's conditional strict tool-schema policy applied.

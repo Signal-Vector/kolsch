@@ -178,7 +178,7 @@ async def test_no_compaction_when_context_length_is_none(tmp_path: Path) -> None
                 raw={},
             )
 
-    async def factory(_spec: Any) -> Any:
+    async def factory(_spec: Any, *, context: Any = None) -> Any:
         return _MockLLMHandle()
 
     provider = ReferenceSummaryCompactionProvider(
@@ -212,7 +212,7 @@ async def test_compaction_fires_when_estimate_exceeds_threshold(tmp_path: Path) 
                 raw={},
             )
 
-    async def factory(_spec: Any) -> Any:
+    async def factory(_spec: Any, *, context: Any = None) -> Any:
         return _MockLLMHandle()
 
     provider = ReferenceSummaryCompactionProvider(

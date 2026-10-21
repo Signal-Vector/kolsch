@@ -58,6 +58,7 @@ if TYPE_CHECKING:
     from pathlib import Path
     from typing import Any
 
+    from engine import LLMFactory
     from kernel import ConfigValidator
     from llm import ProviderConfig
     from schemas import ModelSpec
@@ -431,10 +432,7 @@ async def bootstrap_runtime(  # noqa: PLR0915 — linear runtime-assembly sequen
     #   EchoLLMDriver across the board, matching the default-tier
     #   "fresh install runs end-to-end without credentials" guarantee.
     chosen_llm: Callable[[LLMRequest], Awaitable[LLMResponse]] | None = llm
-    chosen_llm_for_model: (
-        Callable[[ModelSpec], Awaitable[Callable[[LLMRequest], Awaitable[LLMResponse]]]]
-        | None
-    ) = None
+    chosen_llm_for_model: LLMFactory | None = None
     if chosen_llm is None and llm_providers_config:
         from engine._crewai_adapter import make_build_llm_factory  # noqa: PLC0415
 

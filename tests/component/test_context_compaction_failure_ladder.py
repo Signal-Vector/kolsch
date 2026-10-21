@@ -250,7 +250,7 @@ async def test_tier1_retry_survives_transient_summariser_failure(
         [RuntimeError("transient network")] + [_valid_summary_json() for _ in range(20)]
     )
 
-    async def factory(_spec: Any) -> Any:
+    async def factory(_spec: Any, *, context: Any = None) -> Any:
         return summariser
 
     provider = ReferenceSummaryCompactionProvider(llm_for_model=factory, config={})
@@ -291,7 +291,7 @@ async def test_tier2_mechanical_truncation_when_retries_exhausted(
     # CONTEXT_COMPACTION_FAILED + one mechanical CONTEXT_COMPACTED.
     summariser = _ScriptedSummariser([RuntimeError("boom-1"), RuntimeError("boom-2")])
 
-    async def factory(_spec: Any) -> Any:
+    async def factory(_spec: Any, *, context: Any = None) -> Any:
         return summariser
 
     provider = ReferenceSummaryCompactionProvider(llm_for_model=factory, config={})
@@ -388,7 +388,7 @@ async def test_non_shrinking_summary_emits_skipped_and_retries(
         ]
     )
 
-    async def factory(_spec: Any) -> Any:
+    async def factory(_spec: Any, *, context: Any = None) -> Any:
         return summariser
 
     provider = ReferenceSummaryCompactionProvider(llm_for_model=factory, config={})
@@ -434,7 +434,7 @@ async def test_refs_beyond_max_refs_cluster_into_event_id_range(
     )
     summariser = _ScriptedSummariser([summary_json])
 
-    async def factory(_spec: Any) -> Any:
+    async def factory(_spec: Any, *, context: Any = None) -> Any:
         return summariser
 
     provider = ReferenceSummaryCompactionProvider(
@@ -478,6 +478,7 @@ async def test_refs_beyond_max_refs_cluster_into_event_id_range(
             )
         )
     outcome = await provider.compact(
+        llm_context=None,
         events=events,
         keep_head=0,
         keep_tail=1,

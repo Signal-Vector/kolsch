@@ -191,6 +191,64 @@ class ProviderConfig:
 
 
 # ---------------------------------------------------------------------------
+# Per-call request context — who an LLM call is made on behalf of
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class LLMCallContext:
+    """Per-call request context threaded into every `build_llm`.
+
+    Identifies the conversation an LLM construction serves so a
+    connector can forward it as provider session / cache-affinity
+    metadata (for example OpenCode Go's `x-opencode-session` header).
+    The engine builds one per exchange and reuses it for the pre-flight
+    build and every fallback attempt; compaction builds one for the
+    session it compacts.
+
+    `conversation_key` is DERIVED, never minted: the v1 rule is
+    `conversation_key == session_id` (apply it via
+    [`for_session`][llm.protocol.LLMCallContext.for_session]). It is
+    therefore stable across resume, new on `/new`, and distinct per
+    spawned workflow-node session. It is never a secret. Connectors
+    MAY forward it; they MUST NOT invent a substitute when the context
+    is absent.
+
+    Attributes:
+        session_id: The owning kolsch session id.
+        conversation_key: The provider-facing conversation identity,
+            derived from `session_id`.
+        agent_id: The agent the call is made for, when known.
+    """
+
+    session_id: str
+    conversation_key: str
+    agent_id: str | None = None
+
+    @classmethod
+    def for_session(
+        cls,
+        session_id: str,
+        *,
+        agent_id: str | None = None,
+    ) -> LLMCallContext:
+        """Build a context for `session_id` applying the v1 key rule.
+
+        Args:
+            session_id: The owning kolsch session id.
+            agent_id: The agent the call is made for, when known.
+
+        Returns:
+            A context whose `conversation_key` equals `session_id`.
+        """
+        return cls(
+            session_id=session_id,
+            conversation_key=session_id,
+            agent_id=agent_id,
+        )
+
+
+# ---------------------------------------------------------------------------
 # The Protocols
 # ---------------------------------------------------------------------------
 
@@ -242,6 +300,8 @@ class ProviderConnector(Protocol):
         provider_config: ProviderConfig,
         api_key: str | None,
         parameters: Mapping[str, Any] | None = None,
+        *,
+        context: LLMCallContext | None = None,
     ) -> crewai.LLM:
         """Construct a configured `crewai.LLM` for the named model.
 
@@ -252,6 +312,16 @@ class ProviderConnector(Protocol):
         the constructor kwargs but always let the connector's own
         infrastructure keys (`model`, `api_key`, `base_url`, `timeout`)
         win, so a YAML can't accidentally clobber routing.
+
+        `context` is the
+        [`LLMCallContext`][llm.protocol.LLMCallContext] for the session
+        the LLM serves. Every production caller passes one; `None`
+        appears only from test doubles. A connector that needs the
+        conversation key (e.g. to send a session header) and receives
+        `None` raises a typed `PlatformError` rather than minting an
+        id. Connectors that have no use for it accept and ignore it.
+        (Protocol change, bug-144: every in-tree connector takes this
+        keyword.)
         """
         ...
 

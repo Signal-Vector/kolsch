@@ -125,7 +125,7 @@ async def _build(
     async def default_llm(_request: LLMRequest) -> LLMResponse:
         return LLMResponse(content="ok", tool_calls=None, usage={}, raw={})
 
-    async def summariser_factory(_spec: Any) -> Any:
+    async def summariser_factory(_spec: Any, *, context: Any = None) -> Any:
         return default_llm
 
     compaction_provider = ReferenceSummaryCompactionProvider(

@@ -78,8 +78,8 @@ questions. Each maps to a Protocol method:
   fields (context_length, supports_tools, etc.) populated where
   the provider's API exposes them, `None` otherwise.
 - **How do we construct a `crewai.LLM` for this provider's
-  models?** → `build_llm(model_id, provider_config, api_key)`
-  returns a configured `crewai.LLM`. For OpenAI-compatible
+  models?** → `build_llm(model_id, provider_config, api_key,
+  parameters, *, context)` returns a configured `crewai.LLM`. For OpenAI-compatible
   providers this is essentially one call:
   `crewai.LLM(model=f"<litellm-prefix>/{model_id}",
   api_key=api_key, base_url=provider_config.base_url, ...)`. For
@@ -102,12 +102,14 @@ with the open question visible.
 ```python
 # src/llm/providers/<name>.py
 
-from typing import ClassVar
+from collections.abc import Mapping
+from typing import Any, ClassVar
 import crewai
 
 from src.llm.protocol import (
     AuthPromptSpec, PromptField,
     Credentials, ValidationResult,
+    LLMCallContext,
     ModelEntry,
     ProviderConfig,
 )
@@ -154,7 +156,13 @@ class <Name>Connector:
         model_id: str,
         provider_config: ProviderConfig,
         api_key: str | None,
+        parameters: Mapping[str, Any] | None = None,
+        *,
+        context: LLMCallContext | None = None,
     ) -> crewai.LLM:
+        # `context` (bug-144) identifies the owning session; forward
+        # `context.conversation_key` as provider session metadata if
+        # the provider wants it, otherwise ignore it.
         return crewai.LLM(
             model=f"<litellm-prefix>/{model_id}",
             api_key=api_key,

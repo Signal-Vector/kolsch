@@ -115,6 +115,8 @@ if TYPE_CHECKING:
 
     import crewai
 
+    from llm.protocol import LLMCallContext
+
 # The 30s default sits below the observed long-tail of opencode
 # responses (replay showed 12 successful calls between 30 and 56s,
 # with two reaching 112-113s). Users on affected models saw a 32%
@@ -276,6 +278,8 @@ class OpenCodeConnector:
         provider_config: ProviderConfig,
         api_key: str | None,
         parameters: Mapping[str, Any] | None = None,
+        *,
+        context: LLMCallContext | None = None,  # noqa: ARG002 — accepted per the bug-144 protocol; not yet forwarded
     ) -> crewai.LLM:
         """Construct a `crewai.LLM` pointed at OpenCode.
 
@@ -284,6 +288,9 @@ class OpenCodeConnector:
         (e.g. `{max_tokens, temperature, top_p}`) is forwarded to
         `crewai.LLM`. Infrastructure keys are dropped silently so
         agent YAML can't accidentally hijack routing.
+
+        `context` is the owning session's `LLMCallContext` (bug-144
+        protocol); accepted but not yet forwarded.
         """
         # bug-138: same client `crewai.LLM(model="hosted_vllm/...")` builds,
         # with kolsch's conditional strict tool-schema policy applied.

@@ -133,7 +133,7 @@ async def test_manual_compact_serialises_with_concurrent_exchange(
                 raw={},
             )
 
-    async def factory(_spec: Any) -> Any:
+    async def factory(_spec: Any, *, context: Any = None) -> Any:
         return _Summariser()
 
     provider = ReferenceSummaryCompactionProvider(llm_for_model=factory, config={})

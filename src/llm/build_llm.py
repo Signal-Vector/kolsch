@@ -25,7 +25,7 @@ from llm import registry
 if TYPE_CHECKING:
     import crewai
 
-    from llm.protocol import ProviderConfig
+    from llm.protocol import LLMCallContext, ProviderConfig
     from providers import SecretsProvider
     from schemas import ModelSpec
 
@@ -36,6 +36,7 @@ async def build_llm(
     secrets: SecretsProvider,
     *,
     configured_providers: list[str] | None = None,
+    context: LLMCallContext | None = None,
 ) -> crewai.LLM:
     """Construct a configured `crewai.LLM` for the given model spec.
 
@@ -44,7 +45,8 @@ async def build_llm(
     resolver. `provider_config` is the entry from `platform.yaml`'s
     `llm_providers[spec.provider]`, or `None` when the provider is
     absent (which raises `LlmProviderNotConfigured`). `secrets`
-    resolves the API key when the provider needs one.
+    resolves the API key when the provider needs one. `context` is
+    forwarded verbatim to the connector's `build_llm`.
 
     Args:
         spec: Canonical model spec — `{provider, model}` already
@@ -55,6 +57,9 @@ async def build_llm(
             when set.
         configured_providers: Sibling provider names for the
             `LlmProviderNotConfigured` error's suggestion list.
+        context: The [`LLMCallContext`][llm.protocol.LLMCallContext]
+            for the owning session. Production callers always pass
+            one; `None` is for test doubles only.
 
     Returns:
         A configured `crewai.LLM` the engine holds for the exchange's
@@ -103,6 +108,7 @@ async def build_llm(
             provider_config,
             api_key,
             parameters=spec.parameters or None,
+            context=context,
         )
     except PlatformError:
         # Already typed (e.g., provider raises a domain-specific

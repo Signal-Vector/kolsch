@@ -120,11 +120,13 @@ class _PerSpecFactory:
     ) -> None:
         self._mapping = mapping
         self.calls: list[tuple[str, str]] = []
+        self.contexts: list[Any] = []
 
     async def __call__(
-        self, spec: ModelSpec
+        self, spec: ModelSpec, *, context: Any = None
     ) -> Callable[[LLMRequest], Awaitable[LLMResponse]]:
         self.calls.append((spec.provider, spec.model))
+        self.contexts.append(context)
         key = (spec.provider, spec.model)
         if key not in self._mapping:
             msg = f"no factory wired for {key}"
@@ -294,6 +296,7 @@ async def test_tc_fb_01_rate_limited_falls_back_to_haiku() -> None:
         primary_spec=primary,
         chain=[haiku],
         llm_factory=factory,
+        context=None,
         config_event_id=f"ev_{uuid4()}",
     )
     response = await handle(_request())
@@ -359,6 +362,7 @@ async def test_tc_fb_02_full_chain_failure_raises_all_models_failed() -> None:
         primary_spec=primary,
         chain=[haiku, gpt],
         llm_factory=factory,
+        context=None,
         config_event_id=f"ev_{uuid4()}",
     )
 
@@ -408,6 +412,7 @@ async def test_tc_fb_03_primary_success_skips_chain() -> None:
         primary_spec=primary,
         chain=[haiku, gpt],
         llm_factory=factory,
+        context=None,
         config_event_id=f"ev_{uuid4()}",
     )
     response = await handle(_request())
@@ -494,6 +499,7 @@ async def test_tc_fb_08_three_entry_chain_second_fallback_succeeds() -> None:
         primary_spec=primary,
         chain=[haiku, gpt],
         llm_factory=factory,
+        context=None,
         config_event_id=f"ev_{uuid4()}",
     )
     response = await handle(_request())
@@ -546,6 +552,7 @@ async def test_tc_fb_09_fatal_aborts_without_consulting_chain() -> None:
         primary_spec=primary,
         chain=[haiku],
         llm_factory=factory,
+        context=None,
         config_event_id=f"ev_{uuid4()}",
     )
     with pytest.raises(ModelAuthenticationFailed):
@@ -722,6 +729,7 @@ async def test_tc_fb_07_streaming_post_token_does_not_fall_back() -> None:
         primary_spec=primary,
         chain=[haiku],
         llm_factory=factory,
+        context=None,
         config_event_id=f"ev_{uuid4()}",
         stream_state=stream_state,
     )
@@ -776,6 +784,7 @@ async def test_streaming_boundary_does_not_apply_before_first_token() -> None:
         primary_spec=primary,
         chain=[haiku],
         llm_factory=factory,
+        context=None,
         config_event_id=f"ev_{uuid4()}",
         stream_state=stream_state,
     )
@@ -797,7 +806,7 @@ async def test_streaming_boundary_fires_on_client_build_failure() -> None:
     stream_state = StreamState()
     stream_state.mark_content_emitted()  # primary streamed tokens earlier
 
-    async def crashing_factory(spec: ModelSpec) -> Any:
+    async def crashing_factory(spec: ModelSpec, *, context: Any = None) -> Any:
         _ = spec
         raise ModelRateLimited(provider="openrouter", model="x")
 
@@ -807,6 +816,7 @@ async def test_streaming_boundary_fires_on_client_build_failure() -> None:
         primary_spec=primary,
         chain=[haiku],
         llm_factory=crashing_factory,
+        context=None,
         config_event_id=f"ev_{uuid4()}",
         stream_state=stream_state,
     )
@@ -865,7 +875,7 @@ async def test_orchestrator_client_build_fatal_aborts() -> None:
     primary = _spec("anthropic", "opus")
     haiku = _spec("anthropic", "haiku")
 
-    async def crashing_factory(spec: ModelSpec) -> Any:
+    async def crashing_factory(spec: ModelSpec, *, context: Any = None) -> Any:
         _ = spec
         raise ModelAuthenticationFailed(
             provider="anthropic", model="opus", status_code=401
@@ -878,6 +888,7 @@ async def test_orchestrator_client_build_fatal_aborts() -> None:
         primary_spec=primary,
         chain=[haiku],
         llm_factory=crashing_factory,
+        context=None,
         config_event_id=f"ev_{uuid4()}",
     )
     with pytest.raises(ModelAuthenticationFailed):
@@ -894,6 +905,8 @@ async def test_orchestrator_client_build_recoverable_falls_back() -> None:
 
     async def factory(
         spec: ModelSpec,
+        *,
+        context: Any = None,
     ) -> Callable[[LLMRequest], Awaitable[LLMResponse]]:
         call_log.append(spec)
         if spec == primary:
@@ -907,6 +920,7 @@ async def test_orchestrator_client_build_recoverable_falls_back() -> None:
         primary_spec=primary,
         chain=[haiku],
         llm_factory=factory,
+        context=None,
         config_event_id=f"ev_{uuid4()}",
     )
     response = await handle(_request())
@@ -923,6 +937,8 @@ async def test_orchestrator_non_platform_exception_bubbles() -> None:
 
     async def factory(
         spec: ModelSpec,
+        *,
+        context: Any = None,
     ) -> Callable[[LLMRequest], Awaitable[LLMResponse]]:
         _ = spec
 
@@ -940,6 +956,7 @@ async def test_orchestrator_non_platform_exception_bubbles() -> None:
         primary_spec=primary,
         chain=[],
         llm_factory=factory,
+        context=None,
         config_event_id=f"ev_{uuid4()}",
     )
     with pytest.raises(RuntimeError, match="boom from below"):

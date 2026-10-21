@@ -138,6 +138,8 @@ if TYPE_CHECKING:
 
     import crewai
 
+    from llm.protocol import LLMCallContext
+
 
 # Pre-extraction private names, aliased for backwards compatibility
 # (tests and callers imported these from this module before spec-121
@@ -621,6 +623,8 @@ class ClaudeCodeConnector:
         provider_config: ProviderConfig,
         api_key: str | None,  # noqa: ARG002 — subscription auth, no key
         parameters: Mapping[str, Any] | None = None,  # noqa: ARG002 — v1 forwards none
+        *,
+        context: LLMCallContext | None = None,  # noqa: ARG002 — no per-conversation metadata on the `claude -p` path
     ) -> crewai.LLM:
         """Construct the `_ClaudeCodeLLM` for the named model.
 
@@ -635,6 +639,8 @@ class ClaudeCodeConnector:
         tune it below the adapter wrap), else the connector default.
         `parameters` is intentionally not forwarded — the `claude` CLI
         exposes no per-call temperature/top-p knob on this path.
+        `context` (bug-144 protocol) is accepted and ignored — the
+        one-shot `claude -p` path carries no per-conversation metadata.
         """
         timeout = (
             float(provider_config.timeout_seconds)

@@ -84,8 +84,8 @@ if TYPE_CHECKING:
     from engine.assembly import AssembledContext
     from engine.context import ExecutionContext
     from engine.event_observer import EventObserver
-    from engine.framework import Framework, LLMRequest, LLMResponse
-    from llm import ProviderConfig
+    from engine.framework import Framework, LLMFactory, LLMRequest, LLMResponse
+    from llm import LLMCallContext, ProviderConfig
     from providers import (
         AuthorizationProvider,
         ContextCompactionProvider,
@@ -242,13 +242,7 @@ class AgentEngine:
         subprocess_framework: Framework | None = None,
         llm: Callable[[LLMRequest], Awaitable[LLMResponse]] | None = None,
         llm_providers_config: dict[str, ProviderConfig] | None = None,
-        llm_for_model: (
-            Callable[
-                [ModelSpec],
-                Awaitable[Callable[[LLMRequest], Awaitable[LLMResponse]]],
-            ]
-            | None
-        ) = None,
+        llm_for_model: LLMFactory | None = None,
         compaction_provider: ContextCompactionProvider | None = None,
         observer: EventObserver | None = None,
     ) -> None:
@@ -785,6 +779,10 @@ class AgentEngine:
         outcome = await self._run_compaction_ladder(
             provider=provider,
             thread_id=thread_id,
+            llm_context=await self._llm_context_for_thread(
+                thread_id,
+                agent_id=str(config.agent_id),
+            ),
             events=events,
             budget=budget,
             base_keep_recent_fraction=base_keep_recent_fraction,
@@ -948,6 +946,7 @@ class AgentEngine:
         outcome = await self._run_compaction_ladder(
             provider=provider,
             thread_id=thread_id,
+            llm_context=await self._llm_context_for_thread(thread_id),
             events=events,
             budget=budget,
             base_keep_recent_fraction=base_keep_recent_fraction,
@@ -964,11 +963,34 @@ class AgentEngine:
             data=outcome.model_dump(mode="json"),
         )
 
+    async def _llm_context_for_thread(
+        self,
+        thread_id: ThreadId,
+        *,
+        agent_id: str | None = None,
+    ) -> LLMCallContext:
+        """Build the `LLMCallContext` for the session owning `thread_id`.
+
+        bug-144: the session-scoped compaction paths (manual
+        ``/compact``, session-open eager) run outside an exchange, so
+        they resolve the owning session from the store — the summariser
+        call then carries the same conversation key the session's
+        exchanges use.
+        """
+        from llm.protocol import LLMCallContext  # noqa: PLC0415
+
+        thread = await self._store.get_thread(thread_id)
+        return LLMCallContext.for_session(
+            str(thread.session_id),
+            agent_id=agent_id,
+        )
+
     async def _run_compaction_ladder(
         self,
         *,
         provider: ContextCompactionProvider,
         thread_id: ThreadId,
+        llm_context: LLMCallContext,
         events: list[Event],
         budget: int,
         base_keep_recent_fraction: float,
@@ -1016,6 +1038,9 @@ class AgentEngine:
         a live, context-mutating compaction, so a ``/compact --preview``
         that overflows must surface the failure (re-raise) rather than
         fall to tier 2.
+
+        ``llm_context`` (bug-144) is forwarded to every summariser
+        attempt so the provider sees the session's conversation key.
         """
         from providers.compaction import (  # noqa: PLC0415
             build_mechanical_truncation_payload,
@@ -1049,6 +1074,7 @@ class AgentEngine:
                         model_context_length=context_length,
                         thread_id=thread_id,
                         config=attempt_config,
+                        llm_context=llm_context,
                     )
                 except Exception as exc:  # noqa: BLE001 — ladder catches any raise
                     attempt_error = exc
@@ -1343,6 +1369,9 @@ class _Exchange:
         self.thread_id = str(context.thread_id)
         self.session_id: str = ""
         self.agent_id: str = str(config.agent_id)
+        # bug-144: built once per exchange (lazily, after pre-flight
+        # step 3 sets `session_id`) — see `_llm_call_context`.
+        self._llm_context: LLMCallContext | None = None
         # Wired in pre-flight step 6 — see _acquire_llm_if_needed.
         self.acquired_llm: crewai.LLM | None = None
         # Wired in pre-flight step 7 — Phase 1.3 fallback chain.
@@ -1867,14 +1896,38 @@ class _Exchange:
             provider_config,
             self.engine._secrets,
             configured_providers=sorted(self.engine._llm_providers_config),
+            context=self._llm_call_context(),
         )
+
+    def _llm_call_context(self) -> LLMCallContext:
+        """Return this exchange's `LLMCallContext`, building it once.
+
+        bug-144: derived from the exchange's kolsch `session_id` (v1
+        rule `conversation_key == session_id`) so the pre-flight build,
+        every fallback attempt, and per-exchange compaction share one
+        object — and one provider-facing conversation key.
+
+        Raises:
+            PlatformInternalError: called before pre-flight resolved
+                `session_id` (a programming error — no id is invented).
+        """
+        if self._llm_context is None:
+            if not self.session_id:
+                raise PlatformInternalError(
+                    original_type="engine.llm_context_before_session",
+                    args=["LLMCallContext requested before session_id resolved"],
+                )
+            from llm.protocol import LLMCallContext  # noqa: PLC0415
+
+            self._llm_context = LLMCallContext.for_session(
+                self.session_id,
+                agent_id=self.agent_id,
+            )
+        return self._llm_context
 
     def _build_llm_factory(
         self,
-    ) -> Callable[
-        [ModelSpec],
-        Awaitable[Callable[[LLMRequest], Awaitable[LLMResponse]]],
-    ]:
+    ) -> LLMFactory:
         """Return the per-spec LLM factory the orchestrator uses.
 
         Production callers wire `llm_for_model=` at engine
@@ -1902,8 +1955,11 @@ class _Exchange:
 
         async def _single_factory(
             spec: ModelSpec,
+            /,
+            *,
+            context: LLMCallContext | None,
         ) -> Callable[[LLMRequest], Awaitable[LLMResponse]]:
-            _ = spec
+            _ = spec, context
             return single
 
         return _single_factory
@@ -2726,6 +2782,7 @@ class _Exchange:
             llm_factory=llm_factory,
             config_event_id=self.config_event_id,
             stream_state=self.stream_state,
+            context=self._llm_call_context(),
         )
         tool_handles = [
             _ObservedToolHandle(
@@ -3100,6 +3157,7 @@ class _Exchange:
             outcome, error = await self._run_summariser_with_retry(
                 provider=provider,
                 events=events,
+                llm_context=self._llm_call_context(),
                 keep_tail_tokens=keep_tail_tokens,
                 context_length=context_length,
                 inner_config=inner_config,
@@ -3218,6 +3276,7 @@ class _Exchange:
         *,
         provider: ContextCompactionProvider,
         events: list[Event],
+        llm_context: LLMCallContext,
         keep_tail_tokens: int,
         context_length: int,
         inner_config: dict[str, Any],
@@ -3240,6 +3299,7 @@ class _Exchange:
                     model_context_length=context_length,
                     thread_id=self.context.thread_id,
                     config=inner_config,
+                    llm_context=llm_context,
                 )
             except Exception as exc:  # noqa: BLE001 — ladder catches any raise
                 last_error = exc

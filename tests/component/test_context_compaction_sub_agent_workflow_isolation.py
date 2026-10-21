@@ -151,7 +151,7 @@ async def test_workflow_agent_runner_compaction_stays_on_child_thread(
                 raw={},
             )
 
-    async def factory(_spec: Any) -> Any:
+    async def factory(_spec: Any, *, context: Any = None) -> Any:
         return _SummariserLLM()
 
     provider = ReferenceSummaryCompactionProvider(

@@ -196,7 +196,7 @@ async def test_manual_compact_forces_below_threshold(tmp_path: Path) -> None:
         '"last_event_id": "f", "event_count": 1}}'
     )
 
-    async def factory(_spec: Any) -> Any:
+    async def factory(_spec: Any, *, context: Any = None) -> Any:
         return recording
 
     provider = ReferenceSummaryCompactionProvider(
@@ -241,7 +241,7 @@ async def test_manual_compact_preview_sets_flag(tmp_path: Path) -> None:
         '"last_event_id": "f", "event_count": 1}}'
     )
 
-    async def factory(_spec: Any) -> Any:
+    async def factory(_spec: Any, *, context: Any = None) -> Any:
         return recording
 
     provider = ReferenceSummaryCompactionProvider(
@@ -279,7 +279,7 @@ async def test_manual_compact_threads_extra_instructions(tmp_path: Path) -> None
         '"last_event_id": "f", "event_count": 1}}'
     )
 
-    async def factory(_spec: Any) -> Any:
+    async def factory(_spec: Any, *, context: Any = None) -> Any:
         return recording
 
     provider = ReferenceSummaryCompactionProvider(
@@ -379,7 +379,7 @@ async def test_manual_compact_overflow_degrades_to_mechanical(tmp_path: Path) ->
     instead of propagating ModelContextOverflow."""
     summariser = _OverflowSummariser()
 
-    async def factory(_spec: Any) -> Any:
+    async def factory(_spec: Any, *, context: Any = None) -> Any:
         return summariser
 
     provider = ReferenceSummaryCompactionProvider(llm_for_model=factory, config={})
@@ -411,7 +411,7 @@ async def test_manual_compact_overflow_short_circuits_summariser(
     retry, no walking the remaining keep-fractions)."""
     overflow = _OverflowSummariser()
 
-    async def overflow_factory(_spec: Any) -> Any:
+    async def overflow_factory(_spec: Any, *, context: Any = None) -> Any:
         return overflow
 
     provider = ReferenceSummaryCompactionProvider(
@@ -438,7 +438,7 @@ async def test_manual_compact_transient_error_retries_then_truncates(
     twice before the ladder falls through to mechanical truncation."""
     transient = _TransientRaisingSummariser()
 
-    async def transient_factory(_spec: Any) -> Any:
+    async def transient_factory(_spec: Any, *, context: Any = None) -> Any:
         return transient
 
     provider = ReferenceSummaryCompactionProvider(
@@ -472,7 +472,7 @@ async def test_manual_compact_no_net_savings_keeps_summary(tmp_path: Path) -> No
         '"last_event_id": "f", "event_count": 1}}'
     )
 
-    async def factory(_spec: Any) -> Any:
+    async def factory(_spec: Any, *, context: Any = None) -> Any:
         return recording
 
     provider = ReferenceSummaryCompactionProvider(llm_for_model=factory, config={})
@@ -515,7 +515,7 @@ async def test_manual_compact_preview_overflow_never_mutates_context(
     compaction."""
     summariser = _OverflowSummariser()
 
-    async def factory(_spec: Any) -> Any:
+    async def factory(_spec: Any, *, context: Any = None) -> Any:
         return summariser
 
     provider = ReferenceSummaryCompactionProvider(llm_for_model=factory, config={})
