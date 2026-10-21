@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any
 from tools.builtins import (
     make_bash,
     make_browse_url,
+    make_jev_decide,
     make_list_files,
     make_read_file,
     make_write_file,
@@ -141,6 +142,9 @@ def build_workflow_executor(
     browse_url_defn = _stamp_kolsch(
         get_tool_definition(make_browse_url(policy=runtime.path_policy, root=root))
     )
+    jev_decide_defn = _stamp_kolsch(
+        get_tool_definition(make_jev_decide(policy=runtime.path_policy, root=root))
+    )
     registry = RunnerRegistry()
 
     def _executor_factory(**kwargs: Any) -> IterativeExecutor:
@@ -160,6 +164,7 @@ def build_workflow_executor(
         write_file_defn=write_file_defn,
         list_files_defn=list_files_defn,
         browse_url_defn=browse_url_defn,
+        jev_decide_defn=jev_decide_defn,
         workflow_store=store,
         executor_factory=_executor_factory,
     )

@@ -4,7 +4,7 @@ Standalone module hosting the catalog-ref dispatcher (NOT folded into
 `workflows.parser`). The parser imports `BUILTIN_TYPE_NAMES`,
 `builtin_name_for_ref`, and `CatalogNodeDef` from here.
 
-The 15 RESERVED catalog slots `kolsch/nodes/<name>` belong to the
+The 16 RESERVED catalog slots `kolsch/nodes/<name>` belong to the
 built-in node types declared in `workflows.parser`. Authored Python
 nodes live at any other `<bundle>/nodes/<name>`; parse-time they land
 in [`CatalogNodeDef`][workflows.catalog_node.CatalogNodeDef] carrying
@@ -44,7 +44,7 @@ __all__ = [
 ]
 
 
-# The 15 reserved built-in catalog slots. `kolsch/nodes/<name>` for
+# The 16 reserved built-in catalog slots. `kolsch/nodes/<name>` for
 # each `<name>` here is owned by the built-in node-type model (e.g.,
 # `BashNodeDef`); a user authoring `bundles/kolsch/nodes/bash.py`
 # collides with the reserved slot at catalog scan time
@@ -58,6 +58,7 @@ BUILTIN_TYPE_NAMES: frozenset[str] = frozenset(
         "compute",
         "delete_state",
         "filter",
+        "jev",
         "list_files",
         "map",
         "noop",
@@ -73,7 +74,7 @@ BUILTIN_TYPE_NAMES: frozenset[str] = frozenset(
 def is_builtin_ref(type_ref: str) -> bool:
     """Return `True` iff `type_ref` is a reserved built-in 3-seg slot.
 
-    A built-in slot is `kolsch/nodes/<name>` for one of the 15
+    A built-in slot is `kolsch/nodes/<name>` for one of the 16
     built-in names.
     """
     name = builtin_name_for_ref(type_ref)
@@ -83,7 +84,7 @@ def is_builtin_ref(type_ref: str) -> bool:
 def builtin_name_for_ref(type_ref: str) -> str | None:
     """Return the built-in name when `type_ref` is a reserved slot.
 
-    Returns the short name (`"bash"`) for one of the 15 reserved
+    Returns the short name (`"bash"`) for one of the 16 reserved
     `kolsch/nodes/<name>` slots, or `None` for non-3-seg refs,
     non-`kolsch` bundles, and 3-seg refs whose final segment is not in
     `BUILTIN_TYPE_NAMES`.

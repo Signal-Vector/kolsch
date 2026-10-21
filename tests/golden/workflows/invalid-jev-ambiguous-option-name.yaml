@@ -1,0 +1,26 @@
+# expected_error: WorkflowJevAmbiguousOptionName
+# spec-136 — a routed choice option named like a YAML boolean.
+nodes:
+  route:
+    type: kolsch/nodes/jev
+    state: some ticket
+    questions:
+      is_bug:
+        type: choice
+        instructions: Is this a bug?
+        criteria:
+          "True": It is a bug.
+          other: Anything else.
+    route_on: is_bug
+  bug_handler:
+    type: kolsch/nodes/noop
+  other_handler:
+    type: kolsch/nodes/noop
+graph:
+  edges:
+    - from: route
+      to: bug_handler
+      branch: "True"
+    - from: route
+      to: other_handler
+      branch: other

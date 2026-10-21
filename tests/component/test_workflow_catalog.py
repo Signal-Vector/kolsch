@@ -382,11 +382,12 @@ def test_reserved_builtin_refs_constant_matches_builtin_set() -> None:
     } == RESERVED_BUILTIN_NODE_REFS
 
 
-def test_builtin_node_entries_emits_15_entries() -> None:
-    # 15 reserved built-in nodes since PR #1 added `browse_url` as
-    # the 15th slot (was 14; parity guard for BUILTIN_TYPE_NAMES).
+def test_builtin_node_entries_emits_16_entries() -> None:
+    # 16 reserved built-in nodes since spec-136 added `jev` as the
+    # 16th slot (browse_url was the 15th; parity guard for
+    # BUILTIN_TYPE_NAMES).
     entries = builtin_node_entries()
-    assert len(entries) == 15
+    assert len(entries) == 16
     types = {e.asset_type for e in entries}
     assert types == {"node"}
     bundles = {e.bundle for e in entries}

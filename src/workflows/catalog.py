@@ -17,7 +17,7 @@ in `assets.catalog` for two new asset types:
 Every catalog entry's `ref` is built via
 [`build_ref`][assets.refs.build_ref] — no inline f-strings.
 
-**Virtual `kolsch` built-in nodes.** The 14 reserved
+**Virtual `kolsch` built-in nodes.** The 16 reserved
 `kolsch/nodes/<name>` slots from `BUILTIN_TYPE_NAMES` are registered
 unconditionally via `builtin_node_entries`. A user authoring a file at
 one of these reserved slots (`bundles/kolsch/nodes/bash.py`) trips
@@ -59,7 +59,7 @@ __all__ = [
 _log = logging.getLogger("workflows.catalog")
 
 
-# The 15 reserved built-in catalog slots — `BUILTIN_TYPE_NAMES`
+# The 16 reserved built-in catalog slots — `BUILTIN_TYPE_NAMES`
 # composed with the `kolsch/nodes/<name>` template via `build_ref`
 # (no inline f-strings).
 RESERVED_BUILTIN_NODE_REFS: frozenset[str] = frozenset(

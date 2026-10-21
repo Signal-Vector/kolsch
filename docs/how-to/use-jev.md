@@ -168,6 +168,75 @@ carries the full `answers`. In chat, the model sees the failure as a
 tool result and can ask the user or fall back. There is no default
 threshold: without `fail_below`, the tool never fails on answer values.
 
+## 6. Route a workflow with `kolsch/nodes/jev`
+
+The `kolsch/nodes/jev` workflow node asks the same typed questions and
+can drive **multi-way branching**: with `route_on` naming a `choice`
+question, each outgoing edge's `branch:` is an option name, and only
+the chosen option's arm fires. The starter workflow
+`kolsch/workflows/triage-tickets-jev` does exactly this:
+
+```yaml
+nodes:
+  route:
+    type: kolsch/nodes/jev
+    state: "{{ inputs.ticket_text }}"
+    questions:
+      team:
+        type: choice
+        instructions: Which team should handle this support ticket?
+        criteria:
+          billing: Charges, refunds, invoices, subscriptions.
+          outage: The service is down, erroring, or unreachable.
+          feature: A request for new or changed functionality.
+    route_on: team
+  billing_handler: { type: kolsch/nodes/compute, value: "billing" }
+  outage_handler:  { type: kolsch/nodes/compute, value: "on-call" }
+  feature_handler: { type: kolsch/nodes/compute, value: "backlog" }
+graph:
+  edges:
+    - { from: route, to: billing_handler, branch: billing }
+    - { from: route, to: outage_handler,  branch: outage }
+    - { from: route, to: feature_handler, branch: feature }
+```
+
+The node runs the `jev_decide` tool, so the default `prompt` rule
+applies. (Like `browse_url`, it uses the packaged tool shipped with
+kolsch, not a copy edited in your workspace's bundle. Known gap:
+`kolsch workflows resume` / `fork` currently deny jev nodes — their
+tool definitions lack the `kolsch` bundle stamp, so no
+`kolsch/tools/jev_decide` rule matches. `kolsch workflows run` is
+fine.) Allow it before a non-interactive run, then run the workflow:
+
+```bash
+kolsch permissions add --what kolsch/tools/jev_decide --effect allow --first
+kolsch workflows run kolsch/workflows/triage-tickets-jev \
+    --input ticket_text="the site is returning 502s"
+```
+
+The run's log records `workflow.node.completed` for `route` with
+`branch_value: "outage"`, the outage handler's completion, and a
+`workflow.node.pruned` (with the same string `branch_value`) for each
+other arm.
+
+- `route_on` on a `noul` question routes `branch: true` / `branch:
+  false` instead, with `value = noul >= noul_threshold` (default 0.5).
+- Without `route_on`, the node just captures
+  `{answers, model, usage}` for downstream binds
+  (`{{ nodes.route.answers.team.choice }}`).
+- A breached `fail_below` fails the node: `workflow.node.failed`
+  carries `nested_error.type: tool.jev_below_threshold` and the
+  failing questions. A missing key fails it with the hint "Run
+  `kolsch connect openrouter`." (Unlike an agent's tool list, an
+  explicit workflow node is not hidden when the key is missing.)
+- Don't name a choice option `true` or `false`. Unquoted, YAML loads
+  them as booleans and the node fails to parse; on a routed choice
+  even a quoted `"true"` is rejected, since `branch: true` is a
+  boolean and could never match it.
+
+See the [workflow YAML reference](../reference/workflow-yaml.md#kolschnodesjev)
+for every field and validator rule.
+
 ## Errors
 
 | Code | When |

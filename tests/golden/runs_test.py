@@ -1019,6 +1019,120 @@ def _build_triage_normal(
     return _build_triage(tmp_path, classify_label="normal")
 
 
+def _build_jev_route(
+    tmp_path: Path,
+    *,
+    choice: str,
+) -> tuple[Workflow, RunnerRegistry, dict[str, Any]]:
+    """spec-136 — a ``kolsch/nodes/jev`` choice routes three ways.
+
+    The REAL :class:`JevRunner` dispatches through the real
+    ``dispatch_tool`` against a ``jev_decide``-named tool that shares
+    the real args schema but returns a canned Jev answer — no HTTP, so
+    the golden is deterministic. The chosen arm fires; the other two
+    emit ``workflow.node.pruned`` carrying the str ``branch_value``.
+    """
+    from providers.authz import RuleBasedAuthorizationProvider
+    from providers.sandbox import NativeSandboxProvider
+    from providers.secrets import DotenvSecretsProvider
+    from tools.builtins import load_jev_decide_module
+    from tools.decorator import ToolContext, get_tool_definition, tool
+    from workflows.builtins.compute import ComputeRunner
+    from workflows.builtins.jev import JevRunner
+
+    args_schema = load_jev_decide_module().JevDecideArgs
+
+    @tool(name="jev_decide", description="canned Jev", args_schema=args_schema)
+    async def _canned_jev(args: Any, ctx: ToolContext) -> dict[str, Any]:
+        _ = (args, ctx)
+        others = [o for o in ("billing", "outage", "feature") if o != choice]
+        return {
+            "model": "typesafe/jev-1.14-20261014",
+            "answers": {
+                "team": {
+                    "type": "choice",
+                    "choice": choice,
+                    "confidence": 0.9,
+                    "probabilities": {choice: 0.9, others[0]: 0.06, others[1]: 0.04},
+                }
+            },
+            "usage": {"input_tokens": 120, "output_tokens": 12},
+        }
+
+    defn = get_tool_definition(_canned_jev)
+    defn.home_bundle = "kolsch"
+    (tmp_path / ".env").write_text("", encoding="utf-8")
+    registry = RunnerRegistry()
+    registry.register(
+        "kolsch/nodes/jev",
+        JevRunner(
+            tool_defn=defn,
+            authz=RuleBasedAuthorizationProvider(
+                config={"rules": [{"what": "*", "pattern": "*", "effect": "allow"}]}
+            ),
+            secrets=DotenvSecretsProvider(root=tmp_path, config={"path": ".env"}),
+            sandbox=NativeSandboxProvider(config={}),
+        ),
+    )
+    registry.register("kolsch/nodes/compute", ComputeRunner())
+
+    def _handler(team: str) -> dict[str, Any]:
+        return {
+            "type": "kolsch/nodes/compute",
+            "value": "{{ '" + team + " (' ~ inputs.confidence ~ ')' }}",
+        }
+
+    def _edge(team: str) -> dict[str, Any]:
+        return {
+            "from": "route",
+            "to": f"{team}_handler",
+            "branch": team,
+            "binds": {"confidence": "{{ nodes.route.answers.team.confidence }}"},
+        }
+
+    workflow = Workflow.model_validate(
+        {
+            "nodes": {
+                "route": {
+                    "type": "kolsch/nodes/jev",
+                    "state": "ticket text",
+                    "questions": {
+                        "team": {
+                            "type": "choice",
+                            "instructions": "Which team should handle this ticket?",
+                            "criteria": {
+                                "billing": None,
+                                "outage": None,
+                                "feature": None,
+                            },
+                        }
+                    },
+                    "route_on": "team",
+                },
+                "billing_handler": _handler("billing"),
+                "outage_handler": _handler("outage"),
+                "feature_handler": _handler("feature"),
+            },
+            "graph": {"edges": [_edge(t) for t in ("billing", "outage", "feature")]},
+        }
+    )
+    return workflow, registry, {}
+
+
+def _build_jev_route_outage(
+    tmp_path: Path,
+) -> tuple[Workflow, RunnerRegistry, dict[str, Any]]:
+    """Jev chooses ``outage`` — outage arm fires, two arms pruned."""
+    return _build_jev_route(tmp_path, choice="outage")
+
+
+def _build_jev_route_billing(
+    tmp_path: Path,
+) -> tuple[Workflow, RunnerRegistry, dict[str, Any]]:
+    """Jev chooses ``billing`` — billing arm fires, two arms pruned."""
+    return _build_jev_route(tmp_path, choice="billing")
+
+
 def _build_state_resume(
     tmp_path: Path,
 ) -> tuple[Workflow, RunnerRegistry, dict[str, Any]]:
@@ -1475,6 +1589,9 @@ _FIXTURES: tuple[
     ),
     # Phase 3.10 — parallel map iteration golden.
     ("parallel-map-demo", _build_parallel_map_demo, "succeeded"),
+    # spec-136 — Jev multi-way (string-valued) branching.
+    ("jev-route-outage", _build_jev_route_outage, "succeeded"),
+    ("jev-route-billing", _build_jev_route_billing, "succeeded"),
 )
 
 

@@ -96,7 +96,7 @@ workflow can `copy_of:` or reference.
 
 ## Node types
 
-Fifteen built-in node types ship with the platform, each
+Sixteen built-in node types ship with the platform, each
 registered at `kolsch/nodes/<name>`:
 
 - `bash` — run a shell command. Branchable on exit code.
@@ -114,6 +114,11 @@ registered at `kolsch/nodes/<name>`:
   the corresponding tools.
 - `browse_url` — fetch a rendered web page via the `browse_url`
   tool (opt-in `kolsch[browse]` extra: Playwright + Chromium).
+- `jev` — ask Jev (TypeSafe AI's decision model, via the
+  `jev_decide` tool) typed questions about some content. With
+  `route_on` it is a branch source: a `choice` question routes
+  multi-way (`branch: <option name>`), a `noul` question routes
+  true/false.
 - `agent` — invoke a catalogued Kolsch agent through the Agent Engine.
 - `workflow` — spawn a sub-workflow (nested runs share the trace
   id; depth is capped at 16).
@@ -215,9 +220,12 @@ so authors see all the problems at once:
    reachable from a start. No bind-key collisions across
    multi-input edges. No unreachable nodes.
 3. **Branching.** `branch:` edges only fire off branchable sources
-   (`bash`, `branch` node, or authored `@node` returning
-   `bool` / `tuple[bool, BaseModel]`). A `branch` node must wire
-   both true and false arms.
+   (`bash`, `branch` node, authored `@node` returning
+   `bool` / `tuple[bool, BaseModel]`, or a `jev` node with
+   `route_on`). A `branch` node (and a `jev` noul route) must wire
+   both true and false arms. A `jev` choice route uses string arms —
+   one per option name, every option wired — and a string arm on a
+   boolean source is a type mismatch.
 4. **Jinja refs.** A Jinja AST walk of every string in the
    workflow checks that `nodes.<X>.<Y>` references name a defined
    node, that the referenced node is a transitive predecessor, that

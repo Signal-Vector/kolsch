@@ -113,6 +113,8 @@ BUILTIN_PHASE_MAP: Mapping[str, str] = {
     "compute": "3.6",
     "map": "3.7",
     "workflow": "3.7",
+    # spec-136 — the Jev decision node (and multi-way `branch:` arms).
+    "jev": "spec-136",
 }
 
 
@@ -1608,6 +1610,12 @@ class IterativeExecutor:
                         output = bash_exc.captured
                     else:
                         raise
+                self._check_branch_arms(
+                    node_name=node_name,
+                    node_def=node_def,
+                    output=output,
+                    inv_id=inv_id,
+                )
             except WorkflowPausedForInput as pause:
                 # Pause discipline. The `user_input` runner raised
                 # the typed pause signal AFTER the executor already
@@ -2219,7 +2227,7 @@ class IterativeExecutor:
 
         async def _run_body() -> dict[str, Any]:
             try:
-                return await runner.run(
+                output = await runner.run(
                     node_name=pending.node_name,
                     node_def=pending.node_def,
                     bound_inputs=pending.bound_inputs,
@@ -2227,9 +2235,16 @@ class IterativeExecutor:
                     ctx=pending.ctx,
                 )
             except BashNonZeroExit as bash_exc:
-                if self._bash_treats_nonzero_as_success(pending.node_name):
-                    return bash_exc.captured
-                raise
+                if not self._bash_treats_nonzero_as_success(pending.node_name):
+                    raise
+                output = bash_exc.captured
+            self._check_branch_arms(
+                node_name=pending.node_name,
+                node_def=pending.node_def,
+                output=output,
+                inv_id=pending.inv_id,
+            )
+            return output
 
         if touches_state:
             # State-mutation lock serialises the
@@ -2759,7 +2774,7 @@ class IterativeExecutor:
         self,
         *,
         node_name: str,
-        branch_value: bool | None,
+        branch_value: bool | str | None,
         inv_id: InvocationId,
     ) -> None:
         """Filter the source's outgoing edges by their `branch:` field.
@@ -2771,29 +2786,83 @@ class IterativeExecutor:
           None)` fire; `False` arms are pruned.
         - `branch_value is False`: edges with `edge.branch in
           (False, None)` fire; `True` arms are pruned.
+        - `branch_value` is a str (spec-136, a `kolsch/nodes/jev`
+          choice): edges whose `branch` equals the chosen option (or
+          is `None`) fire; every other arm is pruned. Same equality
+          test as the bool case.
 
         Pruned edges are added to `_pruned_edges` so
         `_render_bound_inputs` skips them and the cascade (run from
         the worklist immediately after dispatch) can suppress
-        descendants. The defensive raise covers the case where a
-        non-branchable source has a `branch:` edge in the graph (the
-        validator already blocks this at parse time — this is the
-        runtime belt-and-braces).
+        descendants. Arm/value consistency is checked earlier, inside
+        the node's failure path, by
+        [`_check_branch_arms`][workflows.executor.IterativeExecutor._check_branch_arms].
         """
+        _ = inv_id
         for edge in self._outgoing_edges(node_name):
             if edge.branch is None:
                 continue
-            if branch_value is None:
-                raise WorkflowNodeFailed(
-                    node=node_name,
-                    invocation_id=str(inv_id),
-                    cause=ValueError(
-                        f"node {node_name!r} has branch edge to "
-                        f"{edge.to!r} but produced no branch value"
-                    ),
-                )
             if edge.branch != branch_value:
                 self._pruned_edges.add((edge.from_, edge.to))
+
+    def _check_branch_arms(
+        self,
+        *,
+        node_name: str,
+        node_def: Any,
+        output: dict[str, Any],
+        inv_id: InvocationId,
+    ) -> None:
+        """Runtime belt-and-braces for the validator's branching rules.
+
+        Called right after the runner returns, INSIDE the node's
+        failure path, so a violation emits `workflow.node.failed`
+        instead of silently pruning every arm. It matters on paths
+        that re-enter the worklist without the validator (resume /
+        fork reload the YAML unvalidated):
+
+        - a `branch:` edge on a source that produced no branch value;
+        - an arm whose type (bool vs str) differs from the value's —
+          e.g. a pre-spec-136 `branch: yes` (now a str) on a boolean
+          source;
+        - a str value (a jev choice) that no arm names — e.g. Jev
+          returned an option the workflow doesn't wire. Str-only: a
+          boolean source may legitimately wire one arm.
+
+        Raises:
+            WorkflowNodeFailed: Any of the above.
+        """
+        routed = [e for e in self._outgoing_edges(node_name) if e.branch is not None]
+        if not routed:
+            return
+        branch_value = compute_branch_value(node_def, output)
+        if branch_value is None:
+            cause: Exception = ValueError(
+                f"node {node_name!r} has branch edge to {routed[0].to!r} "
+                "but produced no branch value"
+            )
+        elif mismatched := [
+            e
+            for e in routed
+            if isinstance(e.branch, bool) != isinstance(branch_value, bool)
+        ]:
+            cause = TypeError(
+                f"node {node_name!r} produced branch value {branch_value!r} "
+                f"but its edge to {mismatched[0].to!r} has branch "
+                f"{mismatched[0].branch!r} of a different type (bool vs "
+                "option name); validate the workflow"
+            )
+        elif isinstance(branch_value, str) and not any(
+            e.branch == branch_value for e in routed
+        ):
+            cause = ValueError(
+                f"node {node_name!r} chose unknown option {branch_value!r}: "
+                f"no outgoing edge has that branch "
+                f"(arms: {[e.branch for e in routed]!r})"
+            )
+        else:
+            return
+        raise WorkflowNodeFailed(node=node_name, invocation_id=str(inv_id), cause=cause)
 
     def _bash_treats_nonzero_as_success(self, node_name: str) -> bool:
         """Return `True` iff this bash node is branchable on exit code.
@@ -2810,7 +2879,7 @@ class IterativeExecutor:
         *,
         source: str,
         source_completion_event_id: Any,
-        branch_value: bool | None,
+        branch_value: bool | str | None,
     ) -> None:
         """Reverse-reachability cascade from `source`.
 
@@ -2868,7 +2937,7 @@ class IterativeExecutor:
         *,
         node_name: str,
         upstream_source: str,
-        branch_value: bool,
+        branch_value: bool | str,
         parent_event_id: Any,
     ) -> None:
         """Append a `WorkflowNodePrunedEvent` to the run's JSONL.

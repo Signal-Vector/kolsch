@@ -30,6 +30,7 @@ from workflows.builtins.catalog_node_runner import CatalogNodeRunner
 from workflows.builtins.compute import ComputeRunner
 from workflows.builtins.delete_state import DeleteStateRunner
 from workflows.builtins.filter import FilterRunner
+from workflows.builtins.jev import JevRunner
 from workflows.builtins.list_files import ListFilesRunner
 from workflows.builtins.map import MapRunner
 from workflows.builtins.noop import NoopRunner
@@ -64,6 +65,7 @@ __all__ = [
     "ComputeRunner",
     "DeleteStateRunner",
     "FilterRunner",
+    "JevRunner",
     "ListFilesRunner",
     "MapRunner",
     "NoopRunner",
@@ -93,6 +95,7 @@ def register_builtins(
     write_file_defn: ToolDefinition | None = None,
     list_files_defn: ToolDefinition | None = None,
     browse_url_defn: ToolDefinition | None = None,
+    jev_decide_defn: ToolDefinition | None = None,
     workflow_store: WorkflowRunStore | None = None,
     executor_factory: (Callable[..., IterativeExecutor] | None) = None,
 ) -> None:
@@ -117,8 +120,8 @@ def register_builtins(
       factory seam exists to avoid a circular import between this
       package and [`workflows.executor`][workflows.executor].
     - `kolsch/nodes/read_file` / `write_file` / `list_files` /
-      `browse_url` — each registers only when its `ToolDefinition` is
-      supplied.
+      `browse_url` / `jev` — each registers only when its
+      `ToolDefinition` is supplied.
     - The catalog-driven authored-`@node` dispatch (the
       [`CatalogNodeRunner`][workflows.builtins.CatalogNodeRunner]
       fallback) installs when `catalog` is supplied.
@@ -146,6 +149,8 @@ def register_builtins(
         list_files_defn: The `list_files` tool definition.
         browse_url_defn: The `browse_url` tool definition — enables
             `kolsch/nodes/browse_url` (fetches rendered web pages).
+        jev_decide_defn: The `jev_decide` tool definition — enables
+            `kolsch/nodes/jev` (typed Jev decisions; multi-way routing).
         workflow_store: The workflow run store — required for the
             sub-workflow runner.
         executor_factory: Callable returning an
@@ -238,6 +243,19 @@ def register_builtins(
             "kolsch/nodes/browse_url",
             BrowseUrlRunner(
                 tool_defn=browse_url_defn,
+                authz=authz,
+                secrets=secrets,
+                sandbox=sandbox,
+            ),
+        )
+    # `jev` runner (spec-136). Same tool-backed shape as browse_url —
+    # dispatches the starter-bundle `jev_decide` tool via
+    # `dispatch_tool`; its `{value}` capture drives multi-way branching.
+    if jev_decide_defn is not None:
+        registry.register(
+            "kolsch/nodes/jev",
+            JevRunner(
+                tool_defn=jev_decide_defn,
                 authz=authz,
                 secrets=secrets,
                 sandbox=sandbox,
