@@ -254,9 +254,13 @@ work. Its responsibilities, in order of an `execute` call:
    from the log to rebuild its cache (per Memory contract §3.3).
 6. **Acquire LLM client for the primary model.** *(Phase 1.1 — LLM-R3;
    retitled by Phase 1.3 — FB-R3.)* Call
-   `build_llm(config.model, provider_config, secrets)` where
-   `provider_config` is the entry from `platform.yaml`'s
-   `llm_providers[config.model.provider]`. Hold the returned
+   `build_llm(config.model, provider_config, secrets, context=...)`
+   where `provider_config` is the entry from `platform.yaml`'s
+   `llm_providers[config.model.provider]` and `context` is the
+   exchange's `LLMCallContext` (bug-144 — built once per exchange from
+   the session id resolved at step 3; see
+   [LLM providers §3.6](llm-providers.md#36-per-call-request-context-request-policy-and-user-agent-bug-144)).
+   Hold the returned
    `crewai.LLM` for the exchange's lifetime; pass it to the Framework
    via the Framework Protocol. On any `llm.*` Fatal
    (`llm.provider_not_configured`, `llm.secret_missing`,
@@ -455,7 +459,9 @@ timeout, context overflow — see Error Model §4.15 for the trigger
 table), the engine:
 
 1. Constructs the next attempt's `crewai.LLM` from the chain
-   resolved at pre-flight step 7 (lazy build via `build_llm`).
+   resolved at pre-flight step 7 (lazy build via `build_llm`), passing
+   the SAME `LLMCallContext` object as the primary attempt, so every
+   attempt carries one conversation key.
 2. Emits a `model.fallback` event for the transition.
 3. Re-issues the request against the new model. Same lifecycle
    handlers fire; recursion-by-iteration walks the chain.
@@ -519,6 +525,20 @@ default: 80% of the model's window), the engine triggers compaction:
 The compaction *algorithm* is the Memory provider's concern; the
 *triggering* and *event emission* are the engine's. The log loses
 nothing — the full pre-compaction content is in the event.
+
+**Summariser seam (bug-144).** The engine calls
+`ContextCompactionProvider.compact(..., llm_context=...)` with the
+owning session's `LLMCallContext` on every compaction path: the
+per-exchange trigger passes the exchange's context; manual
+`/compact` and session-open eager compaction resolve the session from
+the thread. `llm_context` is a **required keyword** (contract change
+in bug-144); a variant forwards it to its LLM factory as
+`llm_for_model(spec, context=llm_context)` so the summariser call
+carries the same conversation key as the session's exchanges. A
+variant written to the older signature raises `TypeError`, which the
+compaction ladder catches and silently degrades to mechanical
+truncation — see the migration note in
+[Context compaction](../how-to/context-compaction.md#add-a-custom-variant).
 
 ### 2.7 Retries
 

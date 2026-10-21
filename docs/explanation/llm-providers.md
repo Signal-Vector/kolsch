@@ -60,6 +60,9 @@ async def build_llm(
     spec: ModelSpec,
     provider_config: ProviderConfig,
     secrets: SecretsProvider,
+    *,
+    configured_providers: list[str] | None = None,
+    context: LLMCallContext | None = None,
 ) -> crewai.LLM:
     """Bridge from ModelSpec to a usable crewai.LLM."""
     connector = registry.get(provider_config.type)
@@ -70,12 +73,16 @@ async def build_llm(
     )
     return await connector.build_llm(
         spec.model, provider_config, api_key,
+        parameters=spec.parameters or None,
+        context=context,
     )
 ```
 
 That's the whole helper. Every provider-specific concern lives in
 the connector's `build_llm` method (Part 3). Adding a provider does
-not modify this function.
+not modify this function. `context` — the owning session's
+[`LLMCallContext`](#36-per-call-request-context-request-policy-and-user-agent-bug-144)
+— is forwarded verbatim; every production caller passes one.
 
 **Pre-flight integration.** The Agent Engine calls this at
 pre-flight step 6 (engine contract §2.1) for each exchange. The
@@ -165,10 +172,21 @@ class ProviderConnector(Protocol):
         model_id: str,
         provider_config: ProviderConfig,
         api_key: str | None,
+        parameters: Mapping[str, Any] | None = None,
+        *,
+        context: LLMCallContext | None = None,
     ) -> crewai.LLM:
         """Construct a configured crewai.LLM for the named
-        model."""
+        model. `context` identifies the session the LLM serves
+        (§3.6)."""
 ```
+
+**Declared protocol change (bug-144).** The keyword-only `context`
+parameter was added to every in-tree connector and test double in
+one change. Connectors are registered in-tree only
+(`src/llm/providers/__init__.py`), so there is no runtime signature
+probing; `src/llm/providers/README.md` §2.7 is the migration note for
+anyone carrying a connector of their own.
 
 ### 3.1 Supporting dataclasses
 
@@ -366,6 +384,75 @@ opencode-served models automatically, without editing
 returns `None` and compaction skips silently — see the
 compaction docs for the resulting user-facing notice.
 
+### 3.6 Per-call request context, request policy, and User-Agent (bug-144)
+
+Some gateways need to know which conversation a request belongs to.
+OpenCode Go rejects chat completions that lack a stable
+`x-opencode-session` header (`400 MissingSessionID`) and asks clients
+to identify themselves with their own User-Agent. Three pieces make
+that provider-neutral.
+
+**`LLMCallContext`** (`llm.protocol`) is a frozen value threaded from
+the engine into every `build_llm`:
+
+| Field | Meaning |
+|---|---|
+| `session_id` | The owning kolsch session. |
+| `conversation_key` | The provider-facing conversation identity. **Derived, never minted.** |
+| `agent_id` | The agent the call is made for, when known. |
+
+The v1 derivation rule is `conversation_key == session_id`, applied by
+`LLMCallContext.for_session(session_id)`. Consequences:
+
+- **Stable within a session.** One context object is built per
+  exchange and reused for the pre-flight build and every fallback
+  attempt; every exchange in the session derives the same key.
+  Compaction's summariser call (per-exchange, manual `/compact`,
+  session-open eager) carries the same key.
+- **Survives resume.** Resuming a session reuses its `session_id`, so
+  the key — and any provider-side prompt cache keyed on it — carries
+  over.
+- **New on `/new`.** `/new` opens a new session, hence a new key.
+- **Per workflow node.** Each workflow agent node runs in its own
+  spawned session, so each gets its own key (workflow-wide affinity is
+  a planned follow-up).
+- **Never a secret, never invented.** It is an internal `ses_<uuid>`.
+  A connector that needs a key and receives `context=None` raises
+  `llm.client_init_failed`; no connector ever mints a substitute id
+  (it would be state the event log can't reconstruct).
+- **Not on `model.request` yet.** The key equals the envelope's
+  `session_id`, which every event already carries. The ticket that
+  first makes the key differ from `session_id` (e.g. workflow-wide
+  affinity) adds a `conversation_key` field to `model.request` in the
+  same change.
+
+The context is also exposed read-only on the engine's
+`FallbackLLMHandle.context`, so a framework that never calls
+`build_llm` (the `claude_code` subprocess harness) can read the key.
+
+**Request policy.** Each OpenAI-compatible connector declares a
+`DEFAULT_REQUEST_POLICY` (`OpenAICompatRequestPolicy`), whose v1 field
+`session_headers` names the headers that carry the conversation key:
+
+| Connector | Default `session_headers` |
+|---|---|
+| `opencode` | `["x-opencode-session"]` |
+| `openrouter` | `[]` |
+| `claude_code` | not applicable (accepts and ignores `context`) |
+
+Any provider entry can override it in `platform.yaml` without new code
+(see Part 6.2). The policy holds header **names** only — values always
+come from the context — so no secret can enter config.
+
+**User-Agent.** Every OpenAI-compatible request sends
+`User-Agent: kolsch/<installed version>` (from the public helper
+`llm.user_agent.kolsch_user_agent()`), replacing the OpenAI SDK's
+default. Agent-YAML `parameters` cannot override the session headers
+or the User-Agent: header-, query- and routing-shaped keys
+(`default_headers`, `extra_headers`, `headers`, `client_params`,
+`organization`, `project`, `default_query`, `api_base`, plus the
+routing keys) are dropped before the client is built.
+
 ---
 
 ## Part 4 — Reference Implementations
@@ -406,12 +493,21 @@ class OpenCodeConnector:
         # GET {base_url}/models — returns IDs only, no parameters.
         return [ModelEntry(id=m["id"]) for m in models]
 
-    async def build_llm(self, model_id, provider_config, api_key):
-        return crewai.LLM(
-            model=f"openai/{model_id}",
-            api_key=api_key,
-            base_url=provider_config.base_url,
-            timeout=provider_config.timeout_seconds,
+    # bug-144: OpenCode Go routes on a per-conversation header.
+    DEFAULT_REQUEST_POLICY = OpenAICompatRequestPolicy(
+        session_headers=("x-opencode-session",),
+    )
+
+    async def build_llm(self, model_id, provider_config, api_key,
+                        parameters=None, *, context=None):
+        # CrewAI's `hosted_vllm` route via kolsch's shared builder:
+        # strict tool-schema policy (bug-138), session headers +
+        # kolsch User-Agent (bug-144), agent parameters filtered.
+        return build_openai_compatible_llm(
+            provider="hosted_vllm", model_id=model_id,
+            provider_config=provider_config, api_key=api_key,
+            default_timeout=180.0, parameters=parameters,
+            context=context, default_policy=self.DEFAULT_REQUEST_POLICY,
         )
 ```
 
@@ -464,12 +560,15 @@ class OpenRouterConnector:
         # rich parameters (id, context_length, pricing, etc.).
         return entries
 
-    async def build_llm(self, model_id, provider_config, api_key):
-        return crewai.LLM(
-            model=f"openrouter/{model_id}",
-            api_key=api_key,
-            base_url=provider_config.base_url,
-            timeout=provider_config.timeout_seconds,
+    DEFAULT_REQUEST_POLICY = OpenAICompatRequestPolicy()  # no session header
+
+    async def build_llm(self, model_id, provider_config, api_key,
+                        parameters=None, *, context=None):
+        return build_openai_compatible_llm(
+            provider="openrouter", model_id=model_id,
+            provider_config=provider_config, api_key=api_key,
+            default_timeout=30.0, parameters=parameters,
+            context=context, default_policy=self.DEFAULT_REQUEST_POLICY,
         )
 
     # === MetadataSourceConnector extension ===
@@ -644,6 +743,37 @@ Interaction with retry layers:
   the entire exchange (full message reassembly). Independent of
   the connector timeout.
 
+### 6.2 `request_policy` (per-provider session headers)
+
+Override a connector's default session headers (§3.6) per provider:
+
+```yaml
+# platform.yaml
+llm_providers:
+  my_gateway:
+    type: opencode               # any OpenAI-compatible connector
+    base_url: https://gateway.example.com/v1
+    api_key_secret: MY_GATEWAY_API_KEY
+    request_policy:
+      session_headers: ["x-session-affinity"]   # replaces the default
+```
+
+- Each listed header is sent with the session's conversation key as
+  its value. `[]` sends no session header; omitting `request_policy`
+  (or `session_headers`) keeps the connector default.
+- Names must be RFC 7230 header tokens and may not be
+  `Authorization`, `Proxy-Authorization`, `Cookie`, `User-Agent`,
+  `Content-Type`, `Content-Length` or `Host` (case-insensitive).
+  Duplicates are dropped case-insensitively. `session_headers` is the
+  only accepted key — there is deliberately no way to set a static
+  header value.
+- Validation is **fail-fast and global**: a malformed `request_policy`
+  on any one provider raises `config.invalid` (naming the provider and
+  path) when the runtime boots and in `kolsch connect` / `refresh`,
+  which blocks every provider until it is fixed. The runtime, the CLI
+  and tooling all build provider entries through the single factory
+  `llm.provider_config_from_yaml`, so they can't disagree.
+
 ---
 
 ## Part 7 — Failure Modes
@@ -654,7 +784,8 @@ Catalog (Error Model §4.13):
 |---|---|---|
 | `llm.provider_not_configured` | Fatal | `build_llm` |
 | `llm.secret_missing` | Fatal | `build_llm` (chains `secret.not_found`) |
-| `llm.client_init_failed` | Fatal | connector's `build_llm` |
+| `llm.client_init_failed` | Fatal | connector's `build_llm` (incl. a session-header policy built with no `LLMCallContext`) |
+| `config.invalid` | Fatal | `provider_config_from_yaml` (malformed `request_policy`) |
 | `config.unknown_alias` | Fatal | kernel resolver |
 | `llm.connector_unknown` | Fatal | `registry.get` |
 | `llm.discovery_failed` | Recoverable | connector's `discover_models` |

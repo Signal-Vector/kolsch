@@ -63,7 +63,9 @@ is the connector — a direct Anthropic connector isn't shipping today.
 `/v1/models` for discovery). Use it for OpenAI itself, self-hosted
 vLLM, LiteLLM proxies, or any third-party OpenAI-shaped shim. Its
 catalog exposes only model IDs; parameter metadata comes from
-OpenRouter when both are connected.
+OpenRouter when both are connected. It also works with
+[OpenCode Go](#opencode-go) — kolsch sends the per-conversation session
+header Go requires automatically.
 
 **`claude_code`** — run an agent on Claude via your **Claude
 subscription** through the local `claude` CLI, no API key and no
@@ -228,6 +230,74 @@ first alphabetical alias; then the first model from `openrouter`;
 then from `opencode`; then falls back to
 `{provider: mock, model: mock-model}` if nothing is connected.
 
+## OpenCode Go
+
+[OpenCode Go](https://opencode.ai/docs/go/) is a subscription gateway
+that serves a rotating set of open models. Use the `opencode`
+connector with Go's OpenAI-compatible endpoint:
+
+```yaml
+# platform.yaml (written by `kolsch connect opencode`)
+llm_providers:
+  opencode:
+    base_url: https://opencode.ai/inference/go/openai/v1
+    api_key_secret: OPENCODE_API_KEY
+```
+
+- **Base URL.** At the time of writing, Go's docs list
+  `https://opencode.ai/inference/go/openai/v1/chat/completions` for its
+  OpenAI-compatible models, so the base URL is
+  `https://opencode.ai/inference/go/openai/v1`. The older
+  `https://opencode.ai/zen/go/v1` path still answered when this was
+  written but is no longer documented; prefer the current one. Check
+  the Go page if connecting fails with a 404.
+- **Only chat-completions models work.** The `opencode` connector
+  speaks OpenAI chat completions. Go models served only on its
+  `/responses`, Anthropic `/messages` or Google endpoints are not
+  reachable through it — pick a model the Go page lists under
+  `/chat/completions`.
+- **Session header — automatic.** Go requires a stable session id in
+  `x-opencode-session` for each conversation (requests without it fail
+  with `400 MissingSessionID`). kolsch sends the current session's id
+  there on every call: stable across a session and across resume, new
+  after `/new`, and separate for each workflow node. You configure
+  nothing.
+- **User-Agent — automatic.** Go asks clients to identify themselves
+  with their own user agent; kolsch sends `kolsch/<version>`.
+- **Models drift.** Go's lineup changes; a model that worked last month
+  may be gone (`kimi-k2.6`, for example, is no longer listed). Run
+  `kolsch refresh opencode` to re-sync the catalog, then point
+  `defaults.model` / your agents at a currently listed model.
+- **Usage terms — read them yourself.** The Go page states that Go "is
+  designed for OpenCode and other coding agents that produce similar
+  types of requests", that traffic is monitored for abuse, and that Go
+  is for single-member workspaces. Read the
+  [current terms](https://opencode.ai/docs/go/) and decide whether your
+  use fits; kolsch does not make that call for you.
+
+### Session headers for other gateways (`request_policy`)
+
+Any OpenAI-compatible provider entry can choose which headers carry the
+session's conversation key — no code change:
+
+```yaml
+llm_providers:
+  my_gateway:
+    type: opencode
+    base_url: https://gateway.example.com/v1
+    api_key_secret: MY_GATEWAY_API_KEY
+    request_policy:
+      session_headers: ["x-session-affinity"]   # [] disables
+```
+
+Only header **names** go here; the value is always the session's key,
+so nothing secret ends up in `platform.yaml`. Reserved names
+(`Authorization`, `Cookie`, `User-Agent`, `Host`, …) are rejected, and
+a malformed `request_policy` on any provider stops the runtime and
+`kolsch connect` / `refresh` with `config.invalid` until it is fixed.
+See [LLM providers §6.2](../explanation/llm-providers.md#62-request_policy-per-provider-session-headers)
+for the full rules.
+
 ## Claude via your subscription (`claude_code`)
 
 The `claude_code` connector runs a kolsch agent on Claude through the
@@ -382,6 +452,9 @@ provider, or the next agent load will fail with
 | `HTTP 403` | Key valid but lacks scope, or account suspended | Check the provider's dashboard |
 | `HTTP 404` at validation | Wrong `base_url` for OpenCode (default is a placeholder) | Re-run `kolsch connect opencode` with your real endpoint |
 | `HTTP 429` during discovery | Rate-limited | Wait, then `kolsch refresh <provider>` |
+| `400 MissingSessionID` from OpenCode Go | The provider's `request_policy.session_headers` overrides away `x-opencode-session` (or a pre-bug-144 kolsch) | Remove the override, or include `x-opencode-session` in it — see [OpenCode Go](#opencode-go) |
+| `config.invalid` naming `llm_providers.<name>.request_policy` at startup or connect | Malformed or reserved session-header name | Fix or remove that `request_policy` block; every provider is blocked until it is valid |
+| `llm.client_init_failed` mentioning `LLMCallContext` | A session-header provider was built outside a session (a custom script or test calling `build_llm` without `context=`) | Pass `context=LLMCallContext.for_session(<session_id>)` |
 | `ConnectError` / `ConnectTimeout` | DNS / firewall / proxy | Check corp proxy, VPN, `HTTPS_PROXY` |
 | `discovery failed: response payload missing 'data' list` | Endpoint isn't OpenAI-shaped, or an SSO login page is intercepting | Verify `base_url` |
 | `unknown provider: 'anthropic'` | Planned but not shipping | Use `openrouter` for Claude |

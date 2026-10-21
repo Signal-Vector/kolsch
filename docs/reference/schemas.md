@@ -55,3 +55,19 @@ consumes. `ResolvedAgentConfig`, `ModelSpec`, `IOSpec`, `PromptSpec`,
       show_root_heading: false
       show_source: false
       members_order: source
+
+## Provider config (`llm_providers.<name>`)
+
+`platform.yaml`'s `llm_providers` entries load into
+`llm.ProviderConfig` through the single factory
+`llm.provider_config_from_yaml`, which also validates the optional
+`request_policy.session_headers` override (bug-144). A malformed
+`request_policy` on any provider fails runtime boot and
+`kolsch connect` / `refresh` for all providers with `config.invalid`.
+Field-by-field: the
+[platform.yaml layout](../explanation/asset-management-contract.md) and
+[LLM providers §6.2](../explanation/llm-providers.md#62-request_policy-per-provider-session-headers);
+the per-call `LLMCallContext` is described in
+[LLM providers §3.6](../explanation/llm-providers.md#36-per-call-request-context-request-policy-and-user-agent-bug-144).
+Class reference: [API: LLM Connectors](../api/index.md#llm-connectors).
+
