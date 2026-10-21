@@ -31,6 +31,7 @@ from typing import TYPE_CHECKING, Any, TextIO
 
 from assets.refs import build_ref
 from assets.skill_metadata import parse_skill_frontmatter
+from cli._skill_refs import find_missing_skill_refs
 from errors import AssetsNotFound, WorkspaceNotInitialized
 from kolsch._yamlio import dump, load
 from platform_runtime import bootstrap_runtime
@@ -301,6 +302,7 @@ async def cmd_skills(
     if op == "validate":
         return _cmd_validate(
             runtime.asset_management,
+            root=args.root,
             ref=args.ref,
             json_output=args.json_output,
             out=out,
@@ -1292,6 +1294,7 @@ def _cmd_install(
         await am.initialize()
         return _cmd_validate(
             am,
+            root=root,
             ref=ref,
             json_output=False,
             out=out,
@@ -1364,24 +1367,21 @@ _ERR_COMPATIBILITY_NOT_STRING = "compatibility-not-string"
 _ERR_BODY_EMPTY = "body-empty"
 _ERR_MISSING_REF_PREFIX = "missing-ref:"
 
-_BACKTICKED_PATH_RE = re.compile(r"`([^`\s]+/[^`\s]+)`")
-"""Match backticked tokens containing a slash — heuristic for paths.
 
-Catches ``\\`scripts/extract.py\\``` and ``\\`./references/spec.md\\``` in
-skill body markdown. Bare ``\\`run_thing\\``` (no slash) doesn't match
-— a single word might be a function name, a variable, or a path
-without a directory. The slash requirement keeps false positives
-low; the cost is missing references to top-level files in the
-skill dir, which the body convention already discourages."""
-
-
-def validate_skill_entry(entry: AssetEntry) -> list[str]:
+def validate_skill_entry(entry: AssetEntry, *, workspace_root: Path) -> list[str]:
     """Return a list of error codes (empty when the skill is well-formed).
 
-    Pure function — no I/O beyond the SKILL.md read. Used by both
-    ``kolsch skills validate`` (CLI op) and the setup-time warning
-    hook in :mod:`cli._setup`. Sharing the primitive keeps the
-    two surfaces from drifting in what they consider valid.
+    Pure function — no I/O beyond the SKILL.md read and ``exists()``
+    checks for body references. Used by both ``kolsch skills
+    validate`` (CLI op) and the setup-time warning hook in
+    :mod:`cli._setup`. Sharing the primitive keeps the two surfaces
+    from drifting in what they consider valid.
+
+    ``workspace_root`` is the base for ``bundles/…`` body references
+    (the form a skill uses when it tells the model to run a script
+    from the workspace root). Which body tokens count as references
+    is decided solely by ``cli._skill_refs.find_missing_skill_refs``;
+    each missing one yields ``missing-ref:<ref>``.
     """
     errors: list[str] = []
     path = Path(entry.path)
@@ -1426,36 +1426,13 @@ def validate_skill_entry(entry: AssetEntry) -> list[str]:
     if not body.strip():
         errors.append(_ERR_BODY_EMPTY)
 
-    skill_dir = path.parent
-    for rel in _extract_skill_relative_refs(body):
-        candidate = (skill_dir / rel).resolve()
-        # Confine the check to paths under the skill's own dir so
-        # backticked external refs (URLs without scheme, fragments
-        # of code like ``utils/foo()``) don't fire false positives.
-        try:
-            candidate.relative_to(skill_dir.resolve())
-        except ValueError:
-            continue
-        if not candidate.exists():
-            errors.append(f"{_ERR_MISSING_REF_PREFIX}{rel}")
+    errors.extend(
+        f"{_ERR_MISSING_REF_PREFIX}{ref}"
+        for ref in find_missing_skill_refs(
+            body, skill_dir=path.parent, workspace_root=workspace_root
+        )
+    )
     return errors
-
-
-def _extract_skill_relative_refs(body: str) -> list[str]:
-    """Pull skill-dir-relative path candidates out of a body string.
-
-    Heuristic per Step 6: anything backticked that contains a slash
-    and doesn't look like an absolute path or URL is treated as a
-    relative reference. The caller scopes the check to paths that
-    resolve under the skill's directory.
-    """
-    refs: list[str] = []
-    for match in _BACKTICKED_PATH_RE.findall(body):
-        if match.startswith(("/", "http://", "https://")):
-            continue
-        ref = match[2:] if match.startswith("./") else match
-        refs.append(ref)
-    return refs
 
 
 _ERROR_DESCRIPTIONS: dict[str, str] = {
@@ -1475,13 +1452,19 @@ def _humanise_error(code: str) -> str:
     """Map an error code to a human-readable reason for the table view."""
     if code.startswith(_ERR_MISSING_REF_PREFIX):
         ref = code[len(_ERR_MISSING_REF_PREFIX) :]
-        return f"backticked ref `{ref}` not found under skill dir"
+        base = (
+            "the workspace root"
+            if ref.startswith("bundles/")
+            else "the skill directory"
+        )
+        return f"referenced file `{ref}` not found under {base}"
     return _ERROR_DESCRIPTIONS.get(code, code)
 
 
 def _cmd_validate(
     am: AssetManagement,
     *,
+    root: Path,
     ref: str | None,
     json_output: bool,
     out: TextIO,
@@ -1512,7 +1495,11 @@ def _cmd_validate(
         )
 
     results: list[dict[str, Any]] = [
-        {"ref": e.ref, "ok": not (errs := validate_skill_entry(e)), "errors": errs}
+        {
+            "ref": e.ref,
+            "ok": not (errs := validate_skill_entry(e, workspace_root=root)),
+            "errors": errs,
+        }
         for e in entries
     ]
 

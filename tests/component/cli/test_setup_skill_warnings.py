@@ -199,3 +199,47 @@ async def test_setup_rerun_with_only_canonical_skills_prints_validated_line(
     assert "✓ validated " in captured and "skill" in captured
     # All canonical skills clean — no warning surface.
     assert "⚠ skill validation" not in captured
+
+
+async def test_setup_rerun_resolves_bundles_refs_from_workspace_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """bug-149 — the setup hook passes the workspace root, so a
+    ``bundles/…`` body ref that exists is clean and one that doesn't
+    warns ``missing-ref:bundles/…``."""
+    monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
+    monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
+    await run_setup(
+        argparse.Namespace(non_interactive=True, root=tmp_path),
+        _make_test_io(tmp_path),
+    )
+    skill_dir = tmp_path / "bundles" / "kolsch" / "skills" / "ws-ref"
+    (skill_dir / "scripts").mkdir(parents=True)
+    script = skill_dir / "scripts" / "run.py"
+    script.write_text("# stub\n", encoding="utf-8")
+    ref = "bundles/kolsch/skills/ws-ref/scripts/run.py"
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: ws-ref\ndescription: Runs a helper.\n---\n\n"
+        f"From the workspace root run `{ref}`.\n",
+        encoding="utf-8",
+    )
+
+    clean_io = _make_test_io(tmp_path)
+    assert (
+        await run_setup(
+            argparse.Namespace(non_interactive=True, root=tmp_path), clean_io
+        )
+        == 0
+    )
+    assert "⚠ skill validation" not in clean_io.out.getvalue()
+
+    script.unlink()
+    broken_io = _make_test_io(tmp_path)
+    assert (
+        await run_setup(
+            argparse.Namespace(non_interactive=True, root=tmp_path), broken_io
+        )
+        == 0
+    )
+    assert f"kolsch/skills/ws-ref: missing-ref:{ref}" in broken_io.out.getvalue()

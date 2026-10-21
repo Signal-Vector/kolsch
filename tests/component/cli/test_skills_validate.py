@@ -18,14 +18,13 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
+import pytest
 import yaml
 
 from cli import main
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-    import pytest
 
 # ---------------------------------------------------------------------------
 # Workspace fixture.
@@ -338,3 +337,132 @@ def test_validate_all_flag_equivalent_to_bare(
     exit_code = main(["--root", str(tmp_path), "skills", "validate", "--all"])
     assert exit_code == 0
     assert "[OK]   acme/skills/good" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# bug-149 — the skill-body ref rule (cli._skill_refs).
+# ---------------------------------------------------------------------------
+
+
+def _validate_json(
+    root: Path, capsys: pytest.CaptureFixture[str]
+) -> list[dict[str, Any]]:
+    main(["--root", str(root), "skills", "validate", "--json"])
+    rows: list[dict[str, Any]] = json.loads(capsys.readouterr().out)
+    return rows
+
+
+def test_validate_ref_rule_skips_non_refs(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Tokens that are HTML, hosts, URLs, placeholders, globs, home or
+    absolute paths, code, unanchored prose paths, or inside a fenced
+    block never produce ``missing-ref``."""
+    _platform_yaml(tmp_path)
+    _make_bundle(tmp_path, "acme")
+    _write_skill_md(
+        tmp_path,
+        "acme",
+        "noisy",
+        body=(
+            "# Noisy\n\n"
+            "Separate with `<hr/>` or `<br/>`.\n"
+            "Open `app.example.so/<slug>/…` or `docs.example.com/guide`.\n"
+            "Fetch `https://x.io/a/b`.\n"
+            "Write `resume-<slug>.yaml` to `out/{company}_{role}_{date}.*`.\n"
+            "Read every `data/*.yaml` and `~/Documents/x/INDEX.md`.\n"
+            "Not `/etc/hosts/x` and not `utils/foo()`.\n"
+            "If you pass `resumes/resume-acme.yaml` the PDF lands next to it.\n"
+            "```bash\n"
+            "python `scripts/only_in_fence.py`\n"
+            "```\n"
+        ),
+    )
+    assert _validate_json(tmp_path, capsys) == [
+        {"ref": "acme/skills/noisy", "ok": True, "errors": []},
+    ]
+
+
+# (body, normalised ref, setup(skill_dir) creating needed parent dirs)
+_ANCHORED_REFS: list[tuple[str, str, str | None]] = [
+    ("Run `scripts/extract.py`.", "scripts/extract.py", None),
+    ("Read `./references/methodology.md`.", "references/methodology.md", None),
+    ("Show `assets/logo.png`.", "assets/logo.png", None),
+    ("Then `steps/two.md`.", "steps/two.md", "steps"),
+    ("See [the forms](FORMS.md).", "FORMS.md", None),
+    (
+        "From the workspace root run `bundles/acme/skills/anchored/scripts/run.py`.",
+        "bundles/acme/skills/anchored/scripts/run.py",
+        None,
+    ),
+]
+
+
+@pytest.mark.parametrize(("body", "ref", "parent_dir"), _ANCHORED_REFS)
+def test_validate_ref_rule_anchored_refs_checked(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    body: str,
+    ref: str,
+    parent_dir: str | None,
+) -> None:
+    """Anchored refs fire exactly one ``missing-ref`` when absent and
+    none once the target exists (``bundles/…`` from the workspace
+    root, everything else from the skill dir)."""
+    _platform_yaml(tmp_path)
+    _make_bundle(tmp_path, "acme")
+    skill_md = _write_skill_md(tmp_path, "acme", "anchored", body=f"# A\n\n{body}\n")
+    if parent_dir is not None:
+        (skill_md.parent / parent_dir).mkdir()
+
+    assert _validate_json(tmp_path, capsys)[0]["errors"] == [f"missing-ref:{ref}"]
+
+    base = tmp_path if ref.startswith("bundles/") else skill_md.parent
+    target = base / ref
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("stub\n", encoding="utf-8")
+    assert _validate_json(tmp_path, capsys)[0]["errors"] == []
+
+
+def test_validate_ref_rule_wording_names_the_base(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The table row says which base a missing ref was resolved against."""
+    _platform_yaml(tmp_path)
+    _make_bundle(tmp_path, "acme")
+    _write_skill_md(
+        tmp_path,
+        "acme",
+        "x",
+        body="Run `scripts/a.py` then `bundles/acme/skills/x/scripts/run.py`.\n",
+    )
+    assert main(["--root", str(tmp_path), "skills", "validate"]) == 1
+    out = capsys.readouterr().out
+    assert "`scripts/a.py` not found under the skill directory" in out
+    assert (
+        "`bundles/acme/skills/x/scripts/run.py` not found under the workspace root"
+        in out
+    )
+
+
+def test_validate_ref_rule_dedupes_and_skips_escapes(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A repeated ref is reported once; ``..`` refs escaping the skill
+    dir (or ``<root>/bundles`` for the ``bundles/`` form) are skipped."""
+    _platform_yaml(tmp_path)
+    _make_bundle(tmp_path, "acme")
+    _write_skill_md(
+        tmp_path,
+        "acme",
+        "rep",
+        body=(
+            "Run `scripts/a.py`, then `scripts/a.py`, then [again](scripts/a.py).\n"
+            "Not `scripts/../../other/x.py`, [sibling](../other/SKILL.md),\n"
+            "or `bundles/../outside.txt`.\n"
+        ),
+    )
+    assert _validate_json(tmp_path, capsys)[0]["errors"] == ["missing-ref:scripts/a.py"]

@@ -1563,7 +1563,7 @@ async def _maybe_warn_invalid_skills(io: _SetupIO) -> None:
 
     failures: list[tuple[str, list[str]]] = []
     for entry in skills:
-        errs = validate_skill_entry(entry)
+        errs = validate_skill_entry(entry, workspace_root=io.root)
         if errs:
             failures.append((entry.ref, errs))
 
