@@ -538,7 +538,7 @@ def test_validate_frontmatter_missing_reports_only_that_code(
     assert row["details"] == [
         {
             "code": "frontmatter-missing",
-            "message": "no YAML frontmatter (SKILL.md must start with a `---` line)",
+            "message": "no YAML frontmatter; SKILL.md must start with a `---` line",
         }
     ]
 
@@ -601,3 +601,95 @@ def test_validate_empty_frontmatter_block_reports_name_and_description(
     (row,) = _validate_json(tmp_path, capsys)
     assert row["errors"] == ["missing-name", "missing-description"]
     assert [d["code"] for d in row["details"]] == row["errors"]
+
+
+# ---------------------------------------------------------------------------
+# bug-149 — incident replay: 12 synthetic skills mirroring the shapes of
+# the 2026-10-21 setup incident (7 flagged before the fix, 3 after).
+# Every string is invented.
+# ---------------------------------------------------------------------------
+
+
+def _incident_yaml_description() -> str:
+    """A plain-scalar description whose unquoted ``Triggers on:`` puts
+    the YAML error at file line 3, column 236 (as in the incident)."""
+    tail = ' Triggers on: "polish", "rewrite".'
+    head = "description: Use when " + "polishing drafted prose, " * 12
+    head = head[: 236 - len(" Triggers on:")]
+    return head + tail
+
+
+def _incident_workspace(root: Path) -> None:
+    _platform_yaml(root)
+    for bundle in ("ops", "jobs", "misc"):
+        _make_bundle(root, bundle)
+
+    def fm(name: str) -> str:
+        return f"---\nname: {name}\ndescription: Does the {name} task.\n---\n\n"
+
+    skills = {
+        # HTML, a bare host with placeholders, and a workspace-root ref
+        # that exists (both as a bare span and inside a command).
+        ("ops", "tracker"): fm("tracker")
+        + "Open `app.example.io/<slug>/…` in a browser.\n"
+        + "Separate entries with `<hr/>`; break lines with `<br/>`.\n"
+        + "From the workspace root: `python3 bundles/ops/skills/tracker/scripts/api.py`"
+        + " (the helper is `bundles/ops/skills/tracker/scripts/api.py`).\n",
+        # Invalid YAML: unquoted ': ' inside a plain-scalar description.
+        ("ops", "polish"): f"---\nname: polish\n{_incident_yaml_description()}\n---\n\n"
+        "Polish the text.\n",
+        # Home paths, globs, placeholders, repeats.
+        ("jobs", "apply"): fm("apply")
+        + "Read `~/Docs/Jobs/INDEX.md`, then every `~/Docs/Jobs/*.yaml`.\n"
+        + "Write `~/Docs/Jobs/out/{company}_{role}_{date}.*`.\n"
+        + "Re-read `~/Docs/Jobs/INDEX.md` before finishing.\n",
+        # No frontmatter at all (two skills).
+        ("jobs", "letter"): "# Skill: letter\n\nDrafts a letter.\n",
+        ("jobs", "search"): "# Skill: search\n\nSearches listings.\n",
+        # Example path in prose (no samples/ dir in the skill).
+        ("jobs", "tailor"): fm("tailor")
+        + "If you pass `samples/sample-acme.yaml`, the PDF lands at"
+        + " `samples/sample-acme.pdf`.\n",
+        # <slug> placeholders.
+        ("jobs", "tailor-fast"): fm("tailor-fast")
+        + "Load `~/Docs/Jobs/cv-<slug>.yaml` and `cv-<slug>.yaml`.\n",
+        # Five clean skills; one has a real references/ link.
+        ("misc", "alpha"): fm("alpha") + "Plain body.\n",
+        ("misc", "beta"): fm("beta") + "Call `run_thing` when ready.\n",
+        ("misc", "gamma"): fm("gamma") + "See [the method](references/method.md).\n",
+        ("misc", "delta"): fm("delta") + "A **plain** body.\n",
+        ("misc", "epsilon"): fm("epsilon") + "Fetch `https://example.org/a/b`.\n",
+    }
+    for (bundle, name), text in skills.items():
+        skill_dir = root / "bundles" / bundle / "skills" / name
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(text, encoding="utf-8")
+    tracker_scripts = root / "bundles/ops/skills/tracker/scripts"
+    tracker_scripts.mkdir()
+    (tracker_scripts / "api.py").write_text("# stub\n", encoding="utf-8")
+    gamma_refs = root / "bundles/misc/skills/gamma/references"
+    gamma_refs.mkdir()
+    (gamma_refs / "method.md").write_text("# Method\n", encoding="utf-8")
+
+
+def test_validate_incident_replay_flags_only_real_issues(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _incident_workspace(tmp_path)
+
+    exit_code = main(["--root", str(tmp_path), "skills", "validate", "--json"])
+    rows = json.loads(capsys.readouterr().out)
+    assert exit_code == 1
+    assert len(rows) == 12
+    failing = {r["ref"]: r for r in rows if not r["ok"]}
+    assert {ref: r["errors"] for ref, r in failing.items()} == {
+        "ops/skills/polish": ["frontmatter-unparseable"],
+        "jobs/skills/letter": ["frontmatter-missing"],
+        "jobs/skills/search": ["frontmatter-missing"],
+    }
+    assert not any(c.startswith("missing-ref:") for r in rows for c in r["errors"])
+    assert failing["ops/skills/polish"]["details"][0]["message"] == (
+        "SKILL.md line 3, column 236: mapping values are not allowed in this "
+        "context; values containing ': ' must be quoted"
+    )

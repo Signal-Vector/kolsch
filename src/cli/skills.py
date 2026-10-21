@@ -1734,7 +1734,7 @@ def _read_skill_body(skill_md: Path) -> str:
     accepted the file so the path exists), return the whole file
     so the user still sees the content.
     """
-    text = skill_md.read_text(encoding="utf-8")
+    text = skill_md.read_text(encoding="utf-8-sig")
     lines = text.splitlines(keepends=True)
     if not lines or lines[0].strip() != "---":
         return text

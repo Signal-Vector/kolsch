@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 _FRONTMATTER_DELIMITER = "---"
+_MAX_YAML_MESSAGE_CHARS = 200
 
 FrontmatterErrorKind = Literal["missing", "unterminated", "yaml", "not-mapping"]
 
@@ -36,9 +37,10 @@ class FrontmatterError:
         line: 1-based line in the file the error points at, or
             ``None`` when the parser gave no position.
         column: 1-based column on ``line``, or ``None``.
-        message: Human-readable reason. For ``"yaml"`` this is the
-            YAML parser's own problem text (e.g. ``mapping values
-            are not allowed in this context``).
+        message: Human-readable, single-line reason. For ``"yaml"``
+            this is the YAML parser's own problem text (e.g.
+            ``mapping values are not allowed in this context``) with
+            whitespace collapsed and capped at 200 characters.
     """
 
     kind: FrontmatterErrorKind
@@ -103,14 +105,16 @@ def parse_skill_frontmatter_detailed(skill_md: Path) -> SkillFrontmatter:
     Returns:
         The parsed metadata, or `{}` plus the error.
     """
-    lines = skill_md.read_text(encoding="utf-8").splitlines()
+    # ``utf-8-sig`` drops a leading BOM, so an editor-added BOM doesn't
+    # hide the opening ``---``.
+    lines = skill_md.read_text(encoding="utf-8-sig").splitlines()
     if not lines or lines[0].strip() != _FRONTMATTER_DELIMITER:
         return SkillFrontmatter(
             error=FrontmatterError(
                 "missing",
                 None,
                 None,
-                "no YAML frontmatter (SKILL.md must start with a `---` line)",
+                "no YAML frontmatter; SKILL.md must start with a `---` line",
             )
         )
 
@@ -153,11 +157,17 @@ def _yaml_error(exc: YAMLError) -> FrontmatterError:
     mark = getattr(exc, "problem_mark", None)
     line = getattr(mark, "line", None)
     column = getattr(mark, "column", None)
+    text = problem if isinstance(problem, str) and problem else str(exc)
+    # Some problems (e.g. duplicate key) echo values verbatim; keep the
+    # message one bounded line for the table and setup advisory.
+    text = " ".join(text.split())
+    if len(text) > _MAX_YAML_MESSAGE_CHARS:
+        text = text[: _MAX_YAML_MESSAGE_CHARS - 1] + "…"
     return FrontmatterError(
         "yaml",
         line + 2 if isinstance(line, int) else None,
         column + 1 if isinstance(column, int) else None,
-        problem if isinstance(problem, str) and problem else str(exc),
+        text,
     )
 
 

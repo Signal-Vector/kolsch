@@ -100,3 +100,34 @@ def test_frontmatter_detailed_valid_matches_wrapper(tmp_path: Path) -> None:
 
 def test_frontmatter_wrapper_missing_file_returns_empty(tmp_path: Path) -> None:
     assert parse_skill_frontmatter(tmp_path / "absent" / "SKILL.md") == {}
+
+
+def test_frontmatter_detailed_yaml_message_is_one_bounded_line(
+    tmp_path: Path,
+) -> None:
+    """A duplicate-key error echoes both values verbatim; the message is
+    whitespace-collapsed and capped so it fits a one-line surface."""
+    long_value = "".join(f"  line {i} of a long description\n" for i in range(80))
+    text = (
+        f"---\nname: x\ndescription: |\n{long_value}"
+        f"description: |\n{long_value}---\nbody\n"
+    )
+    error = parse_skill_frontmatter_detailed(_skill(tmp_path, text)).error
+    assert error is not None
+    assert error.kind == "yaml"
+    assert "duplicate key" in error.message
+    assert "\n" not in error.message
+    assert len(error.message) <= 200
+    assert error.message.endswith("…")
+
+
+def test_frontmatter_bom_is_ignored_by_both_parsers(tmp_path: Path) -> None:
+    """A UTF-8 BOM before the opening ``---`` parses normally (the
+    catalog's wrapper used to return ``{}`` for such files)."""
+    path = tmp_path / "SKILL.md"
+    path.write_bytes(b"\xef\xbb\xbf---\nname: x\ndescription: Does x.\n---\nbody\n")
+    expected = {"name": "x", "description": "Does x."}
+    parsed = parse_skill_frontmatter_detailed(path)
+    assert parsed.error is None
+    assert parsed.metadata == expected
+    assert parse_skill_frontmatter(path) == expected

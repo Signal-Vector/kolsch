@@ -15,11 +15,14 @@ Pins the warning-only contract the build prompt calls out:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import io
+import json
 from typing import TYPE_CHECKING
 
 import yaml
 
+from cli import main
 from cli._setup import NonInteractivePrompter, _SetupIO, _TestRunResult, run_setup
 
 if TYPE_CHECKING:
@@ -278,6 +281,33 @@ async def test_setup_rerun_shows_frontmatter_detail_in_parentheses(
     ) in out
     assert "must be quoted), missing-ref:scripts/gone.py\n" in out
     assert (
-        "kolsch/skills/no-fm: frontmatter-missing (no YAML frontmatter "
-        "(SKILL.md must start with a `---` line))\n"
+        "kolsch/skills/no-fm: frontmatter-missing (no YAML frontmatter; "
+        "SKILL.md must start with a `---` line)\n"
     ) in out
+
+
+def test_starter_bundle_skills_validate_clean(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """bug-149 — every skill the starter bundle ships validates clean
+    in a freshly set-up workspace (guards the ref rule against shipped
+    content, e.g. a ``bundles/…`` mention)."""
+    monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
+    monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
+    # Sync test: ``cli.main`` runs its own event loop.
+    setup_rc = asyncio.run(
+        run_setup(
+            argparse.Namespace(non_interactive=True, root=tmp_path),
+            _make_test_io(tmp_path),
+        )
+    )
+    assert setup_rc == 0
+
+    exit_code = main(["--root", str(tmp_path), "skills", "validate", "--json"])
+    rows = json.loads(capsys.readouterr().out)
+    starter = [r for r in rows if r["ref"].startswith("kolsch/skills/")]
+    assert starter, "the starter bundle ships skills"
+    assert [r for r in starter if not r["ok"]] == []
+    assert exit_code == 0

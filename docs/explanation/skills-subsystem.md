@@ -372,9 +372,91 @@ If the SKILL.md body says "see `references/format.md`," the model can
 call `read` on that path (resolving relative to the SKILL.md directory).
 Same mechanism.
 
-The platform may pre-validate that referenced supporting files exist
-during discovery, surfacing broken references at startup rather than
-at runtime. This is a v1 nice-to-have, not required.
+#### Validating references and frontmatter
+
+`kolsch skills validate` (and the advisory that a `kolsch setup`
+re-run prints) lints every catalogued skill, so broken references
+surface before an agent trips over them. Both surfaces share one
+validator, `cli.skills.validate_skill_entry_detailed`, and the
+reference rule lives in one function,
+`cli._skill_refs.find_missing_skill_refs`.
+
+**Which body tokens are references.**
+
+1. *Candidates* are inline code spans (`` `…` `` on one line) and
+   Markdown link targets (`[text](target)`, including images; any
+   `#fragment` or `?query` is dropped). Lines inside fenced code
+   blocks (```` ``` ```` / `~~~`) are not scanned, and a link written
+   inside a code span is code, not a link.
+2. One leading `./` is stripped. Link targets are percent-decoded
+   for the existence check (`with%20space.md` → `with space.md`);
+   the reported ref is the target as written.
+3. A candidate is skipped unless it is entirely path-safe
+   (`^[\w.\-+@%/]+$`). That rules out URLs with a scheme, HTML
+   (`<hr/>`), placeholders (`<slug>`, `{company}`, `$VAR`), globs
+   (`*.yaml`), ellipses, `~` home paths, anything with a space, and
+   code such as `utils/foo()`. Absolute paths (leading `/`) and code
+   spans without a `/` are skipped too.
+4. *Anchor and base.*
+    - A ref whose first segment is `bundles` resolves against the
+      **workspace root** and must stay under `<root>/bundles`. This
+      is the form a skill uses when it tells the model to run a
+      script "from the workspace root", for example
+      `bundles/acme/skills/report/scripts/run.py`.
+    - Any other ref resolves against the **skill directory** and
+      must stay under it. It is checked only when it is a link
+      target, or a code span whose first segment is `scripts`,
+      `references` or `assets` (the Agent Skills sub-directories) or
+      names an entry that exists in the skill directory. Every other
+      code span is treated as prose, such as an example path or a
+      host name like `app.example.io/x`.
+    - A ref that escapes its base through `..` or a symlink is
+      skipped. So is a token the filesystem can't check (for
+      example, a segment longer than the OS name limit).
+5. Each missing ref is reported once, as `missing-ref:<ref>`, in
+   first-seen order. The table view names the base it was resolved
+   against: "…not found under the skill directory" or "…not found
+   under the workspace root".
+
+**Frontmatter codes.**
+
+| Code | When | Example message |
+|------|------|-----------------|
+| `frontmatter-missing` | The file is empty or its first line isn't `---` | ``no YAML frontmatter; SKILL.md must start with a `---` line`` |
+| `frontmatter-unparseable` | The block is never closed, isn't valid YAML, or isn't a mapping | `SKILL.md line 3, column 236: mapping values are not allowed in this context; values containing ': ' must be quoted` |
+
+While either frontmatter code is present, `missing-name` and
+`missing-description` are not reported, since they would only
+restate the same problem. A well-formed but empty block (`---` then
+`---`) is not a frontmatter error; it reports `missing-name` and
+`missing-description`. YAML messages are reduced to one line (at most
+200 characters). `--json` rows carry `ref`, `ok`, `errors` (the
+stable codes) and `details` (`[{"code", "message"}]`, one entry per
+code). The setup advisory prints codes only, adding the message in
+parentheses after `frontmatter-*` codes. A failing `missing-ref`
+still makes `kolsch skills validate` exit 1.
+
+The detailed parse is `assets.skill_metadata.parse_skill_frontmatter_detailed`.
+The catalog keeps using `parse_skill_frontmatter`, which still
+returns `{}` for any unusable frontmatter. Both read `SKILL.md` as
+UTF-8 with an optional byte-order mark, so a file saved with a BOM
+parses normally. (Previously the catalog silently catalogued such a
+file with empty metadata.)
+
+**Known limitations.** The rule prefers silence to noise, so these
+are not checked (false negatives):
+
+- a path inside a longer command span, such as
+  `` `python3 scripts/run.py` `` (the space makes it prose);
+- angle-bracket link targets (`[x](<references/a.md>)`);
+- reference-style links (`[x][1]` with `[1]: references/a.md`) and
+  autolinks;
+- a link wrapped around an image (`[![badge](i.png)](target.md)`):
+  only the image is seen;
+- backslash (Windows-style) paths.
+
+A fence inside a list item indented four or more spaces is not
+recognised as a fence, so code spans on its lines are scanned.
 
 ### 5.4 The Materialization Rule applies
 
