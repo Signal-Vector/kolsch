@@ -9,8 +9,9 @@ Step composition rules:
 - Step C must call the existing
   [`cmd_connect`][cli.llm_commands.cmd_connect]; setup does not
   re-implement the connect flow.
-- Step E must call the existing `cli.main._cmd_run`; setup does
-  not re-implement agent execution.
+- Step E must call the existing `cli.main._run_agent_once` (the
+  run-once seam behind `kolsch run`); setup does not re-implement
+  agent execution.
 - Setup writes nothing outside the resolved workspace (the `.env`
   secret-value write is the only exception).
 - Each step is interruptible at any prompt; the next setup run
@@ -22,6 +23,7 @@ from __future__ import annotations
 import argparse
 import difflib
 import json
+import logging
 import os
 import shutil
 import sys
@@ -80,11 +82,35 @@ class _StepEOutcome(StrEnum):
 
 @dataclass(frozen=True)
 class _StepEResult:
-    """The richer return type from Step E."""
+    """The richer return type from Step E.
+
+    On `FAILED`, `session_id` / `error` are copied from the
+    [`_TestRunResult`][cli._setup._TestRunResult] and `failure_code`
+    is `error["type"]` when it is a string (the classifier key).
+    """
 
     outcome: _StepEOutcome
     failure_code: str | None = None
-    failure_detail: str | None = None
+    session_id: str | None = None
+    error: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class _TestRunResult:
+    """What `_SetupIO.run_handler` returns for Step E's test exchange.
+
+    - `rc` — `kolsch run`'s exit code (`0` success, non-zero failure).
+    - `session_id` — the session the test run created, when it got
+      that far; the banner points the user at it.
+    - `error` — the durable error envelope
+      (`thread.exchange_failed` `data["error"]`: `type`, `message`,
+      `where`, `detail`, `cause`) when the exchange ended Fatal;
+      `None` on success or a failure with no durable event.
+    """
+
+    rc: int
+    session_id: str | None = None
+    error: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -185,14 +211,13 @@ class _SetupIO:
     # The factory receives the provider name + an optional API key
     # override (used by --non-interactive's env-driven path).
     connect_io_factory: Callable[[Path, str, str | None], _CommandIO]
-    # Run-handler — wraps `cli.main._cmd_run`. Used by step E to
-    # verify the install with a real exchange. Returns
-    # `(exit_code, failure_code)` so Step E can pass the failure
-    # code to `_classify_failure` for an actionable hint.
-    # `failure_code` is the canonical Error Model code from the
-    # failed event's `data.error.type` when an exchange ended
-    # Fatal; `None` otherwise (success / non-engine failures).
-    run_handler: Callable[[argparse.Namespace], Awaitable[tuple[int, str | None]]]
+    # Run-handler — wraps `cli.main._run_agent_once`. Used by step E
+    # to verify the install with a real exchange. Returns a
+    # `_TestRunResult` carrying the exit code, the test run's session
+    # id, and the durable `thread.exchange_failed` error envelope (when
+    # the exchange ended Fatal) so the failure banner renders from the
+    # event log rather than from exception text.
+    run_handler: Callable[[argparse.Namespace], Awaitable[_TestRunResult]]
 
 
 # ---------------------------------------------------------------------------
@@ -795,7 +820,7 @@ async def _step_e_test_run(io: _SetupIO, *, non_interactive: bool) -> _StepEResu
             io.out.write("  → skipped test run\n")
             return _StepEResult(outcome=_StepEOutcome.SKIPPED)
     io.out.write(f"Running {agent_ref}...\n")
-    rc, failure_code = await io.run_handler(
+    result = await io.run_handler(
         argparse.Namespace(
             root=io.root,
             agent_ref=agent_ref,
@@ -804,14 +829,16 @@ async def _step_e_test_run(io: _SetupIO, *, non_interactive: bool) -> _StepEResu
             session=None,
         )
     )
-    if rc != 0:
+    if result.rc != 0:
         # The hint surfaces via the partial-completion banner; don't
         # write a canned diagnostic here — the orchestrator owns
         # the user-facing message so the wording is in one place.
+        code = result.error.get("type") if result.error is not None else None
         return _StepEResult(
             outcome=_StepEOutcome.FAILED,
-            failure_code=failure_code,
-            failure_detail=f"test run failed (rc={rc})",
+            failure_code=code if isinstance(code, str) else None,
+            session_id=result.session_id,
+            error=result.error,
         )
     io.out.write("  ✓ test run completed successfully\n")
     return _StepEResult(outcome=_StepEOutcome.PASSED)
@@ -860,8 +887,6 @@ def _step_f_banner_failure(io: _SetupIO, result: _StepEResult) -> None:
         io.out.write(f"Cause:     {result.failure_code} — {hint}\n")
     else:
         io.out.write(f"Cause:     test exchange failed — {hint}\n")
-    if result.failure_detail:
-        io.out.write(f"Detail:    {result.failure_detail}\n")
     io.out.write("\nNext steps:\n")
     io.out.write("  kolsch sessions list                 # find the failed session\n")
     io.out.write(f'  kolsch run {agent_ref} --input content="<retry>"\n')
@@ -1648,33 +1673,38 @@ def make_default_setup_io(*, root: Path) -> _SetupIO:
     # Trigger LLM provider registration before any setup step calls
     # into the registry.
     import llm.providers  # noqa: F401, PLC0415
-    from cli.main import _cmd_run  # noqa: PLC0415
+    from cli.main import _run_agent_once, _write_agent_message  # noqa: PLC0415
 
-    async def _run_handler(
-        args: argparse.Namespace,
-    ) -> tuple[int, str | None]:
-        """Wrap `_cmd_run` so Step E can read the Fatal failure code.
+    async def _run_handler(args: argparse.Namespace) -> _TestRunResult:
+        """Run the test exchange through the `kolsch run` seam.
 
-        Setup must not re-implement agent execution. On success
-        returns `(0, None)`; on Fatal returns
-        `(exit_code, error_code)` where `error_code` is the
-        canonical Error Model code from
-        `failed_event.data["error"]["type"]`.
+        Setup must not re-implement agent execution. Maps the
+        `_RunOutcome` to a `_TestRunResult`: the session id, and the
+        durable `failed_event.data["error"]` envelope when the exchange
+        ended Fatal. An engine-Fatal failure is NOT logged — the
+        durable event and the failure banner carry it. Any other
+        caught exception is unexpected and is logged on the `cli`
+        logger with its traceback, as `kolsch run` would. On success
+        the agent message JSON is echoed to stdout, as `kolsch run`
+        prints it.
         """
-        from engine.context import AgentExecutionError  # noqa: PLC0415
-
-        try:
-            rc = await _cmd_run(args)
-        except AgentExecutionError as exc:
-            error_code = None
-            if exc.failed_event is not None and isinstance(exc.failed_event.data, dict):
-                err = exc.failed_event.data.get("error")
-                if isinstance(err, dict):
-                    code = err.get("type")
-                    if isinstance(code, str):
-                        error_code = code
-            return (2, error_code)
-        return (rc, None)
+        outcome = await _run_agent_once(args)
+        if outcome.exc is not None and outcome.failed_event is None:
+            logging.getLogger("cli").error(
+                "agent execution failed: %s", outcome.exc, exc_info=outcome.exc
+            )
+        if outcome.agent_message is not None:
+            _write_agent_message(outcome.agent_message)
+        error: dict[str, Any] | None = None
+        if outcome.failed_event is not None:
+            raw = outcome.failed_event.data.get("error")
+            if isinstance(raw, dict):
+                error = raw
+        return _TestRunResult(
+            rc=outcome.rc,
+            session_id=str(outcome.session_id) if outcome.session_id else None,
+            error=error,
+        )
 
     return _SetupIO(
         root=root,

@@ -41,6 +41,7 @@ from cli._doctor import cmd_doctor
 from cli._setup import (
     NonInteractivePrompter,
     _SetupIO,
+    _TestRunResult,
     run_setup,
 )
 
@@ -57,9 +58,9 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
-async def _noop_run_handler(args: argparse.Namespace) -> tuple[int, str | None]:
+async def _noop_run_handler(args: argparse.Namespace) -> _TestRunResult:
     _ = args
-    return (0, None)
+    return _TestRunResult(rc=0)
 
 
 def _connect_io_factory(

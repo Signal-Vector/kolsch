@@ -37,6 +37,7 @@ from cli._setup import (
     NonInteractivePrompter,
     SetupPrompter,
     _SetupIO,
+    _TestRunResult,
     run_setup,
 )
 from cli.main import main
@@ -141,16 +142,16 @@ def _build_test_connect_io_factory(
 
 async def _noop_run_handler(
     args: argparse.Namespace,
-) -> tuple[int, str | None]:
-    """Stand-in for `_cmd_run` for tests that don't exercise step E
-    end-to-end. Returns ``(0, None)`` to signal a "successful" test
-    run without standing up the full runtime.
+) -> _TestRunResult:
+    """Stand-in for the run-once seam for tests that don't exercise
+    step E end-to-end. Returns ``_TestRunResult(rc=0)`` to signal a
+    "successful" test run without standing up the full runtime.
 
-    Bug-setup-test-run-failure-handling.md: the run-handler signature
-    is now ``(exit_code, failure_code)`` so Step E can route the
-    error code into the classifier-driven hint."""
+    bug-147: the run-handler returns a ``_TestRunResult`` (exit code,
+    session id, durable error envelope) so Step E can route the error
+    code into the classifier-driven hint."""
     _ = args
-    return (0, None)
+    return _TestRunResult(rc=0)
 
 
 def _make_test_io(
@@ -159,7 +160,7 @@ def _make_test_io(
     out: io.StringIO | None = None,
     err: io.StringIO | None = None,
     prompter: SetupPrompter | None = None,
-    run_handler: Callable[[argparse.Namespace], Awaitable[tuple[int, str | None]]]
+    run_handler: Callable[[argparse.Namespace], Awaitable[_TestRunResult]]
     | None = None,
 ) -> _SetupIO:
     captured_out = out if out is not None else io.StringIO()
@@ -1084,9 +1085,9 @@ async def test_step_e_test_run_failure_returns_partial(
 
     async def failing_run(
         args: argparse.Namespace,
-    ) -> tuple[int, str | None]:
+    ) -> _TestRunResult:
         _ = args
-        return (1, None)
+        return _TestRunResult(rc=1)
 
     io_ = _make_test_io(root=tmp_path, run_handler=failing_run)
     rc = await run_setup(argparse.Namespace(non_interactive=True, root=tmp_path), io_)
@@ -1171,12 +1172,12 @@ async def test_tc_ux_11_failed_test_run_emits_partial_banner_and_exit_4(
 
     async def failing_run(
         args: argparse.Namespace,
-    ) -> tuple[int, str | None]:
+    ) -> _TestRunResult:
         _ = args
-        # The adapter in make_default_setup_io extracts this code from
-        # AgentExecutionError.failed_event in production; the test
+        # The production handler in make_default_setup_io copies this
+        # envelope from the failed event's data["error"]; the test
         # injects it directly so the classifier hint can be asserted.
-        return (2, "model.server_error")
+        return _TestRunResult(rc=2, error={"type": "model.server_error"})
 
     captured_out = io.StringIO()
     captured_err = io.StringIO()

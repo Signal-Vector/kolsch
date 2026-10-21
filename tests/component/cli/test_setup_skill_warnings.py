@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING
 
 import yaml
 
-from cli._setup import NonInteractivePrompter, _SetupIO, run_setup
+from cli._setup import NonInteractivePrompter, _SetupIO, _TestRunResult, run_setup
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -28,13 +28,13 @@ if TYPE_CHECKING:
     import pytest
 
 
-async def _noop_run_handler(_args: argparse.Namespace) -> tuple[int, str | None]:
+async def _noop_run_handler(_args: argparse.Namespace) -> _TestRunResult:
     """``run_handler`` stand-in — Step E uses it for the test exchange.
 
-    Returns ``(0, None)`` so Step E records SUCCESS and the success
+    Returns ``_TestRunResult(rc=0)`` so Step E records SUCCESS and the success
     banner fires, mirroring what the existing setup tests use when
     they don't need to exercise the real engine path."""
-    return 0, None
+    return _TestRunResult(rc=0)
 
 
 def _make_test_io(root: Path) -> _SetupIO:
