@@ -292,7 +292,8 @@ The builder:
 - sends `User-Agent: kolsch/<version>` (`llm.user_agent.kolsch_user_agent`);
 - drops agent-YAML `parameters` that collide with connector-owned
   kwargs (`INFRA_KEYS`: routing keys plus `default_headers`,
-  `extra_headers`, `headers`, `client_params`), so YAML can't hijack
+  `extra_headers`, `headers`, `client_params`, `organization`,
+  `project`, `default_query`, `api_base`), so YAML can't hijack
   routing, the session headers, or the User-Agent;
 - builds the client as `KolschOpenAICompatibleCompletion`, which
   applies kolsch's **conditional strict tool-schema policy**:

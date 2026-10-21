@@ -308,12 +308,17 @@ class KolschOpenAICompatibleCompletion(OpenAICompatibleCompletion):
 # (`default_headers`, `extra_headers`, `headers`, and `client_params`,
 # which CrewAI merges over the client's `default_headers`) are
 # connector-owned too, so agent YAML can't replace the request-policy
-# session headers or the kolsch User-Agent (bug-144).
+# session headers or the kolsch User-Agent (bug-144). `organization` /
+# `project` (sent as `OpenAI-Organization` / `OpenAI-Project` headers),
+# `default_query` (query params) and `api_base` (a `base_url` alias)
+# are blocked for the same reason: they shape the request's routing
+# and identity, which only the connector owns.
 INFRA_KEYS: Final = frozenset(
     {
         "model",
         "api_key",
         "base_url",
+        "api_base",
         "timeout",
         "provider",
         "is_litellm",
@@ -321,6 +326,9 @@ INFRA_KEYS: Final = frozenset(
         "extra_headers",
         "headers",
         "client_params",
+        "organization",
+        "project",
+        "default_query",
     }
 )
 

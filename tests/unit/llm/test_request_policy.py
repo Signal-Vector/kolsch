@@ -214,6 +214,8 @@ def test_infra_keys_cover_header_kwargs() -> None:
         "client_params",
     } <= INFRA_KEYS
     assert {"model", "api_key", "base_url", "timeout", "provider"} <= INFRA_KEYS
+    # P2-N1: header/query/routing-shaped CrewAI kwargs are connector-owned.
+    assert {"organization", "project", "default_query", "api_base"} <= INFRA_KEYS
 
 
 def test_infra_keys_dropped_from_agent_parameters() -> None:
@@ -225,6 +227,10 @@ def test_infra_keys_dropped_from_agent_parameters() -> None:
         "headers": {"a": "b"},
         "client_params": {"default_headers": {}},
         "base_url": "https://evil.invalid",
+        "api_base": "https://evil.invalid",
+        "organization": "org-x",
+        "project": "p-x",
+        "default_query": {"q": "1"},
     }
     assert connector_extras(params) == {"temperature": 0.3, "max_tokens": 10}
     assert connector_extras(None) == {}

@@ -148,6 +148,8 @@ async def test_request_policy_adds_session_header_to_openrouter() -> None:
         {"extra_headers": {"x-opencode-session": "hijack"}},
         {"headers": {"User-Agent": "evil/1"}},
         {"client_params": {"default_headers": {"User-Agent": "evil/1"}}},
+        {"organization": "org-x", "project": "p-x"},
+        {"default_query": {"q": "1"}},
     ],
 )
 async def test_agent_parameters_cannot_override_policy_headers(
@@ -160,10 +162,18 @@ async def test_agent_parameters_cannot_override_policy_headers(
         parameters={"temperature": 0.2, **parameters},
         context=LLMCallContext.for_session("ses_test"),
     )
+    # The capture helper replaces `client_params`, so check the
+    # agent-supplied value was dropped BEFORE it does (P2-N2).
+    assert not llm.client_params
+    assert llm.default_headers is not None
+    assert llm.default_headers["User-Agent"] == kolsch_user_agent()
 
     request = _call_and_capture(llm)
 
     assert request.headers["x-opencode-session"] == "ses_test"
     assert request.headers["user-agent"] == kolsch_user_agent()
+    assert "openai-organization" not in request.headers
+    assert "openai-project" not in request.headers
+    assert request.url.query == b""
     body = json.loads(request.content)
     assert body["temperature"] == 0.2
