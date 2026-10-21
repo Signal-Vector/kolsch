@@ -2,9 +2,11 @@
 # tree MINUS the two heavy dirs tests/cli + tests/component, no coverage;
 # ~3 min vs ~16 min) via GATE_SCOPE=sanity (qol-125). This is NOT the
 # full local landing gate: the full suite (whole tree + coverage + 85%
-# floor) runs LOCALLY at push-to-main via the .githooks/pre-push hook +
-# scripts/commit-gate. So a green `ci` here means "sanity passed," not
-# "full gate passed" — see AGENTS.md → Risks & Non-Guarantees.
+# floor) runs LOCALLY via scripts/commit-gate, which authors run before
+# opening a PR. This job is the REQUIRED status check on `main` (ruleset
+# "main protection"; keep the job name `gate (compose.test.yml)` in sync
+# with it). A green check means "sanity passed," not "full gate passed"
+# — see AGENTS.md → Landing a change / Risks & Non-Guarantees.
 
 name: ci
 
