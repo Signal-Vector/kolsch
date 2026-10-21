@@ -908,10 +908,11 @@ class WorkflowsImpl(AbstractWorkflows):
         emitting one more ``append_event`` after the caller repoints the ids.
 
         The force waits are BOUNDED: a coroutine can swallow its
-        ``CancelledError`` (a node body's ``except BaseException``, or the
-        delivery landing inside ``_finalize_terminal``'s bridge-await
-        suppress) and survive the cancel — an unbounded await there would
-        hang ``/new`` inside its own safety net. Python cannot force-kill a
+        ``CancelledError`` (e.g. a node body's ``except BaseException``;
+        since bug-140 ``_finalize_terminal``'s bridge await re-raises a
+        cancel aimed at its own task) and survive the cancel — an
+        unbounded await there would hang ``/new`` inside its own safety
+        net. Python cannot force-kill a
         swallower; proceeding after the bound is the accepted residual, and
         the unconditional re-arm keeps the impl usable either way (a
         surviving old task has re-parked on ``queue.get()`` — a harmless
@@ -1071,6 +1072,11 @@ class WorkflowsImpl(AbstractWorkflows):
         workflow can't kill the drain.
         """
         while True:
+            # bug-140 defence in depth: never pick up more work once
+            # `aclose()` has begun, even if some await on the run path
+            # swallowed the cancel aimed at this task.
+            if self._closed:
+                return
             spec = await self._workflow_queue.get()
             if self._retiring:
                 # feat-127: a `/new` switch is retiring live work — drop this
@@ -1543,8 +1549,22 @@ class WorkflowsImpl(AbstractWorkflows):
             # so the sentinel isn't dropped when the queue is full.
             with contextlib.suppress(Exception):
                 await bridge_queue.put(_STOP_SENTINEL)
-        with contextlib.suppress(asyncio.CancelledError, Exception):
+        try:
             await bridge_task
+        except asyncio.CancelledError:
+            # bug-140: a CancelledError here is either the BRIDGE task's
+            # own cancellation (e.g. `aclose()` cancelling per-run drains
+            # — expected, swallow) or a cancel aimed at THIS task (the
+            # shared FIFO drain being torn down while it waits for the
+            # bridge). Swallowing the latter consumed the cancel: the
+            # drain looped back to `queue.get()` and `aclose()` awaited
+            # it forever. Same discrimination as bug-128's site in
+            # `_run_one_workflow`.
+            current = asyncio.current_task()
+            if current is not None and current.cancelling() > 0:
+                raise
+        except Exception:  # noqa: BLE001, S110 — bridge failures are logged by the bridge
+            pass
 
         # Drop the per-run trackers.
         self._workflow_cancels.pop(run_id, None)
