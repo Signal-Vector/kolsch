@@ -104,7 +104,9 @@ def test_no_tail_is_missing() -> None:
     text = describe_default_deny_tail_problem(status)
     assert text is not None
     assert "no default-deny tail" in text
-    assert "ask for approval in `kolsch chat` and be denied everywhere else" in text
+    assert "ask for approval in `kolsch chat`" in text
+    assert "allowed without asking under `kolsch chat --auto-approve`" in text
+    assert "denied everywhere else" in text
     assert _FIX in text
     assert "kolsch doctor" in text
     assert "--sync-bundle" not in text
@@ -167,6 +169,7 @@ def test_catch_all_allow_only_is_missing_with_allow_index() -> None:
         in text
     )
     assert "ask for approval" not in text
+    assert "--auto-approve" not in text
     assert _FIX in text
     assert "kolsch doctor" in text
     assert "--sync-bundle" not in text

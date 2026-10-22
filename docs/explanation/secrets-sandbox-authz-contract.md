@@ -459,7 +459,10 @@ The explicit tail rule `{what: "*", pattern: "*", effect: deny}`
 (id `rl_default_deny`, written by `kolsch setup`) makes that deny
 unconditional. Without it, a no-rule match still denies for headless
 callers but routes to the approval prompt when a prompt callback is
-registered (chat). The runtime does **not** require the tail: a rule
+registered (chat) — and under `kolsch chat --auto-approve` that prompt
+self-resolves as allow-once, so uncovered actions are allowed without
+asking. With the tail, uncovered actions are denied outright in chat
+too. The runtime does **not** require the tail: a rule
 set with no tail, or with the tail not last, loads unchanged while
 `bootstrap_runtime` logs one `platform_runtime` WARNING per process
 per workspace and `kolsch doctor` reports an advisory Authorization

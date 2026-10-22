@@ -520,14 +520,19 @@ async def test_doctor_non_mapping_platform_yaml_skips_authorization(
     ("content", "reason"),
     [
         ("storage: {}\n", "`authorization` section is missing"),
-        ("authorization: 3\n", "`authorization` is int, not a mapping"),
+        ("authorization:\n", "`authorization` is null, not a mapping"),
+        (
+            "authorization:\n  config: off\n",
+            "`authorization.config` is a string, not a mapping",
+        ),
+        ("authorization: 3\n", "`authorization` is a number, not a mapping"),
         (
             "authorization:\n  config: [1]\n",
-            "`authorization.config` is list, not a mapping",
+            "`authorization.config` is a list, not a mapping",
         ),
         (
             "authorization:\n  config:\n    rules: 5\n",
-            "`authorization.config.rules` is int, not a list",
+            "`authorization.config.rules` is a number, not a list",
         ),
     ],
 )

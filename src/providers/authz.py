@@ -456,7 +456,8 @@ def describe_default_deny_tail_problem(status: DefaultDenyTailStatus) -> str | N
         )
     return (
         f"{head} Effect: actions no rule covers will ask for approval in "
-        "`kolsch chat` and be denied everywhere else. Fix: run "
+        "`kolsch chat`, be allowed without asking under "
+        "`kolsch chat --auto-approve`, and be denied everywhere else. Fix: run "
         f"`{_DEFAULT_DENY_FIX_COMMAND}`, then `kolsch doctor` to re-check."
     )
 

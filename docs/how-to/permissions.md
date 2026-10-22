@@ -482,10 +482,13 @@ section. It is advisory: doctor's exit code doesn't change.
 What it means today:
 
 - **Tail missing.** An action no rule covers asks for approval in
-  `kolsch chat` and is denied everywhere else (`kolsch run`, the
-  server, headless workflows). With the tail, it is denied
-  everywhere without a prompt. An empty, absent, or `null`
-  `rules:` list counts as missing.
+  `kolsch chat` — and is **allowed without asking** under
+  `kolsch chat --auto-approve` — and is denied everywhere else
+  (`kolsch run`, the server, headless workflows). An empty, absent,
+  or `null` `rules:` list counts as missing.
+- **Tail present (for comparison).** An action no rule covers is
+  denied outright everywhere — in chat too, with no approval
+  prompt, and `--auto-approve` doesn't change that.
 - **Tail missing, with a catch-all allow** (e.g.
   `{ who: ".*", what: ".*", effect: allow }`). That rule already
   allows every action no earlier rule denies — remove or narrow it
@@ -512,7 +515,8 @@ Notes:
   but is reported as "no default-deny tail". That errs on the safe
   side; use the canonical shape to clear the warning.
 - A catch-all deny scoped with `from:` is not a tail — it only
-  covers that caller.
+  covers that caller. This applies to canonical-shape rules; legacy
+  `{who, what, effect}` rules currently ignore `from:` altogether.
 - `/reload` in chat does not re-check. A tail removed mid-session
   is reported by `kolsch doctor` or the next command that starts
   the runtime.
