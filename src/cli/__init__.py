@@ -16,6 +16,13 @@ footprint stays lean. Every command routes through
 `api`.
 """
 
-from cli.main import main
+# Must run before any non-stdlib import: on an unsupported interpreter
+# (e.g. 3.14, which uv will install into) importing cli.main crashes
+# deep inside crewai/chromadb. See cli/_python_support.py.
+from cli._python_support import ensure_supported_python
+
+ensure_supported_python()
+
+from cli.main import main  # noqa: E402
 
 __all__ = ["main"]
