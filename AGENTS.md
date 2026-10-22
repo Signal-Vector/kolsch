@@ -246,14 +246,21 @@ These are non-negotiable. Violating them blocks merges.
   case branch like `if tool_name == "read_file": …` inside
   `src/engine/` or `src/tools/`, you have violated this rule —
   add the tool file instead.
-- **The production Authorization rule set must end with a
-  default-deny tail.** The `allow_all_test` variant is for tests
-  only — it is registered ONLY when `KOLSCH_TEST_BUILD=1` and
-  production builds refuse to load it. Removing
-  `rl_default_deny` from `platform.yaml` directly OR via
-  `kolsch permissions remove` is rejected (the runtime
-  bootstrap refuses to load a rule set without the tail; the
-  CLI raises `authz.protected_rule`).
+- **The production Authorization rule set should end with the
+  default-deny tail** (`{what: "*", pattern: "*", effect: deny}`,
+  id `rl_default_deny`), which `kolsch setup` writes.
+  `kolsch permissions remove rl_default_deny` is refused
+  (`authz.protected_rule`). A hand-edited `platform.yaml` with no
+  tail, or with the tail not last, still **loads** — it is not
+  refused: `bootstrap_runtime` logs one WARNING per process per
+  workspace and `kolsch doctor` reports an advisory finding (both
+  via `providers.authz.inspect_default_deny_tail`; reuse it, don't
+  re-derive the tail check). Without a tail, an action no rule
+  covers asks for approval in chat and is denied everywhere else.
+  The `allow_all_test` variant is for tests only: it is registered
+  unconditionally, but its constructor refuses unless
+  `KOLSCH_TEST_BUILD=1`, and the runtime bootstrap always builds
+  `rule_based`.
 - **Every new CLI command or subcommand requires a smoke test
   in `tests/component/test_cli_smoke.py`.** No exceptions. The
   smoke test invokes the CLI in a fresh subprocess

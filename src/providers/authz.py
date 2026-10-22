@@ -4,8 +4,13 @@ The `rule_based` variant is a real ACL implementation from day one.
 Two rule schemas coexist during an in-flight migration: the canonical
 `{what, pattern, effect}` glob-matched shape and the legacy
 `{id, who, what, effect}` regex-matched shape. The matcher dispatches
-per-shape; both terminate at the protected default-deny tail
-[`DEFAULT_DENY_RULE_ID`][providers.authz.DEFAULT_DENY_RULE_ID].
+per-shape; a well-formed rule set terminates at the protected
+default-deny tail
+[`DEFAULT_DENY_RULE_ID`][providers.authz.DEFAULT_DENY_RULE_ID]. The
+tail is not enforced as present: a set without it falls through to the
+implicit no-rule path (prompt when a callback is registered, else
+deny). [`inspect_default_deny_tail`][providers.authz.inspect_default_deny_tail]
+reports where (if anywhere) the tail sits.
 
 The `effect` field carries three values — `allow`, `deny`, and
 `prompt`. The provider classifies; on `prompt` it either calls the
@@ -71,8 +76,12 @@ DEFAULT_DENY_RULE_ID = "rl_default_deny"
 
 Set at parse time when a rule with the matching shape is detected;
 [`RuleBasedAuthorizationProvider.remove_rule`][providers.authz.RuleBasedAuthorizationProvider.remove_rule]
-refuses to remove this id. The shape that earns this id is
-`who=".*"` AND `what=".*"` AND `effect="deny"`."""
+refuses to remove this id (even when no rule carries it). The shapes
+that earn this id are legacy `who=".*"` AND `what=".*"` AND
+`effect="deny"`, and canonical `what="*"` AND `pattern="*"` AND
+`effect="deny"`. The id ignores `from:`, so it is not a reliable
+tail signal — use
+[`inspect_default_deny_tail`][providers.authz.inspect_default_deny_tail]."""
 
 
 # feat-041 — sidecar shape passed by config loaders that use
@@ -696,9 +705,10 @@ class RuleBasedAuthorizationProvider:
     ([`add_rule`][providers.authz.RuleBasedAuthorizationProvider.add_rule],
     [`remove_rule`][providers.authz.RuleBasedAuthorizationProvider.remove_rule],
     [`get_rule`][providers.authz.RuleBasedAuthorizationProvider.get_rule]).
-    The default-deny tail keeps the fixed id
+    The default-deny tail, when present, keeps the fixed id
     [`DEFAULT_DENY_RULE_ID`][providers.authz.DEFAULT_DENY_RULE_ID]
-    and refuses removal.
+    and refuses removal. Construction does not check that the tail
+    exists or is last; `bootstrap_runtime` warns about that.
     """
 
     def __init__(
@@ -1972,6 +1982,8 @@ register_authorization_variant("rule_based", RuleBasedAuthorizationProvider)
 # `AllowAllTestAuthorizationProvider.__init__` is what enforces the
 # production refusal. Registering unconditionally lets
 # `make_authorization_provider(variant="allow_all_test")` resolve
-# the factory; the factory then validates the env state. Tests set
-# `KOLSCH_TEST_BUILD=1` in conftest.py.
+# the factory; the factory then validates the env state. No global
+# conftest sets `KOLSCH_TEST_BUILD`; tests that need the variant set it
+# themselves (e.g. `tests/component/authz/test_phase2_authz.py`). The
+# runtime bootstrap never consults `authorization.variant`.
 register_authorization_variant("allow_all_test", AllowAllTestAuthorizationProvider)

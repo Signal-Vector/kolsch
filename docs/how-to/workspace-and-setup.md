@@ -130,7 +130,14 @@ Prints up to five sections:
    `bundles/<your-bundle>/**`. `kolsch doctor` surfaces them; it
    never rewrites user code.
 
-Exit code is `0` when clean, `1` when any drift was found.
+Plus, only when there's a finding, an advisory **Authorization**
+section: `platform.yaml`'s rule list has no default-deny tail, or has
+it somewhere other than last (or its `authorization` shape can't be
+read). See
+[If your rule list has no default-deny tail](permissions.md#if-your-rule-list-has-no-default-deny-tail).
+
+Exit code is `0` when clean, `1` when any drift was found. The
+Authorization section never changes the exit code.
 
 ## Repairing drift — `kolsch setup --sync-bundle`
 

@@ -187,8 +187,11 @@ def _authz_tail_note(workspace_root: Path) -> str | None:
 
     Read-only. Normalizes `authorization.config.rules` exactly as the
     runtime does (absent / `null` → `[]`). Returns `None` silently when
-    `platform.yaml` is absent, unreadable, unparseable, or not shaped
-    like a platform config — other surfaces own reporting those.
+    `platform.yaml` is absent, unreadable, unparseable, or not a mapping
+    — the migrator's parse-failure section owns reporting those. When
+    the document parses but its `authorization` shape can't be read,
+    returns a "couldn't check the default-deny tail: <reason>" note
+    instead of guessing.
     """
     path = workspace_root / "platform.yaml"
     try:
@@ -197,13 +200,29 @@ def _authz_tail_note(workspace_root: Path) -> str | None:
         return None
     if not isinstance(data, dict):
         return None
-    authorization = data.get("authorization")
-    if not isinstance(authorization, dict):
-        return None
-    rules = platform_rules_from_config(authorization.get("config", {}))
-    if rules is None:
+    reason = _authz_shape_problem(data)
+    if reason is not None:
+        return f"couldn't check the default-deny tail: {reason}."
+    rules = platform_rules_from_config(data["authorization"].get("config", {}))
+    if rules is None:  # unreachable after `_authz_shape_problem`; keeps mypy honest
         return None
     return describe_default_deny_tail_problem(inspect_default_deny_tail(rules))
+
+
+def _authz_shape_problem(data: dict[str, object]) -> str | None:
+    """Name why `authorization.config.rules` can't be read, or `None`."""
+    if "authorization" not in data:
+        return "`authorization` section is missing"
+    authorization = data["authorization"]
+    if not isinstance(authorization, dict):
+        return f"`authorization` is {type(authorization).__name__}, not a mapping"
+    config = authorization.get("config", {})
+    if not isinstance(config, dict):
+        return f"`authorization.config` is {type(config).__name__}, not a mapping"
+    if platform_rules_from_config(config) is None:
+        rules = config.get("rules")
+        return f"`authorization.config.rules` is {type(rules).__name__}, not a list"
+    return None
 
 
 def _relative_files(root: Path) -> set[str]:

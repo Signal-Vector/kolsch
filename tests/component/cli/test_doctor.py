@@ -507,19 +507,56 @@ async def test_doctor_malformed_platform_yaml_skips_authorization(
     assert "Authorization" not in out.getvalue()
 
 
-@pytest.mark.parametrize(
-    "content",
-    [
-        "- just\n- a list\n",
-        "authorization: 3\n",
-        "authorization:\n  config:\n    rules: 5\n",
-    ],
-)
-async def test_doctor_odd_platform_yaml_shapes_skip_authorization(
-    tmp_path: Path, content: str
+async def test_doctor_non_mapping_platform_yaml_skips_authorization(
+    tmp_path: Path,
 ) -> None:
-    (tmp_path / "platform.yaml").write_text(content, encoding="utf-8")
+    (tmp_path / "platform.yaml").write_text("- just\n- a list\n", encoding="utf-8")
     out = io.StringIO()
     rc = await cmd_doctor(argparse.Namespace(), out=out, root=tmp_path)
     assert rc == 0
     assert "Authorization" not in out.getvalue()
+
+
+@pytest.mark.parametrize(
+    ("content", "reason"),
+    [
+        ("storage: {}\n", "`authorization` section is missing"),
+        ("authorization: 3\n", "`authorization` is int, not a mapping"),
+        (
+            "authorization:\n  config: [1]\n",
+            "`authorization.config` is list, not a mapping",
+        ),
+        (
+            "authorization:\n  config:\n    rules: 5\n",
+            "`authorization.config.rules` is int, not a list",
+        ),
+    ],
+)
+async def test_doctor_unreadable_authorization_shape_is_advisory(
+    tmp_path: Path, content: str, reason: str
+) -> None:
+    (tmp_path / "platform.yaml").write_text(content, encoding="utf-8")
+    hash_before = _dir_hash(tmp_path)
+    out = io.StringIO()
+    rc = await cmd_doctor(argparse.Namespace(), out=out, root=tmp_path)
+    text = out.getvalue()
+    assert rc == 0, text  # advisory
+    assert "Authorization (platform.yaml)" in text
+    assert f"couldn't check the default-deny tail: {reason}." in text
+    assert _dir_hash(tmp_path) == hash_before
+
+
+async def test_doctor_unreadable_authorization_shape_installed_keeps_rc(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _run_install(tmp_path, monkeypatch)
+    path = tmp_path / "platform.yaml"
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    data["authorization"]["config"]["rules"] = "oops"
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    out = io.StringIO()
+    rc = await cmd_doctor(argparse.Namespace(), out=out, root=tmp_path)
+    text = out.getvalue()
+    assert rc == 0, text
+    assert "no drift detected" in text
+    assert "couldn't check the default-deny tail" in text
