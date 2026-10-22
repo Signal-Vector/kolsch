@@ -25,23 +25,36 @@ Covers Step 4 ACs 4.1-4.17:
 
 from __future__ import annotations
 
+import json
 from dataclasses import FrozenInstanceError
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from assets.catalog import AssetCatalog, AssetEntry
+from files import PathPolicy
 from providers.authz import (
     PermissionLayer,
     Rule,
     RuleBasedAuthorizationConfig,
     RuleBasedAuthorizationProvider,
 )
+from providers.sandbox import NativeSandboxProvider
+from providers.secrets import DotenvSecretsProvider
+from tools.builtins import make_bash
+from tools.decorator import get_tool_definition
+from workflows.builtins import register_builtins
 from workflows.errors import (
     WorkflowFromAssetTypeError,
     WorkflowFromNotFound,
     WorkflowFromShapeError,
 )
+from workflows.executor import IterativeExecutor, RunnerRegistry
+from workflows.parser import Workflow
+from workflows.run_store import WorkflowRunStore
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -556,3 +569,100 @@ def test_audit_level_field_on_pydantic_config_model() -> None:
     assert cfg.audit_level == "rule_matched"
     cfg2 = RuleBasedAuthorizationConfig(audit_level="all")
     assert cfg2.audit_level == "all"
+
+
+# ---------------------------------------------------------------------------
+# bug-158 — a workflow-scoped (``from: <bundle>/workflows/<W>``) tool rule
+# fires for a builtin node in W, through the real executor + dispatch path
+# ---------------------------------------------------------------------------
+
+
+_SCOPED_WF = "kolsch/workflows/scoped"
+_OTHER_WF = "kolsch/workflows/other"
+
+
+async def _run_bash_workflow(
+    tmp_path: Path, workflow_ref: str
+) -> tuple[str, list[dict[str, Any]]]:
+    """Run a one-node ``kolsch/nodes/bash`` workflow as ``workflow_ref``
+    under the platform rules ``[{bash, from: _SCOPED_WF, deny}, {*, allow}]``.
+
+    Returns the terminal status and the run's ``policy.decision.made``
+    events.
+    """
+    catalog = AssetCatalog()
+    for ref in (_SCOPED_WF, _OTHER_WF):
+        catalog.assets[ref] = AssetEntry(
+            ref=ref,
+            asset_type="workflow",
+            bundle="kolsch",
+            path=f"/var/empty/{ref}",
+            metadata={},
+        )
+    authz = _provider(
+        rules=[
+            {"what": "tool.bash", "pattern": "*", "from": _SCOPED_WF, "effect": "deny"},
+            {"what": "*", "pattern": "*", "effect": "allow"},
+        ],
+        catalog=catalog,
+    )
+    workflow = Workflow.model_validate(
+        {"nodes": {"run": {"type": "kolsch/nodes/bash", "command": "echo hi"}}}
+    )
+    root = tmp_path / workflow_ref.rsplit("/", 1)[-1]
+    root.mkdir()
+    policy = PathPolicy(allowed_paths=["."])
+    registry = RunnerRegistry()
+    register_builtins(
+        registry,
+        bash_defn=get_tool_definition(make_bash(policy=policy, root=root)),
+        authz=authz,
+        secrets=DotenvSecretsProvider(root=root, config={"path": ".env"}),
+        sandbox=NativeSandboxProvider(config={}),
+        catalog=catalog,
+    )
+    store = WorkflowRunStore(root)
+    run = store.create(workflow_ref=workflow_ref, inputs={})
+    status = await IterativeExecutor(
+        workflow=workflow,
+        run=run,
+        store=store,
+        registry=registry,
+        catalog=catalog,
+    ).run()
+    events = [
+        json.loads(line)
+        for line in store.directory(run.run_id)
+        .events_path.read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    decisions = [e for e in events if e["kind"] == "policy.decision.made"]
+    return status.value, decisions
+
+
+async def test_workflow_scoped_deny_blocks_builtin_node_in_that_workflow(
+    tmp_path: Path,
+) -> None:
+    """bug-158 AC4 — the W-scoped bash deny fails W's bash node, and the
+    recorded decision was judged against a chain containing W."""
+    status, decisions = await _run_bash_workflow(tmp_path, _SCOPED_WF)
+
+    bash_decisions = [d for d in decisions if d["payload"]["action"] == "tool.bash"]
+    assert [d["payload"]["effect"] for d in bash_decisions] == ["deny"], (
+        f"W's bash node must be denied by the W-scoped rule; status={status}, "
+        f"decisions={[d['payload'] for d in bash_decisions]}"
+    )
+    assert _SCOPED_WF in bash_decisions[0]["payload"]["caller_chain"]
+    assert status == "failed"
+
+
+async def test_workflow_scoped_deny_does_not_affect_other_workflow(
+    tmp_path: Path,
+) -> None:
+    """bug-158 AC4 — the same rule leaves bash in another workflow alone."""
+    status, decisions = await _run_bash_workflow(tmp_path, _OTHER_WF)
+
+    bash_decisions = [d for d in decisions if d["payload"]["action"] == "tool.bash"]
+    assert [d["payload"]["effect"] for d in bash_decisions] == ["allow"]
+    assert status == "succeeded"
