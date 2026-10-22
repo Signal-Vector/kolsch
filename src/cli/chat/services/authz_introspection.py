@@ -690,7 +690,10 @@ async def handle_reload(runtime: PlatformRuntime) -> ReloadResult:
     Failure model (AC #2): any single YAML that fails to parse aborts
     the entire reload BEFORE any state mutates. The error message
     cites the offending ``file:line`` and the old provider + old
-    catalog stay live. Never leaves the system half-loaded.
+    catalog stay live. Never leaves the system half-loaded. A missing
+    ``platform.yaml`` aborts the same way (bug-157): the reload never
+    re-creates the file, so deleting it cannot swap in generated
+    default rules.
 
     Success summary (AC #1 / Mockup 3 + C1): ``reloaded N rules across
     4 layers (platform, bundle, workflow, agent) [+X bundles, -Y agents
@@ -744,6 +747,19 @@ async def handle_reload(runtime: PlatformRuntime) -> ReloadResult:
     # Any failure at this phase returns an error immediately — the
     # runtime is untouched, so the old provider + old bundle/agent
     # bindings stay active.
+
+    # bug-157: /reload is a read. A missing platform.yaml aborts it
+    # rather than letting `load_or_create` regenerate the file and
+    # swap its default rules in live.
+    platform_yaml = root / "platform.yaml"
+    if not platform_yaml.is_file():
+        return ReloadResult(
+            error=(
+                f"platform.yaml is missing at {platform_yaml}. "
+                "Old rules still active; no change to enforcement. "
+                "Restore the file (or run `kolsch setup`), then /reload."
+            ),
+        )
 
     try:
         payload = load_or_create(root)

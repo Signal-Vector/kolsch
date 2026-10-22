@@ -725,10 +725,16 @@ unconditionally, but its constructor raises unless the
 instantiated outside a test build. `bootstrap_runtime` does not
 consult `authorization.variant` at all — it always builds
 `rule_based` — so the variant is reachable only via
-`make_authorization_provider` / direct construction in tests. Existing Phase 1+ component
-tests that relied on the old allow-all default either set their own
-rule fixture or opt in via `allow_all_test`; no test relies on
-production defaults being permissive.
+`make_authorization_provider` / direct construction in tests. The
+production default is not permissive either: the `platform.yaml`
+auto-generated on a root without one carries
+[`fail_closed_default_rules`][assets.default_rules.fail_closed_default_rules]
+(`agent.execute.*` allow, then the default-deny tail), so agents may
+run and every tool is denied. No test relies on production defaults
+being permissive. A test that needs a tool allowed seeds an explicit
+rule list before bootstrapping — `tests/fixtures/engine_builder.write_platform_yaml`
+or an inline `platform.yaml` — with a comment saying why; it never
+flips an env var or relies on `authorization.variant`.
 
 ## 3.6 Conformance Invariants
 
