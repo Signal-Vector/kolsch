@@ -19,6 +19,7 @@ import yaml
 
 from engine import ExecutionContext, LLMRequest, LLMResponse
 from engine.context import AgentExecutionError
+from errors import ConfigDuplicateAgentId
 from platform_runtime import bootstrap_runtime
 from schemas import AgentId, EventType, derive_agent_id
 
@@ -352,3 +353,57 @@ async def test_get_ref_for_agent_id_explicit_and_derived(tmp_path: Path) -> None
     assert str(plain.agent_id) == derived_id
     assert assets.get_ref_for_agent_id(derived_id) == "cc/agents/plain"
     assert assets.get_ref_for_agent_id("ag_nobody") is None
+
+
+def _write_agent(root: Path, name: str, *, agent_id: str | None) -> None:
+    doc: dict[str, Any] = {
+        "schema_version": "0.1",
+        "assembly_version": "1",
+        "name": name,
+        "description": f"{name} agent",
+        "model": {"provider": "mock", "model": "mock-model"},
+        "prompt": "hi",
+        "io": {"mode": "conversational"},
+    }
+    if agent_id is not None:
+        doc["agent_id"] = agent_id
+    (root / "bundles" / "cc" / "agents" / f"{name}.yaml").write_text(
+        yaml.safe_dump(doc), encoding="utf-8"
+    )
+
+
+async def test_duplicate_agent_id_across_two_agents_is_refused(tmp_path: Path) -> None:
+    """S4 — a second agent claiming an already-mapped `agent_id` cannot
+    be built, so it can never be authorized as (or attributed to) the
+    first agent's ref. Rebuilding the same agent stays fine."""
+    _write_workspace(tmp_path, rules=[_ALLOW_ALL])
+    _write_agent(tmp_path, "impostor", agent_id="ag_cc")
+    runtime = await bootstrap_runtime(root=tmp_path)
+
+    await runtime.build_resolved_config(_AGENT_REF)
+    await runtime.build_resolved_config(_AGENT_REF)  # same agent: fine
+
+    with pytest.raises(ConfigDuplicateAgentId) as excinfo:
+        await runtime.build_resolved_config("cc/agents/impostor")
+    assert excinfo.value.detail == {
+        "agent_id": "ag_cc",
+        "refs": [_AGENT_REF, "cc/agents/impostor"],
+    }
+    assert "'ag_cc'" in str(excinfo.value)
+    assert _AGENT_REF in str(excinfo.value)
+    assert "cc/agents/impostor" in str(excinfo.value)
+    # The original mapping is untouched.
+    assert runtime.asset_management.get_ref_for_agent_id("ag_cc") == _AGENT_REF
+
+
+async def test_distinct_agent_ids_build_side_by_side(tmp_path: Path) -> None:
+    _write_workspace(tmp_path, rules=[_ALLOW_ALL])
+    _write_agent(tmp_path, "other", agent_id=None)
+    runtime = await bootstrap_runtime(root=tmp_path)
+
+    await runtime.build_resolved_config(_AGENT_REF)
+    other = await runtime.build_resolved_config("cc/agents/other")
+
+    assets = runtime.asset_management
+    assert assets.get_ref_for_agent_id("ag_cc") == _AGENT_REF
+    assert assets.get_ref_for_agent_id(str(other.agent_id)) == "cc/agents/other"

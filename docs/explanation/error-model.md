@@ -882,11 +882,12 @@ per-agent permissions API for tool authors.
 | `config.agent_inheritance_cycle` | Fatal | `{cycle: [path1, path2, ...]}` | engine pre-flight (5.6.5) — `extends:` chain contains a cycle |
 | `config.parent_agent_not_found` | Fatal | `{path, resolved}` | engine pre-flight (5.6.5) — `extends:` points at a missing file |
 | `config.extends_template_without_inheritance` | Fatal | `{agent_path}` | engine pre-flight (5.6.6) — child prompt uses `{% extends parent %}` but its YAML has no `extends:` field |
+| `config.duplicate_agent_id` | Fatal | `{agent_id, refs: [first_ref, second_ref]}` | agent-load (`AssetManagement.build_resolved_config`) — a second agent resolves to an `agent_id` already mapped to a different ref (two YAMLs declare the same explicit `agent_id:`, or an `extends:` child inherits its parent's). The id heads the exchange's caller chain, so a shared id would let one agent be authorized as the other under `from:`-scoped rules |
 | `agent.template_warning` | Recoverable (Warning) | `{reference, reason, hint}` | engine pre-flight (5.6.6) — template-config consistency walker (Phase 2.2 §9) flags an empty-data variable access |
 | `authz.denied` | Recoverable | `{tool, target, rule_id}` | engine pre-dispatch OR tool's `permissions.require` call when the composed rules resolve to `DENY` / `PROMPT`-without-callback |
 | `tool.permissions_no_context` | Fatal | `{tool, caller}` | tool's `permissions.check` / `.require` called outside the engine's dispatch ContextVar (e.g. a unit test that imported the tool directly) |
 
-**Why these levels.** The seven `config.*` codes plus the two
+**Why these levels.** The eight `config.*` codes plus the two
 `context.*` codes are Fatals because the agent cannot load.
 `agent.template_warning` is the deliberate exception: empty
 rendering is sometimes intentional (a parent template

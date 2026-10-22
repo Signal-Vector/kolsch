@@ -50,6 +50,7 @@ from errors import (
     ConfigDeprecatedRefForm,
     ConfigDeprecatedRegexRule,
     ConfigDeprecatedRuleForm,
+    ConfigDuplicateAgentId,
     ConfigExtendsTemplateWithoutInheritance,
     ConfigFallbackDuplicate,
     ConfigInputsInAgentTemplate,
@@ -158,6 +159,10 @@ CONSTRUCTOR_ARGS: dict[type[PlatformError], dict[str, Any]] = {
         "canonical_form": "kolsch/bash",
     },
     ConfigAgentInheritanceCycle: {"cycle": ["a.yaml", "b.yaml", "a.yaml"]},
+    ConfigDuplicateAgentId: {
+        "agent_id": "ag_helper",
+        "refs": ["kolsch/agents/helper", "kolsch/agents/helper_b"],
+    },
     ConfigParentAgentNotFound: {
         "path": "kolsch:agents/missing.yaml",
         "resolved": "/tmp/missing.yaml",

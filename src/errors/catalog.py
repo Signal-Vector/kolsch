@@ -33,6 +33,9 @@ CATALOG: dict[str, Level] = {
     "context.overflow_uncompactable": Level.FATAL,
     # Agent inheritance errors.
     "config.agent_inheritance_cycle": Level.FATAL,
+    # bug-158: two agent refs resolving to one agent_id would share an
+    # identity (and a caller-chain frame for `from:` authz rules).
+    "config.duplicate_agent_id": Level.FATAL,
     "config.parent_agent_not_found": Level.FATAL,
     "config.required_block_missing": Level.FATAL,
     "config.extends_template_without_inheritance": Level.FATAL,
