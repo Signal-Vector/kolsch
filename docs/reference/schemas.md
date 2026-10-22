@@ -56,6 +56,20 @@ consumes. `ResolvedAgentConfig`, `ModelSpec`, `IOSpec`, `PromptSpec`,
       show_source: false
       members_order: source
 
+## Caller chain
+
+The proximate-first agent/workflow frames an authorization decision is
+judged against — carried on `ToolContext.caller_chain` and matched by
+`from:`-scoped rules. See
+[Scoping rules](../how-to/permissions.md#scoping-rules-to-a-specific-agent-or-workflow).
+
+::: schemas.caller_chain
+    options:
+      heading_level: 3
+      show_root_heading: false
+      show_source: false
+      members_order: source
+
 ## Provider config (`llm_providers.<name>`)
 
 `platform.yaml`'s `llm_providers` entries load into

@@ -230,9 +230,14 @@ Examples:
     "tool_name": "bash",
     "action": "kolsch/tools/bash",
     "principal": "agent.ag_abc123",
-    "matched_rule": {"what": "kolsch/tools/bash", "pattern": "*", "effect": "deny"}
+    "matched_rule": {"what": "kolsch/tools/bash", "pattern": "*", "effect": "deny"},
+    "caller_chain": ["kolsch/agents/helper"]
 }
 ```
+
+`caller_chain` is the proximate-first list of agent/workflow refs the
+decision was judged against (the call's `ToolContext.caller_chain`) —
+the session-log record of which frames a `from:`-scoped rule saw.
 
 **`memory.item_not_found.detail`:**
 ```
@@ -503,7 +508,7 @@ losing a bus message doesn't fail an exchange.)
 
 | Code | Level | Detail | Where (typical) |
 |------|-------|--------|-----------------|
-| `tool.unauthorized` | Diagnostic | `{tool_name, action, principal, matched_rule}` | `tools.dispatch.invoke` |
+| `tool.unauthorized` | Diagnostic | `{tool_name, action, principal, matched_rule, caller_chain}` | `tools.dispatch.invoke` |
 | `tool.not_found` | Fatal | `{tool_name, agent_id}` | `tools.setup.register` |
 | `tool.setup_failed` | Fatal | `{tool_name, reason}` | `tools.setup.register` |
 | `tool.invalid_arguments` | Diagnostic | `{tool_name, validation_errors}` | `tools.dispatch.invoke` |

@@ -200,12 +200,21 @@ them.
 
 ```
 class ToolContext:
-    secrets:    dict[str, str]    # resolved secrets, keyed by name
-    session_id: str               # "ses_..."
-    agent_id:   str               # "ag_..."
+    secrets:      dict[str, str]    # resolved secrets, keyed by name
+    session_id:   str               # "ses_..."
+    agent_id:     str               # "ag_..."
+    caller_chain: CallerChain       # proximate-first agent/workflow frames
 ```
 
-Three fields, all read-only. Tools cannot:
+The core fields, all read-only (the full model in
+`src/tools/decorator.py` also carries `thread_id`, `principal`,
+`workspace_root`, `path_policy`, `tool_call_id`, `cancellation` and
+the four service handles). `caller_chain` is **required** — every
+producer (the engine exchange, workflow nodes, the MCP bridge) states
+it, and every authz check of the call reads it, so `from:`-scoped
+rules match the agent or workflow making the call. A producer that
+cannot attribute the call passes `CallerChain.unattributed()` by name.
+Tools cannot:
 - Write to the event log (the engine does that).
 - Modify other tools' state.
 - Inspect the principal or perform authorization checks (already done).
@@ -822,8 +831,10 @@ apply the flag; builtins carry no secrets.
 When the model decides to call a tool, the framework dispatches it.
 The platform's adapter for that tool runs:
 
-1. **Authorization check.** `allow(principal, action_name)`. If denied,
-   raise `ToolNotAuthorized`; the framework receives an error.
+1. **Authorization check.** `allow(principal, action_name,
+   caller_chain=ctx.caller_chain.frames)`. If denied, raise
+   `ToolUnauthorized` (its detail records `caller_chain`); the
+   framework receives an error.
 2. **Validate arguments.** The tool's args are validated against its
    `args_schema` (Pydantic). Invalid args raise; the framework receives
    a clean validation error.
@@ -992,8 +1003,8 @@ need to (and can't) override them from inside the body.
 
 **Implementation:** the tool dispatcher (`src/tools/dispatch.py`)
 constructs a `PermissionsBinding` with the authz provider, the
-agent's permissions, the bundle's permissions, the principal, and
-the tool name, then binds it to a module-level `ContextVar`
+agent's permissions, the bundle's permissions, the principal, the
+tool name, and the dispatching call's caller chain, then binds it to a module-level `ContextVar`
 immediately before invoking the tool function. The `bind` /
 `reset` pair lives inside the sandbox's `_work` closure so the
 binding lifetime exactly matches the tool body. Out-of-context
