@@ -1474,6 +1474,18 @@ class RuleBasedAuthorizationProvider:
         """Return every rule currently held, in evaluation order."""
         return [c.raw for c in self._rules]
 
+    def rules_snapshot(self) -> list[Rule]:
+        """Return every rule currently held, in evaluation order (sync).
+
+        Synchronous twin of
+        [`list_rules`][providers.authz.RuleBasedAuthorizationProvider.list_rules]
+        for callers that run outside an event loop — e.g.
+        `cli.permissions.mutate_platform_rules`, which compiles the
+        on-disk rule list through a throwaway provider to read each
+        entry's normalized fields and stable id.
+        """
+        return [c.raw for c in self._rules]
+
     def lookup_tool_ref(self, action: str) -> str | None:
         """Map an action string to a qualified rule-shape ref, when one is needed.
 

@@ -16,7 +16,12 @@ classification contract.
 - `AuthzMalformedRule` / `AuthzRegexInvalid` / `AuthzRuleInvalid` /
   `AuthzRuleNotFound` / `AuthzProtectedRule` (Fatal) — config-time
   surfaces from rule load and the live-edit CLI.
+- `AuthzRulesPersistFailed` (Fatal) — a rule edit could not be saved
+  to `platform.yaml` (file missing / unparseable / invalid rules /
+  lock timeout / write failure); the file is left untouched.
 """
+
+from typing import Literal
 
 from errors.base import PlatformError
 from errors.level import Level
@@ -202,6 +207,51 @@ class AuthzProtectedRule(PlatformError):
             message=f"Rule {rule_id!r} is removal-protected: {reason}",
             where=where,
             detail={"id": rule_id, "reason": reason},
+        )
+
+
+RulesPersistFailureReason = Literal[
+    "missing", "unparseable", "invalid_rules", "lock_timeout", "write_failed"
+]
+
+
+class AuthzRulesPersistFailed(PlatformError):
+    """Raised when a rule edit could not be written to `platform.yaml`.
+
+    Raised by `cli.permissions.mutate_platform_rules` (and the
+    `assets.platform_config.platform_yaml_lock` it holds) before any
+    byte of the file changes: a failure here always leaves
+    `platform.yaml` exactly as it was, and a missing file is never
+    created. `reason` says which guard tripped:
+
+    - `missing` — `platform.yaml` does not exist.
+    - `unparseable` — the file is not valid YAML, its top level is not
+      a mapping, or `authorization` / `authorization.config` /
+      `authorization.config.rules` has the wrong type.
+    - `invalid_rules` — the rules currently on disk fail to compile.
+    - `lock_timeout` — another writer held the rules lock past the
+      bounded wait.
+    - `write_failed` — the atomic temp-file write or rename failed.
+    """
+
+    code = "authz.rules_persist_failed"
+    level = Level.FATAL
+
+    def __init__(
+        self,
+        path: str,
+        reason: RulesPersistFailureReason,
+        detail: str,
+        *,
+        where: str = "cli.permissions.mutate_platform_rules",
+    ) -> None:
+        super().__init__(
+            message=(
+                f"Could not save the authorization rule change to {path} "
+                f"({reason}): {detail}"
+            ),
+            where=where,
+            detail={"path": path, "reason": reason, "detail": detail},
         )
 
 
