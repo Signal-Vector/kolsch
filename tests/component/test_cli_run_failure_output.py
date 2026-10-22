@@ -64,6 +64,17 @@ class _Stub400(BaseHTTPRequestHandler):
         return
 
 
+@pytest.fixture(autouse=True)
+def _no_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
+    # `_run` copies `os.environ`: keep an ambient proxy from routing the
+    # spawned CLI's calls to the local stub elsewhere.
+    for name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
+        monkeypatch.delenv(name, raising=False)
+        monkeypatch.delenv(name.lower(), raising=False)
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
+
+
 @pytest.fixture
 def stub_url() -> Iterator[str]:
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Stub400)

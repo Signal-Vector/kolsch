@@ -313,8 +313,9 @@ For more detail:
   command.
 - `<workspace>/logs/kolsch.log` always has every log record at INFO and
   above, including tracebacks, whether or not you passed `-v`. It
-  rotates at 5 MB (3 backups). It can contain provider error bodies but
-  never API keys.
+  rotates at 5 MB (3 backups). kolsch never logs API keys or request
+  headers; provider error bodies are logged verbatim (some providers
+  echo a masked key fragment).
 
 See [CLI: Failure output and logging](../architecture/cli.md#failure-output-and-logging)
 for the exact format.

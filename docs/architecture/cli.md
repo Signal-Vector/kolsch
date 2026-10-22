@@ -104,10 +104,11 @@ and above, from every logger, with timestamp, process id, level and
 logger name — whether or not `-v` is set. Failure tracebacks are always
 written here. It rotates at 5 MB and keeps 3 backups, shared by all
 kolsch processes on the workspace (concurrent rotations may drop or
-interleave a few lines). It can contain provider error bodies and
-request URLs; it never contains API keys, which stay in `.env`. Commands
-that run before a workspace exists (`kolsch setup` on a new path,
-`kolsch doctor`, `kolsch mcp bridge`) log to stderr only.
+interleave a few lines). It records request URLs. kolsch never logs
+API keys or request headers; provider error bodies are logged verbatim
+(some providers echo a masked key fragment). With no initialized
+workspace (`kolsch setup` on a new path, or `kolsch doctor` /
+`kolsch mcp bridge` pointed at one), logs go to stderr only.
 
 ## Principles
 
