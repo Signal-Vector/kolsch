@@ -426,12 +426,12 @@ async def test_allow_no_rule_with_callback_fires_with_rule_id_none() -> None:
 async def test_allow_no_rule_with_callback_persists_rule_and_fires_hook() -> None:
     """The callback's ``(effect, Rule)`` tuple lands the new rule
     above the default-deny tail AND fires the ``on_rule_added``
-    hook so the chat's ``cli.permissions._write_back`` persists it
-    to ``platform.yaml``."""
-    from providers.authz import AuthzEffect, Rule
+    hook with that one rule (bug-162: a ``RulePersistRequest``, never
+    the rule list) so the chat persists it to ``platform.yaml``."""
+    from providers.authz import AuthzEffect, Rule, RulePersistRequest
 
     provider = _authz([])
-    hook_called_with: list[list[Rule]] = []
+    hook_called_with: list[RulePersistRequest] = []
 
     async def _cb(
         *,
@@ -447,8 +447,8 @@ async def test_allow_no_rule_with_callback_persists_rule_and_fires_hook() -> Non
             Rule(who=".*", what=action, effect="allow"),
         )
 
-    def _on_rule_added(rules: list[Rule]) -> None:
-        hook_called_with.append(list(rules))
+    def _on_rule_added(request: RulePersistRequest) -> None:
+        hook_called_with.append(request)
 
     provider.register_prompt_callback(_cb, on_rule_added=_on_rule_added)
     first = await provider.allow("agent.x", "tool.bash")
@@ -463,8 +463,47 @@ async def test_allow_no_rule_with_callback_persists_rule_and_fires_hook() -> Non
 
     # The hook fired exactly once (after the first persist).
     assert len(hook_called_with) == 1
-    persisted = hook_called_with[0]
-    assert any(r.what == "tool.bash" and r.effect == "allow" for r in persisted)
+    request = hook_called_with[0]
+    assert request.rule.what == "tool.bash" and request.rule.effect == "allow"
+    assert request.anchor is None  # no-rule path → before the tail
+    assert any(
+        r.what == "tool.bash" and r.effect == "allow"
+        for r in await provider.list_rules()
+    )
+
+
+async def test_rule_added_hook_failure_is_logged_and_rule_stays_live(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """bug-162: a failing hook (sync or async) no longer vanishes silently."""
+    from providers.authz import AuthzEffect, Rule, RulePersistRequest
+
+    calls = 0
+
+    async def _cb(**kwargs: object) -> tuple[AuthzEffect, Rule]:
+        nonlocal calls
+        calls += 1
+        return (
+            AuthzEffect.ALLOW,
+            Rule(who=".*", what=str(kwargs["action"]), effect="allow"),
+        )
+
+    async def _async_hook(request: RulePersistRequest) -> None:
+        msg = f"disk full while saving {request.rule.what}"
+        raise OSError(msg)
+
+    provider = _authz([])
+    provider.register_prompt_callback(_cb, on_rule_added=_async_hook)
+    with caplog.at_level("WARNING", logger="providers.authz"):
+        first = await provider.allow("agent.x", "tool.bash")
+    second = await provider.allow("agent.x", "tool.bash")
+
+    assert first.allowed and second.allowed
+    assert calls == 1, "the in-memory rule must answer the second call"
+    assert any(
+        "rule-added hook failed" in r.getMessage() and r.exc_info
+        for r in caplog.records
+    )
 
 
 async def test_priority_agent_layer_wins_over_bundle_layer() -> None:

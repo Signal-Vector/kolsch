@@ -121,7 +121,7 @@ def dump(data: Any) -> str:  # noqa: ANN401
 # Several independent call sites across the CLI (``cli._setup``'s
 # migration helpers, ``cli.llm_commands``'s ``_write_platform_yaml_
 # atomic`` — shared by ``cmd_connect``/``cmd_disconnect``/``cmd_
-# refresh`` — and ``cli.permissions``'s ``_write_back``) all follow
+# refresh``) all follow
 # the same "read platform.yaml as a plain dict, mutate it, dump() it
 # back" pattern. Plain ``load()``/``dump()`` is safe-mode: it has no
 # comment-preservation machinery at all (that's what the separate
@@ -378,7 +378,9 @@ def load_round_trip_with_layout(text: str) -> tuple[Any, RoundTripLayout]:
     Pair with :func:`dump_round_trip_with_layout` so an unchanged node
     dumps back with the file's own indentation.
     """
-    return _yaml_rt.load(text), _guess_layout(text)
+    yaml = YAML(typ="rt")
+    yaml.preserve_quotes = True  # keep `'*'` vs `"*"` as written
+    return yaml.load(text), _guess_layout(text)
 
 
 def dump_round_trip_with_layout(data: Any, layout: RoundTripLayout) -> str:  # noqa: ANN401

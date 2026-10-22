@@ -805,3 +805,39 @@ def test_concurrent_processes_each_insert_once(tmp_path: Path) -> None:
     assert len(keys) == 3 + count
     text = yaml_path.read_text(encoding="utf-8")
     assert not [c for c in _COMMENT_LINES if c not in text]
+
+
+def test_malformed_from_on_new_rule_is_rule_invalid(tmp_path: Path) -> None:
+    """A non-PlatformError from compiling the new rule is wrapped (QA must-fix)."""
+    yaml_path = _ws(tmp_path)
+    before = yaml_path.read_bytes()
+
+    with pytest.raises(AuthzRuleInvalid, match="does not compile"):
+        _insert(yaml_path, _rule("kolsch/tools/bash", from_="not-three-segments"))
+
+    assert yaml_path.read_bytes() == before
+
+
+def test_unreadable_file_is_reported_as_unreadable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    yaml_path = _ws(tmp_path)
+    real_read_text = Path.read_text
+
+    def deny(self: Path, *args: Any, **kwargs: Any) -> str:
+        if self == yaml_path:
+            raise PermissionError(13, "Permission denied", str(self))
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", deny)
+    _assert_persist_failed(yaml_path, "unreadable")
+
+
+def test_quotes_are_preserved_as_written(tmp_path: Path) -> None:
+    yaml_path = _ws(
+        tmp_path, _PLATFORM.replace("model: mock/echo", 'model: "mock/echo"')
+    )
+
+    _insert(yaml_path, _rule("kolsch/tools/list_files"))
+
+    assert 'model: "mock/echo"' in yaml_path.read_text(encoding="utf-8")

@@ -34,7 +34,7 @@ import yaml
 from cli._modal import ApprovalModal
 from engine import CancelToken, ExecutionContext, LLMRequest, LLMResponse
 from platform_runtime import bootstrap_runtime
-from providers import Rule, RuleBasedAuthorizationProvider
+from providers import RuleBasedAuthorizationProvider
 from schemas import Event, EventType
 from tests.fixtures.mock_llm import (
     MockLLM,
@@ -389,7 +389,7 @@ async def test_scenario_2_deny_always_persists_rule_and_restart_auto_denies(
             - same stop behavior as Scenario 1
             - the new deny rule appears in platform.yaml after the
               chat exits (the on_rule_added hook fires the
-              cli.permissions._write_back path the chat uses)
+              cli.permissions.persist_rule_request path the chat uses)
       (B) Bootstrap a FRESH runtime against the SAME workspace.
           Run exchange #2 with a modal whose input_fn would raise if
           called. Verifies:
@@ -399,7 +399,8 @@ async def test_scenario_2_deny_always_persists_rule_and_restart_auto_denies(
     Uses its own workspace (NOT the module fixture) so the
     platform.yaml mutation doesn't pollute Scenario 1's state.
     """
-    from cli.permissions import _write_back
+    from cli.permissions import persist_rule_request
+    from providers import RulePersistRequest
 
     root = scenario_2_workspace
     yaml_path = root / "platform.yaml"
@@ -431,10 +432,10 @@ async def test_scenario_2_deny_always_persists_rule_and_restart_auto_denies(
     )
     assert isinstance(runtime_a.authz, RuleBasedAuthorizationProvider)
 
-    # Wire the SAME on_rule_added hook the chat does (atomic YAML
-    # write via cli.permissions._write_back).
-    def _on_rule_added(rules: list[Rule]) -> None:
-        _write_back(yaml_path, rules)
+    # Wire the SAME persistence the chat's hook does (bug-162: insert
+    # the one rule into the rules currently on disk).
+    def _on_rule_added(request: RulePersistRequest) -> None:
+        persist_rule_request(yaml_path, request, catalog=None)
 
     runtime_a.authz.register_prompt_callback(modal_a, on_rule_added=_on_rule_added)
 

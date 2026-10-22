@@ -17,8 +17,8 @@ classification contract.
   `AuthzRuleNotFound` / `AuthzProtectedRule` (Fatal) — config-time
   surfaces from rule load and the live-edit CLI.
 - `AuthzRulesPersistFailed` (Fatal) — a rule edit could not be saved
-  to `platform.yaml` (file missing / unparseable / invalid rules /
-  lock timeout / write failure); the file is left untouched.
+  to `platform.yaml` (file missing / unreadable / unparseable /
+  invalid rules / lock timeout / write failure); the file is left untouched.
 """
 
 from typing import Literal
@@ -211,7 +211,12 @@ class AuthzProtectedRule(PlatformError):
 
 
 RulesPersistFailureReason = Literal[
-    "missing", "unparseable", "invalid_rules", "lock_timeout", "write_failed"
+    "missing",
+    "unreadable",
+    "unparseable",
+    "invalid_rules",
+    "lock_timeout",
+    "write_failed",
 ]
 
 
@@ -225,6 +230,7 @@ class AuthzRulesPersistFailed(PlatformError):
     created. `reason` says which guard tripped:
 
     - `missing` — `platform.yaml` does not exist.
+    - `unreadable` — the file exists but can't be read (e.g. `EACCES`).
     - `unparseable` — the file is not valid YAML, its top level is not
       a mapping, or `authorization` / `authorization.config` /
       `authorization.config.rules` has the wrong type.

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import io
 import logging
 import os
@@ -42,7 +43,7 @@ from cli._slash import (
     SlashContext,
     _resolve_command_name,
 )
-from cli.chat.approval import InlineApprovalCallback
+from cli.chat.approval import InlineApprovalCallback, RulePersistHook
 from cli.chat.cancel import request_cancel
 from cli.chat.event_adapter import EventAdapter
 from cli.chat.keybindings import CHAT_BINDINGS
@@ -1169,37 +1170,19 @@ class ChatApp(App[None]):
             if isinstance(authz, RuleBasedAuthorizationProvider):
                 # bug-025 (closes bug-022): wire the `on_rule_added`
                 # hook so a Rule the user builds via `a`/`d` in the
-                # ApprovalBlock survives chat exit — the hook writes
-                # the updated rules list back to `platform.yaml` via
-                # the same `cli.permissions._write_back` helper the
-                # `kolsch permissions add` slash uses. Without this
-                # wire-up the (effect, Rule) tuple branch at
-                # `src/providers/authz.py:1106` fires (in-memory
-                # insert works) but the rule vanishes on chat exit.
-                # The legacy modal path (`src/cli/chat/_legacy.py:922`)
-                # already wired this hook; the modern Textual
-                # ChatApp lost it during the spec-004 refactor.
-                from cli.permissions import (  # noqa: PLC0415
-                    _write_back as _persist_authz_rules,
-                )
-
-                yaml_path = self.session.root / "platform.yaml"
-
-                def _on_rule_added(rules: list[Any]) -> None:
-                    """Atomically rewrite `platform.yaml` with the new rules list.
-
-                    Called by the authz provider inside its persist
-                    branch (see ``src/providers/authz.py:1117-1127``)
-                    AFTER the in-memory insert completes. Failures
-                    are swallowed by the provider — a bad write
-                    means the rule vanishes on chat exit but the
-                    current exchange still sees it.
-                    """
-                    _persist_authz_rules(yaml_path, rules)
-
+                # ApprovalBlock survives chat exit. bug-162: the hook
+                # gets ONE `RulePersistRequest` and inserts that rule
+                # into the rules currently on disk
+                # (`cli.permissions.persist_rule_request`) — it never
+                # writes the provider's startup-snapshot list back.
                 authz.register_prompt_callback(
                     self.approval_callback,
-                    on_rule_added=_on_rule_added,
+                    on_rule_added=RulePersistHook(
+                        yaml_path=self.session.root / "platform.yaml",
+                        authz=lambda: self.session.runtime.authz,
+                        catalog=self._live_asset_catalog,
+                        notify=self._post_transcript_notice,
+                    ),
                 )
 
         # feat-015: run the in-process orphan sweep BEFORE replay so
@@ -2499,6 +2482,31 @@ class ChatApp(App[None]):
         notice = NoticeWidget(text=text, kind=level)
         await transcript.mount(notice)
         return notice
+
+    def _live_asset_catalog(self) -> Any | None:
+        """Return the runtime's current asset catalog, or `None`."""
+        am = getattr(self.session.runtime, "asset_management", None)
+        if am is None:
+            return None
+        try:
+            return am.catalog()
+        except Exception:  # noqa: BLE001 — validation degrades to catalog-free
+            return None
+
+    def _post_transcript_notice(self, text: str, *, kind: str = "info") -> None:
+        """Schedule a transcript notice from any thread (fire-and-forget)."""
+        try:
+            mount = functools.partial(self._mount_transcript_notice, text, kind=kind)
+
+            def _schedule() -> None:
+                self.call_later(mount)
+
+            if threading.get_ident() == getattr(self, "_thread_id", None):
+                _schedule()
+            else:
+                self.call_from_thread(_schedule)
+        except Exception:  # noqa: BLE001 — app not running (headless/teardown)
+            _LOGGER.warning("chat: could not mount notice: %s", text, exc_info=True)
 
     async def _mount_transcript_notice(
         self,

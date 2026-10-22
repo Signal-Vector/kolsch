@@ -31,9 +31,10 @@ is set.
 
 from __future__ import annotations
 
-import contextlib
 import fnmatch
 import hashlib
+import inspect
+import logging
 import os
 import re
 from collections.abc import Mapping
@@ -60,7 +61,7 @@ from workflows.errors import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Awaitable, Callable, Sequence
 
     from assets.catalog import AssetCatalog
     from engine.context import ExecutionContext
@@ -92,6 +93,9 @@ tail signal — use
 # `PermissionRule → Rule` conversion in `engine.py` where the
 # `extra="forbid"` PermissionRule schema forbids inline fields.
 RuleSourceMap = dict[int, tuple[str, int]]
+
+
+_log = logging.getLogger("providers.authz")
 
 
 KOLSCH_TEST_BUILD_ENV_VAR = "KOLSCH_TEST_BUILD"
@@ -589,6 +593,30 @@ if TYPE_CHECKING:
             """
 
 
+@dataclass(frozen=True, slots=True)
+class RulePersistRequest:
+    """One rule an "always" answer asked to persist (bug-162).
+
+    Handed to the `on_rule_added` hook registered via
+    [`register_prompt_callback`][providers.authz.RuleBasedAuthorizationProvider.register_prompt_callback]
+    — never the provider's whole in-memory rule list, which is the
+    session's startup snapshot and would overwrite rule edits made on
+    disk since.
+
+    Attributes:
+        rule: The rule just inserted in memory, with its id populated.
+        anchor: The **platform-layer** `prompt` rule that asked (the
+            persisted rule belongs immediately before its disk copy).
+            `None` for the no-rule path and for prompts matched in a
+            workflow / bundle / agent layer, whose rule isn't in
+            `platform.yaml` — the rule then belongs before the
+            default-deny tail.
+    """
+
+    rule: Rule
+    anchor: Rule | None = None
+
+
 # ---------------------------------------------------------------------------
 # Protocol
 # ---------------------------------------------------------------------------
@@ -754,11 +782,14 @@ class RuleBasedAuthorizationProvider:
         # commands never see a leaked modal surface.
         self._registered_prompt_callback: PromptCallback | None = None
         # Fires after a prompt callback persists a rule via the
-        # `(effect, Rule)` tuple return. The chat wires this to an
-        # atomic `platform.yaml` rewriter so the modal NEVER writes
-        # the YAML directly; this hook is the documented extension
-        # point.
-        self._rule_added_hook: Callable[[list[Rule]], None] | None = None
+        # `(effect, Rule)` tuple return, with ONE `RulePersistRequest`
+        # (bug-162: never the in-memory list). The chat wires this to
+        # `cli.permissions.mutate_platform_rules`, which inserts that
+        # one rule into the rules currently on disk; the modal NEVER
+        # writes the YAML directly.
+        self._rule_added_hook: (
+            Callable[[RulePersistRequest], Awaitable[None] | None] | None
+        ) = None
 
     def _compile(self, index: int, entry: object) -> _CompiledRule:
         """Compile one raw rule entry into a `_CompiledRule`.
@@ -1382,23 +1413,16 @@ class RuleBasedAuthorizationProvider:
             # Insert the persisted rule before the matched prompt rule
             # so future calls with the same target hit it first
             # ( "always allow/deny" semantics).
-            self._insert_rule_before(persist_rule, anchor_id=compiled.raw.id)
-            # Fire the rule-added hook AFTER the in-memory insert so
-            # the chat's atomic-yaml-write hook sees the updated rule
-            # list. The hook is best-effort: failures don't undo the
-            # in-memory insert (the rule is already live for the
-            # current exchange — which is the load-bearing guarantee).
-            if self._rule_added_hook is not None:
-                # Diagnostic-level: hook failures don't undo the
-                # in-memory insert. The rule is already live for the
-                # current exchange — the load-bearing guarantee. A
-                # failed YAML write means the rule vanishes on chat
-                # exit; the user can re-add via `kolsch permissions
-                # add` or pick [a] again next time. We swallow to
-                # keep the modal's flow simple; the YAML write itself
-                # logs on failure.
-                with contextlib.suppress(Exception):
-                    self._rule_added_hook([c.raw for c in self._rules])
+            inserted = self._insert_rule_before(persist_rule, anchor_id=compiled.raw.id)
+            # Fire the rule-added hook AFTER the in-memory insert. The
+            # anchor is only meaningful for a platform-layer rule — a
+            # workflow / bundle / agent rule isn't in `platform.yaml`.
+            await self._fire_rule_added(
+                RulePersistRequest(
+                    rule=inserted,
+                    anchor=compiled.raw if layer == "platform" else None,
+                )
+            )
         else:
             resolved_effect = answer
         if resolved_effect not in (AuthzEffect.ALLOW, AuthzEffect.DENY):
@@ -1433,8 +1457,9 @@ class RuleBasedAuthorizationProvider:
         On a tuple return the rule lands above the default-deny tail
         (the same spot `kolsch permissions add` with no
         `before`/`after`/`first` uses) and the `_rule_added_hook`
-        fires so the chat's `cli.permissions._write_back` persists it
-        to `platform.yaml`.
+        fires with a `RulePersistRequest(rule, anchor=None)` so the
+        chat inserts that one rule before the tail of the rules
+        currently in `platform.yaml` (bug-162).
         """
         answer = await callback(
             rule_id=None,
@@ -1444,14 +1469,8 @@ class RuleBasedAuthorizationProvider:
         )
         if isinstance(answer, tuple):
             resolved_effect, persist_rule = answer
-            self._insert_at_tail(persist_rule)
-            if self._rule_added_hook is not None:
-                # Same swallow-pattern as _resolve_prompt: the in-memory
-                # insert is the load-bearing guarantee; a YAML write
-                # failure means the rule vanishes on chat exit but the
-                # current exchange still sees it.
-                with contextlib.suppress(Exception):
-                    self._rule_added_hook([c.raw for c in self._rules])
+            inserted = self._insert_at_tail(persist_rule)
+            await self._fire_rule_added(RulePersistRequest(rule=inserted))
         else:
             resolved_effect = answer
         if resolved_effect not in (AuthzEffect.ALLOW, AuthzEffect.DENY):
@@ -1469,6 +1488,33 @@ class RuleBasedAuthorizationProvider:
                 f"{resolved_effect.value!r} (who_chain=no_rule)"
             ),
         )
+
+    async def _fire_rule_added(self, request: RulePersistRequest) -> None:
+        """Run the rule-added hook, awaiting it when it returns an awaitable.
+
+        The in-memory insert has already happened and is the
+        load-bearing guarantee: a hook failure never undoes it (the
+        rule stays live for this session). Failures are logged at
+        WARNING, not swallowed silently; surfacing them to the user is
+        the hook's job (the chat mounts a notice).
+        """
+        hook = self._rule_added_hook
+        if hook is None:
+            return
+        try:
+            result = hook(request)
+            if inspect.isawaitable(result):
+                await result
+        except Exception:  # noqa: BLE001 — a hook failure must not fail the decision
+            _log.warning(
+                "authz: rule-added hook failed; rule %s (what=%r pattern=%r "
+                "effect=%s) is live for this session only",
+                request.rule.id,
+                request.rule.what,
+                request.rule.pattern,
+                request.rule.effect,
+                exc_info=True,
+            )
 
     async def list_rules(self) -> list[Rule]:
         """Return every rule currently held, in evaluation order."""
@@ -1507,7 +1553,9 @@ class RuleBasedAuthorizationProvider:
         self,
         callback: PromptCallback,
         *,
-        on_rule_added: Callable[[list[Rule]], None] | None = None,
+        on_rule_added: (
+            Callable[[RulePersistRequest], Awaitable[None] | None] | None
+        ) = None,
     ) -> None:
         """Register a chat-injected prompt resolver and rule-persist hook.
 
@@ -1530,9 +1578,17 @@ class RuleBasedAuthorizationProvider:
                 tuple `(effect, persisted_rule)`.
             on_rule_added: Optional hook fired AFTER the in-memory
                 rule insert (only in the tuple-return path). Receives
-                the updated rule list so the hook can atomically
-                rewrite `platform.yaml`. The chat wires this to
-                `cli.permissions._write_back`.
+                one [`RulePersistRequest`][providers.authz.RulePersistRequest]
+                — the inserted rule and the platform prompt rule it
+                belongs before (`None` → before the default-deny
+                tail) — **never** the provider's rule list (bug-162:
+                that list is the session's startup snapshot, and
+                writing it back erased rule edits made on disk since).
+                May be sync or return an awaitable (awaited before
+                `allow` returns, so a slow write can run off the event
+                loop). Exceptions are logged at WARNING and never undo
+                the in-memory insert. The chat wires this to
+                `cli.permissions.mutate_platform_rules`.
         """
         self._registered_prompt_callback = callback
         self._rule_added_hook = on_rule_added

@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 
 from cli._modal import ApprovalModal
 from engine import CancelToken
-from providers import Rule, RuleBasedAuthorizationProvider
+from providers import RuleBasedAuthorizationProvider, RulePersistRequest
 from providers.authz import AuthzEffect
 
 if TYPE_CHECKING:
@@ -155,10 +155,10 @@ async def test_tc_chat_deny_02_always_deny_flips_cancel_and_returns_rule() -> No
     provider = _provider_with_bash_prompt()
     # Spy on the rule-added hook to confirm persistence still
     # fires post-fix.
-    captured_rules: list[list[Rule]] = []
+    captured: list[RulePersistRequest] = []
 
-    def _on_rule_added(rules: list[Rule]) -> None:
-        captured_rules.append(list(rules))
+    def _on_rule_added(request: RulePersistRequest) -> None:
+        captured.append(request)
 
     modal = ApprovalModal(
         stdout=out,
@@ -187,11 +187,16 @@ async def test_tc_chat_deny_02_always_deny_flips_cancel_and_returns_rule() -> No
     # atomically rewrite the file. Inspect the captured rule list:
     # the new deny rule must be present, with the suggest_pattern
     # heuristic applied to ("bash", "rm -rf /").
-    assert len(captured_rules) == 1, (
-        f"on_rule_added must fire exactly once for a [d] persist, "
-        f"got {len(captured_rules)}"
+    assert len(captured) == 1, (
+        f"on_rule_added must fire exactly once for a [d] persist, got {len(captured)}"
     )
-    persisted_rules = captured_rules[0]
+    # bug-162: the hook gets the one new rule + the prompt rule it
+    # belongs before — never the whole list. The ordering is checked
+    # on the live provider's list.
+    assert captured[0].rule.what == "^rm .*$"
+    assert captured[0].anchor is not None
+    assert captured[0].anchor.what == r"tool\.bash"
+    persisted_rules = await provider.list_rules()
     new_rule = next(
         (r for r in persisted_rules if r.what == "^rm .*$"),
         None,

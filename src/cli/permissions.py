@@ -7,9 +7,9 @@ runtime API (`list_rules` / `add_rule` / `remove_rule` / `get_rule`)
 so the same rule-id scheme, default-deny protection, and atomicity
 discipline as the in-chat modal apply here too.
 
-Atomic writes: `platform.yaml` is rewritten via temp + fsync +
-`os.replace`, the same pattern `llm_commands.py` uses for
-`platform.yaml` writes.
+`list` / `show` read through a fresh provider built from disk;
+`add` / `remove` go through
+[`mutate_platform_rules`][cli.permissions.mutate_platform_rules].
 
 bug-162: [`mutate_platform_rules`][cli.permissions.mutate_platform_rules]
 is the single writer of `authorization.config.rules`. It applies one
@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import os
+import shlex
 import stat
 import sys
 import tempfile
@@ -36,11 +37,11 @@ from errors import (
     AuthzRuleInvalid,
     AuthzRuleNotFound,
     AuthzRulesPersistFailed,
+    PlatformError,
     WorkspaceNotInitialized,
 )
 from kolsch._yamlio import (
     YAMLError,
-    dump_preserving_trailing_comment_block,
     dump_round_trip_with_layout,
     load,
     load_round_trip_with_layout,
@@ -60,7 +61,7 @@ if TYPE_CHECKING:
     from assets.catalog import AssetCatalog
     from errors.authz import RulesPersistFailureReason
     from kolsch._yamlio import RoundTripLayout
-    from providers.authz import RuleSourceMap
+    from providers.authz import RulePersistRequest, RuleSourceMap
 
 # ---------------------------------------------------------------------------
 # Argparse wiring — called from cli.main.build_parser
@@ -191,10 +192,12 @@ async def cmd_permissions(
     if op == "show":
         return await _cmd_show(provider, args.rule_id, out=out, err=err)
     if op == "add":
-        return await _cmd_add(provider, args, yaml_path=yaml_path, out=out, err=err)
+        return _cmd_add(
+            args, yaml_path=yaml_path, catalog=am.catalog(), out=out, err=err
+        )
     if op == "remove":
-        return await _cmd_remove(
-            provider, args.rule_id, yaml_path=yaml_path, out=out, err=err
+        return _cmd_remove(
+            args.rule_id, yaml_path=yaml_path, catalog=am.catalog(), out=out, err=err
         )
     err.write(f"unknown permissions op {op!r}; expected one of list/add/remove/show\n")
     return 1
@@ -262,59 +265,77 @@ async def _cmd_show(
     return 0
 
 
-async def _cmd_add(
-    provider: RuleBasedAuthorizationProvider,
+def _cmd_add(
     args: argparse.Namespace,
     *,
     yaml_path: Path,
+    catalog: AssetCatalog,
     out: TextIO,
     err: TextIO,
 ) -> int:
+    """Insert one rule into the rules currently on disk (bug-162).
+
+    Positions as before: `--first`, `--before <id>`, `--after <id>`,
+    else immediately before the default-deny tail. An identical rule
+    already in effect at or before that slot is reported, not
+    duplicated.
+    """
     new_rule = Rule(
         what=args.what,
         pattern=args.pattern,
         from_=args.from_,
         effect=args.effect,
     )
-    kwargs: dict[str, Any] = {}
+    position: InsertPosition = "tail"
+    ref_id: str | None = None
     if args.before:
-        kwargs["before"] = args.before
+        position, ref_id = "before", args.before
     elif args.after:
-        kwargs["after"] = args.after
+        position, ref_id = "after", args.after
     elif args.first:
-        kwargs["first"] = True
+        position = "first"
     try:
-        added = await provider.add_rule(new_rule, **kwargs)
-    except AuthzRuleInvalid as exc:
+        result = mutate_platform_rules(
+            yaml_path,
+            InsertRule(new_rule, position=position, ref_id=ref_id),
+            catalog=catalog,
+        )
+    except PlatformError as exc:  # invalid op / rule, or not persisted
         err.write(f"error: {exc}\n")
         return 1
-    _write_back(yaml_path, await provider.list_rules())
-    from_str = f" from={added.from_!r}" if added.from_ is not None else ""
-    out.write(
-        f"added rule {added.id}: what={added.what!r} "
-        f"pattern={added.pattern!r}{from_str} effect={added.effect}\n"
+    rule = result.rule or new_rule
+    from_str = f" from={rule.from_!r}" if rule.from_ is not None else ""
+    described = (
+        f"{rule.id}: what={rule.what!r} pattern={rule.pattern!r}"
+        f"{from_str} effect={rule.effect}"
     )
+    if not result.inserted:
+        out.write(
+            f"rule {described} already present at position {result.position}; "
+            "nothing written\n"
+        )
+        return 0
+    out.write(f"added rule {described} (position {result.position})\n")
     return 0
 
 
-async def _cmd_remove(
-    provider: RuleBasedAuthorizationProvider,
+def _cmd_remove(
     rule_id: str,
     *,
     yaml_path: Path,
+    catalog: AssetCatalog,
     out: TextIO,
     err: TextIO,
 ) -> int:
+    """Remove the first rule with `rule_id` from the rules on disk (bug-162)."""
     try:
-        await provider.remove_rule(rule_id)
-    except AuthzProtectedRule as exc:
+        result = mutate_platform_rules(
+            yaml_path, RemoveRule(rule_id=rule_id), catalog=catalog
+        )
+    except (AuthzProtectedRule, AuthzRuleNotFound, AuthzRulesPersistFailed) as exc:
         err.write(f"error: {exc}\n")
         return 1
-    except AuthzRuleNotFound as exc:
-        err.write(f"error: {exc}\n")
-        return 1
-    _write_back(yaml_path, await provider.list_rules())
-    out.write(f"removed rule {rule_id}\n")
+    out.write(f"removed rule {rule_id} (was position {result.position})\n")
     return 0
 
 
@@ -342,52 +363,6 @@ def _read_authz_config(yaml_path: Path) -> dict[str, Any]:
     if not isinstance(cfg, dict):
         return {"rules": []}
     return cfg
-
-
-def _write_back(yaml_path: Path, rules: list[Rule]) -> None:
-    """Atomically rewrite platform.yaml's `authorization.config.rules`.
-
-    Preserves every other section of the file verbatim — only the
-    rules list is replaced. Temp + fsync + `os.replace` for
-    crash-safety.
-
-    qol-133: uses `dump_preserving_trailing_comment_block` (not raw
-    `dump()`) so a trailing, fully-commented scaffold block already
-    on disk — e.g. the fresh-install `hooks:` example — survives a
-    standalone `kolsch permissions` edit. No-op when there's no such
-    block.
-    """
-    previous_text = yaml_path.read_text(encoding="utf-8") if yaml_path.is_file() else ""
-    payload: dict[str, Any] = {}
-    if previous_text:
-        existing = load(previous_text)
-        if isinstance(existing, dict):
-            payload = existing
-
-    authz = payload.setdefault("authorization", {})
-    if not isinstance(authz, dict):
-        authz = {}
-        payload["authorization"] = authz
-    authz.setdefault("variant", "rule_based")
-    cfg = authz.setdefault("config", {})
-    if not isinstance(cfg, dict):
-        cfg = {}
-        authz["config"] = cfg
-    cfg["rules"] = [_rule_to_dict(r) for r in rules]
-
-    serialized = dump_preserving_trailing_comment_block(previous_text, payload)
-    temp = yaml_path.with_name(f"{yaml_path.name}.tmp.{os.getpid()}")
-    try:
-        encoded = serialized.encode("utf-8")
-        with temp.open("wb") as handle:
-            handle.write(encoded)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temp, yaml_path)  # noqa: PTH105 — atomic rename
-    except OSError:
-        with contextlib.suppress(OSError):
-            temp.unlink()
-        raise
 
 
 def _rule_to_dict(rule: Rule) -> dict[str, str]:
@@ -565,13 +540,14 @@ def mutate_platform_rules(
         A [`RulesMutationResult`][cli.permissions.RulesMutationResult].
 
     Raises:
-        AuthzRulesPersistFailed: `missing` / `unparseable` /
-            `invalid_rules` / `lock_timeout` / `write_failed` — nothing
-            was written.
+        AuthzRulesPersistFailed: `missing` / `unreadable` /
+            `unparseable` / `invalid_rules` / `lock_timeout` /
+            `write_failed` — nothing was written.
         AuthzProtectedRule: The op would remove the default-deny tail.
         AuthzRuleNotFound: `RemoveRule(rule_id=)` names no disk rule.
-        AuthzRuleInvalid: A malformed op, or `before` / `after` names
-            no disk rule.
+        AuthzRuleInvalid: A malformed op, `before` / `after` names no
+            disk rule, or the new rule fails to compile with a
+            non-`PlatformError` (e.g. a malformed `from:`).
         PlatformError: The new rule itself fails to compile (e.g.
             `authz.pattern_invalid`); raised as the provider raises it.
     """
@@ -585,9 +561,18 @@ def mutate_platform_rules(
     if op_rule := _op_new_rule(op):
         # Compile the new rule on its own first so a bad rule surfaces
         # as the provider's own error, not as "the disk is invalid".
-        RuleBasedAuthorizationProvider(
-            config={"rules": [_rule_to_dict(op_rule)]}, catalog=catalog
-        )
+        try:
+            RuleBasedAuthorizationProvider(
+                config={"rules": [_rule_to_dict(op_rule)]}, catalog=catalog
+            )
+        except PlatformError:
+            raise
+        except Exception as exc:  # e.g. a malformed `from:` (WorkflowFrom*)
+            raise AuthzRuleInvalid(
+                position=-1,
+                reason=f"the new rule does not compile: {exc}",
+                where="cli.permissions.mutate_platform_rules",
+            ) from exc
     with platform_yaml_lock(yaml_path.parent, timeout_s=lock_timeout_s):
         document, layout, entries = _load_disk_rules(yaml_path)
         before = _compile_disk_rules(yaml_path, _plain(entries), catalog)
@@ -707,8 +692,10 @@ def _load_disk_rules(yaml_path: Path) -> tuple[Any, RoundTripLayout, Any]:
         )
     try:
         text = yaml_path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as exc:
-        raise _persist_failed(yaml_path, "unparseable", f"cannot read: {exc}") from exc
+    except OSError as exc:
+        raise _persist_failed(yaml_path, "unreadable", str(exc)) from exc
+    except UnicodeDecodeError as exc:
+        raise _persist_failed(yaml_path, "unparseable", f"not UTF-8: {exc}") from exc
     try:
         document, layout = load_round_trip_with_layout(text)
     except YAMLError as exc:
@@ -930,3 +917,45 @@ def _atomic_write_text(path: Path, text: str) -> None:
         with contextlib.suppress(OSError):
             temp.unlink()
         raise
+
+
+def persist_rule_request(
+    yaml_path: Path,
+    request: RulePersistRequest,
+    *,
+    catalog: AssetCatalog | None,
+) -> RulesMutationResult:
+    """Persist one chat "always" answer: insert `request.rule` on disk.
+
+    Lands immediately before the disk copy of `request.anchor` (the
+    platform `prompt` rule that asked), else before the default-deny
+    tail, else at the end — computed on the rules **currently** in
+    `yaml_path`. What the chat's `on_rule_added` hook runs.
+    """
+    return mutate_platform_rules(
+        yaml_path,
+        InsertRule(request.rule, anchor=request.anchor, position="anchor_or_tail"),
+        catalog=catalog,
+    )
+
+
+def rule_identity(rule: Rule) -> tuple[str | None, str, str, str | None, str]:
+    """Return a rule's structural identity `(who, what, pattern, from, effect)`.
+
+    Two rules with equal identity match exactly the same calls. Ignores
+    `id` (derived, and blind to `from:`) and source-location metadata.
+    """
+    return _rule_key(rule)
+
+
+def permissions_add_command(rule: Rule) -> str:
+    """Return the `kolsch permissions add …` command that persists `rule`."""
+    parts = [
+        "kolsch permissions add",
+        f"--what {shlex.quote(rule.what)}",
+        f"--pattern {shlex.quote(rule.pattern)}",
+    ]
+    if rule.from_ is not None:
+        parts.append(f"--from {shlex.quote(rule.from_)}")
+    parts.append(f"--effect {rule.effect}")
+    return " ".join(parts)

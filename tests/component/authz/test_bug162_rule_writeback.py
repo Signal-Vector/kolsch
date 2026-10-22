@@ -12,7 +12,8 @@ undone.
 Each case bootstraps from a file, edits the file on disk, answers
 "always" (a tuple return from the modal) and asserts on the disk
 result. `_wire_like_chat` mirrors the chat's production wiring
-(`src/cli/chat/app.py` `on_mount`).
+(`src/cli/chat/app.py` `on_mount`: `RulePersistHook`). On origin/main
+the same cases (a)-(e), wired to `_write_back`, failed (Phase 1 notes).
 """
 
 from __future__ import annotations
@@ -21,20 +22,13 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from cli.permissions import _write_back
+from assets.platform_config import platform_yaml_lock
+from cli.chat.approval import RulePersistHook
 from kolsch._yamlio import dump, load
 from providers import AuthzEffect, Rule, RuleBasedAuthorizationProvider
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-# Phase 1 (failing-first): cases (a)-(e) are red against origin/main's
-# wiring. Phase 2 retargets `_wire_like_chat` at the new hook and drops
-# this marker; the disk setup and assertions stay unchanged.
-_RED_ON_MAIN = pytest.mark.xfail(
-    strict=True,
-    reason="bug-162: stale full-list write-back (fixed in Phase 2)",
-)
 
 _READ = {"what": "kolsch/tools/read_file", "pattern": "*", "effect": "allow"}
 _WRITE = {"what": "kolsch/tools/write_file", "pattern": "*", "effect": "allow"}
@@ -92,10 +86,12 @@ def _wire_like_chat(
     yaml_path: Path,
     *,
     pattern: str = "*",
+    notices: list[tuple[str, str]] | None = None,
 ) -> list[dict[str, Any]]:
     """Register an "always allow" modal + the chat's persist hook.
 
-    Returns the list the modal appends each call's kwargs to.
+    Returns the list the modal appends each call's kwargs to; chat
+    notices land in `notices` as `(kind, text)`.
     """
     calls: list[dict[str, Any]] = []
 
@@ -106,9 +102,19 @@ def _wire_like_chat(
             Rule(what=kwargs["action"], pattern=pattern, effect="allow"),
         )
 
+    sink = notices if notices is not None else []
+
+    def notify(text: str, *, kind: str = "info") -> None:
+        sink.append((kind, text))
+
     provider.register_prompt_callback(
         modal,
-        on_rule_added=lambda rules: _write_back(yaml_path, rules),
+        on_rule_added=RulePersistHook(
+            yaml_path=yaml_path,
+            authz=lambda: provider,
+            catalog=lambda: None,
+            notify=notify,
+        ),
     )
     return calls
 
@@ -116,7 +122,6 @@ def _wire_like_chat(
 _LIST_FILES_ALWAYS = ("kolsch/tools/list_files", "*", "allow")
 
 
-@_RED_ON_MAIN
 async def test_a_disk_tail_added_after_bootstrap_survives_no_rule_always(
     tmp_path: Path,
 ) -> None:
@@ -135,7 +140,6 @@ async def test_a_disk_tail_added_after_bootstrap_survives_no_rule_always(
     )
 
 
-@_RED_ON_MAIN
 async def test_b_disk_added_deny_survives_no_rule_always(tmp_path: Path) -> None:
     yaml_path = tmp_path / "platform.yaml"
     _write_platform(yaml_path, [_READ, _WRITE])
@@ -150,7 +154,6 @@ async def test_b_disk_added_deny_survives_no_rule_always(tmp_path: Path) -> None
     )
 
 
-@_RED_ON_MAIN
 async def test_c_disk_removed_rule_stays_removed_no_rule_always(
     tmp_path: Path,
 ) -> None:
@@ -171,7 +174,6 @@ async def test_c_disk_removed_rule_stays_removed_no_rule_always(
     assert _disk_rules(yaml_path) == [*edited, _LIST_FILES_ALWAYS]
 
 
-@_RED_ON_MAIN
 async def test_d_prompt_rule_always_lands_before_disk_copy_of_prompt_rule(
     tmp_path: Path,
 ) -> None:
@@ -230,7 +232,6 @@ _COMMENT_LINES = (
 )
 
 
-@_RED_ON_MAIN
 async def test_e_comment_lines_survive_a_rule_write(tmp_path: Path) -> None:
     yaml_path = tmp_path / "platform.yaml"
     yaml_path.write_text(_COMMENTED_PLATFORM, encoding="utf-8")
@@ -259,3 +260,221 @@ async def test_f_other_top_level_keys_parse_identically(tmp_path: Path) -> None:
     for key in _OTHER_KEYS:
         assert after[key] == before[key], f"top-level key {key!r} changed"
     assert after["authorization"]["variant"] == before["authorization"]["variant"]
+
+
+# ---------------------------------------------------------------------------
+# D1 — in-memory rules are not rebuilt from disk; drift notice
+# ---------------------------------------------------------------------------
+
+
+async def test_i_in_memory_rules_keep_snapshot_and_drift_is_noticed_once(
+    tmp_path: Path,
+) -> None:
+    yaml_path = tmp_path / "platform.yaml"
+    _write_platform(yaml_path, [_READ, _BASH_PROMPT, _TAIL])
+    provider = _bootstrap(yaml_path)
+    notices: list[tuple[str, str]] = []
+    _wire_like_chat(provider, yaml_path, pattern="ls *", notices=notices)
+    loaded = [_key_of(r) for r in provider.rules_snapshot()]
+    _edit_disk_rules(yaml_path, lambda rs: rs.insert(0, dict(_RM_DENY)))
+
+    await provider.allow("agent.ag_x", "kolsch/tools/bash", target="ls -la")
+
+    new_rule = ("kolsch/tools/bash", "ls *", "allow")
+    # D1: memory = loaded + the new rule; the disk-only deny is NOT live.
+    assert [_key_of(r) for r in provider.rules_snapshot()] == [
+        loaded[0],
+        new_rule,
+        *loaded[1:],
+    ]
+    drift = [text for kind, text in notices if "changed on disk" in text]
+    assert len(drift) == 1 and "/reload" in drift[0]
+    assert all(kind == "warning" for kind, _ in notices)
+
+    # Same unapplied edit, another "always" (a target `ls *` doesn't
+    # cover, so the prompt fires again): no second notice.
+    await provider.allow("agent.ag_x", "kolsch/tools/bash", target="cat a")
+    assert len([t for _, t in notices if "changed on disk" in t]) == 1
+
+    # A new disk edit is a new drift → one more notice.
+    _edit_disk_rules(yaml_path, lambda rs: rs.insert(0, dict(_WRITE)))
+    await provider.allow("agent.ag_x", "kolsch/tools/bash", target="cat b")
+    assert len([t for _, t in notices if "changed on disk" in t]) == 2
+
+
+async def test_i_no_drift_notice_when_disk_matches_memory(tmp_path: Path) -> None:
+    yaml_path = tmp_path / "platform.yaml"
+    _write_platform(yaml_path, [_READ, _BASH_PROMPT, _TAIL])
+    provider = _bootstrap(yaml_path)
+    notices: list[tuple[str, str]] = []
+    _wire_like_chat(provider, yaml_path, pattern="ls *", notices=notices)
+
+    await provider.allow("agent.ag_x", "kolsch/tools/bash", target="ls -la")
+
+    assert notices == []
+    assert ("kolsch/tools/bash", "ls *", "allow") in _disk_rules(yaml_path)
+
+
+def _key_of(rule: Rule) -> tuple[str, str, str]:
+    return (rule.what, rule.pattern, rule.effect)
+
+
+# ---------------------------------------------------------------------------
+# (h) failure modes through the chat hook
+# ---------------------------------------------------------------------------
+
+
+def _break_missing(yaml_path: Path) -> None:
+    yaml_path.unlink()
+
+
+def _break_unparseable(yaml_path: Path) -> None:
+    yaml_path.write_text("authorization: [unclosed\n", encoding="utf-8")
+
+
+def _break_rules_not_list(yaml_path: Path) -> None:
+    yaml_path.write_text(
+        "authorization:\n  config:\n    rules: nope\n", encoding="utf-8"
+    )
+
+
+def _break_invalid_rules(yaml_path: Path) -> None:
+    _edit_disk_rules(
+        yaml_path,
+        lambda rs: rs.insert(
+            0, {"what": "kolsch/tools/bash", "pattern": "^rm$", "effect": "deny"}
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("breaker", "reason"),
+    [
+        (_break_missing, "missing"),
+        (_break_unparseable, "unparseable"),
+        (_break_rules_not_list, "unparseable"),
+        (_break_invalid_rules, "invalid_rules"),
+    ],
+)
+async def test_h_persist_failure_keeps_rule_live_and_notices(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    breaker: Any,
+    reason: str,
+) -> None:
+    yaml_path = tmp_path / "platform.yaml"
+    _write_platform(yaml_path, [_READ, _BASH_PROMPT, _TAIL])
+    provider = _bootstrap(yaml_path)
+    notices: list[tuple[str, str]] = []
+    calls = _wire_like_chat(provider, yaml_path, pattern="ls *", notices=notices)
+    breaker(yaml_path)
+    before = yaml_path.read_bytes() if yaml_path.exists() else None
+
+    with caplog.at_level("WARNING"):
+        first = await provider.allow("agent.ag_x", "kolsch/tools/bash", target="ls a")
+    second = await provider.allow("agent.ag_x", "kolsch/tools/bash", target="ls b")
+
+    assert first.allowed and second.allowed
+    assert len(calls) == 1, "the in-memory rule must answer the second call"
+    if before is None:
+        assert not yaml_path.exists(), "a missing platform.yaml must not be created"
+    else:
+        assert yaml_path.read_bytes() == before
+    assert len(notices) == 1
+    kind, text = notices[0]
+    assert kind == "warning"
+    assert "active for this chat only" in text
+    assert str(yaml_path) in text
+    assert reason in text
+    assert "kolsch permissions add --what kolsch/tools/bash --pattern 'ls *'" in text
+    assert any("not saved" in r.getMessage() for r in caplog.records)
+
+
+async def test_h_lock_held_and_write_failure_through_hook(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import cli.permissions as permissions_mod
+
+    yaml_path = tmp_path / "platform.yaml"
+    _write_platform(yaml_path, [_READ, _BASH_PROMPT, _TAIL])
+    provider = _bootstrap(yaml_path)
+    notices: list[tuple[str, str]] = []
+    _wire_like_chat(provider, yaml_path, pattern="ls *", notices=notices)
+    before = yaml_path.read_bytes()
+
+    # Lock held (in this process — a separate fd still conflicts).
+    with platform_yaml_lock(tmp_path):
+        assert (
+            await provider.allow("agent.ag_x", "kolsch/tools/bash", target="ls a")
+        ).allowed
+    assert yaml_path.read_bytes() == before
+    assert "lock_timeout" in notices[-1][1]
+
+    # Unwritable destination.
+    def boom(*_args: object) -> None:
+        msg = "read-only file system"
+        raise OSError(msg)
+
+    monkeypatch.setattr(permissions_mod.os, "replace", boom)
+    provider2 = _bootstrap(yaml_path)
+    _wire_like_chat(provider2, yaml_path, pattern="ls *", notices=notices)
+    assert (
+        await provider2.allow("agent.ag_x", "kolsch/tools/bash", target="ls a")
+    ).allowed
+    assert yaml_path.read_bytes() == before
+    assert "write_failed" in notices[-1][1]
+    assert len(notices) == 2
+
+
+async def test_hook_writes_off_the_event_loop_thread(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+
+    import cli.permissions as permissions_mod
+
+    yaml_path = tmp_path / "platform.yaml"
+    _write_platform(yaml_path, [_READ, _BASH_PROMPT, _TAIL])
+    provider = _bootstrap(yaml_path)
+    _wire_like_chat(provider, yaml_path, pattern="ls *")
+    real = permissions_mod.persist_rule_request
+    threads: list[int] = []
+
+    def spy(*args: Any, **kwargs: Any) -> Any:
+        threads.append(threading.get_ident())
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(permissions_mod, "persist_rule_request", spy)
+    await provider.allow("agent.ag_x", "kolsch/tools/bash", target="ls")
+
+    assert threads and threads[0] != threading.get_ident()
+    assert ("kolsch/tools/bash", "ls *", "allow") in _disk_rules(yaml_path)
+
+
+async def test_layer_prompt_match_persists_before_the_tail_not_an_anchor(
+    tmp_path: Path,
+) -> None:
+    """A prompt rule from a bundle/agent/workflow layer isn't in platform.yaml."""
+    from providers import PermissionLayer
+
+    yaml_path = tmp_path / "platform.yaml"
+    # The platform list happens to carry an identical prompt rule; the
+    # layer match must NOT anchor on it.
+    _write_platform(yaml_path, [_BASH_PROMPT, _READ, _TAIL])
+    provider = _bootstrap(yaml_path)
+    _wire_like_chat(provider, yaml_path, pattern="ls *")
+    layer = PermissionLayer(
+        name="bundle",
+        rules=(Rule(what="kolsch/tools/bash", pattern="*", effect="prompt"),),
+    )
+
+    await provider.allow(
+        "agent.ag_x", "kolsch/tools/bash", target="ls", layers=(layer,)
+    )
+
+    assert _disk_rules(yaml_path) == [
+        _key(_BASH_PROMPT),
+        _key(_READ),
+        ("kolsch/tools/bash", "ls *", "allow"),
+        _key(_TAIL),
+    ]

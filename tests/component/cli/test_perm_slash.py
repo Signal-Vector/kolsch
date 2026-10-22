@@ -132,6 +132,98 @@ def _ctx(runtime: PlatformRuntime, stdout: _io.StringIO) -> SlashContext:
 # ===========================================================================
 
 
+def _disk_keys(root: Path) -> list[tuple[str, str, str]]:
+    payload = yaml.safe_load((root / "platform.yaml").read_text(encoding="utf-8"))
+    return [
+        (r["what"], r.get("pattern", "*"), r["effect"])
+        for r in payload["authorization"]["config"]["rules"]
+    ]
+
+
+def _edit_disk(root: Path, edit: Any) -> None:
+    path = root / "platform.yaml"
+    payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+    edit(payload["authorization"]["config"]["rules"])
+    path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+
+async def test_bug162_perm_allow_keeps_disk_edits_made_after_bootstrap(
+    tmp_path: Path,
+) -> None:
+    """(g) `/perm allow` inserts into the CURRENT file, not the startup list."""
+    runtime = await _runtime(tmp_path)
+    stdout = _io.StringIO()
+    ctx = _ctx(runtime, stdout)
+    # Another terminal adds a deny at the top and removes the bash deny.
+    _edit_disk(
+        tmp_path,
+        lambda rs: (
+            rs.insert(
+                0,
+                {
+                    "what": "kolsch/tools/read_file",
+                    "pattern": "/etc/*",
+                    "effect": "deny",
+                },
+            ),
+            rs.pop(1),
+        ),
+    )
+
+    await dispatch_slash('/perm allow kolsch/tools/bash "find *"', ctx)
+
+    assert _disk_keys(tmp_path) == [
+        ("kolsch/tools/read_file", "/etc/*", "deny"),
+        ("kolsch/tools/bash", "find *", "allow"),
+        ("*", "*", "deny"),
+    ]
+    assert "position 1 in platform.yaml" in stdout.getvalue()
+
+
+async def test_bug162_perm_remove_drops_only_the_disk_match(tmp_path: Path) -> None:
+    runtime = await _runtime(tmp_path)
+    stdout = _io.StringIO()
+    ctx = _ctx(runtime, stdout)
+    await dispatch_slash('/perm allow kolsch/tools/bash "find *"', ctx)
+    _edit_disk(
+        tmp_path,
+        lambda rs: rs.insert(
+            0, {"what": "kolsch/tools/read_file", "pattern": "/etc/*", "effect": "deny"}
+        ),
+    )
+
+    await dispatch_slash('/perm remove kolsch/tools/bash "find *"', ctx)
+
+    assert _disk_keys(tmp_path) == [
+        ("kolsch/tools/read_file", "/etc/*", "deny"),
+        ("kolsch/tools/bash", "*", "deny"),
+        ("*", "*", "deny"),
+    ]
+    assert "dropped rule at position 2" in stdout.getvalue()
+
+
+async def test_bug162_perm_persist_failure_applies_for_this_chat_only(
+    tmp_path: Path,
+) -> None:
+    runtime = await _runtime(tmp_path)
+    stdout = _io.StringIO()
+    ctx = _ctx(runtime, stdout)
+    path = tmp_path / "platform.yaml"
+    path.write_text("authorization: [unclosed\n", encoding="utf-8")
+    before = path.read_bytes()
+
+    await dispatch_slash('/perm allow kolsch/tools/read_file "docs/*"', ctx)
+
+    assert path.read_bytes() == before
+    out = stdout.getvalue()
+    assert "/perm allow: applied for this chat only — not saved: unparseable" in out
+    # The rule is live in memory for the session.
+    result = await runtime.authz.allow(
+        "agent.x", "kolsch/tools/read_file", target="docs/a.md"
+    )
+    assert result.allowed is True
+
+
 async def test_perm_allow_writes_new_shape_rule(tmp_path: Path) -> None:
     runtime = await _runtime(tmp_path)
     stdout = _io.StringIO()

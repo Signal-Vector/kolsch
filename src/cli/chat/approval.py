@@ -27,8 +27,13 @@ from typing import TYPE_CHECKING, Any
 from providers.authz import AuthzEffect, Rule
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+    from pathlib import Path
+
+    from assets.catalog import AssetCatalog
     from cli.chat.app import ChatApp
     from engine.context import ExecutionContext
+    from providers.authz import RulePersistRequest
     from tools.services.prompts import Prompts, PromptSource
 
 
@@ -222,8 +227,9 @@ def _translate_response(response: str) -> PromptCallbackReturn:
     - ``a`` (allow-persist) / ``d`` (deny-persist) with a rebuilt
       widget-side ``Rule`` return the tuple form
       ``(AuthzEffect.ALLOW|DENY, Rule)``. The persist branch at
-      ``src/providers/authz.py:1106`` fires and writes the rule to
-      ``platform.yaml`` via ``_rule_added_hook``.
+      ``RuleBasedAuthorizationProvider._resolve_prompt`` fires and the
+      ``_rule_added_hook`` inserts that one rule into the rules
+      currently in ``platform.yaml`` (bug-162).
     - ``a`` / ``d`` WITHOUT a rebuilt Rule (e.g. the wire event
       dropped the ``rule`` payload — a pre-bug-025 caller or a
       partial-mount degraded path) fall back to allow-once / deny-once
@@ -272,3 +278,130 @@ def _translate_response(response: str) -> PromptCallbackReturn:
 
 
 __all__ = ["InlineApprovalCallback", "PromptCallbackReturn"]
+
+
+class RulePersistHook:
+    """The chat's `on_rule_added` hook: save one "always" rule (bug-162).
+
+    Registered with
+    [`register_prompt_callback`][providers.authz.RuleBasedAuthorizationProvider.register_prompt_callback]
+    and awaited by the provider after its in-memory insert. Runs
+    [`persist_rule_request`][cli.permissions.persist_rule_request] OFF
+    the event loop (`asyncio.to_thread`; a write is ~25 ms, up to the
+    5 s lock wait under contention), inserting the one rule into the
+    rules **currently** in `platform.yaml` — never the provider's
+    startup-snapshot list.
+
+    Never raises. On any failure the rule stays live for this chat
+    only, a WARNING is logged and `notify` gets a warning naming the
+    path, the reason and the `kolsch permissions add …` command that
+    saves it. On success, when the disk rules (before the insert)
+    differ from the chat's loaded rules (minus the new one), `notify`
+    gets a one-time warning per distinct difference: those edits are
+    kept on disk but not enforced until `/reload` (D1 — the in-memory
+    rules are never rebuilt from disk here).
+
+    Args:
+        yaml_path: The workspace `platform.yaml`.
+        authz: Returns the live provider (read at call time, so it
+            follows a `/reload` swap).
+        catalog: Returns the live asset catalog for rule validation.
+        notify: `notify(text, kind)` — schedules a transcript notice;
+            must be safe to call from the event loop.
+    """
+
+    def __init__(
+        self,
+        *,
+        yaml_path: Path,
+        authz: Callable[[], object],
+        catalog: Callable[[], AssetCatalog | None],
+        notify: Callable[..., None],
+    ) -> None:
+        self._yaml_path = yaml_path
+        self._authz = authz
+        self._catalog = catalog
+        self._notify = notify
+        self._drift_noticed: set[tuple[Any, ...]] = set()
+
+    async def __call__(self, request: RulePersistRequest) -> None:
+        """Persist `request.rule`; report failures and disk drift via `notify`."""
+        from cli.permissions import (  # noqa: PLC0415
+            permissions_add_command,
+            persist_rule_request,
+            rule_identity,
+        )
+        from errors import AuthzRulesPersistFailed  # noqa: PLC0415
+        from providers.authz import RuleBasedAuthorizationProvider  # noqa: PLC0415
+
+        rule = request.rule
+        try:
+            result = await asyncio.to_thread(
+                persist_rule_request,
+                self._yaml_path,
+                request,
+                catalog=self._catalog(),
+            )
+        except Exception as exc:  # noqa: BLE001 — the hook must never raise
+            if isinstance(exc, AuthzRulesPersistFailed):
+                reason = f"{exc.detail['reason']}: {exc.detail['detail']}"
+                if exc.detail["reason"] == "invalid_rules":
+                    reason += (
+                        " (if a bundle was installed since this chat started, "
+                        "run /reload first)"
+                    )
+            else:
+                reason = f"{type(exc).__name__}: {exc}"
+            _LOGGER.warning(
+                "chat: 'always' rule %r %r %s not saved to %s: %s",
+                rule.what,
+                rule.pattern,
+                rule.effect,
+                self._yaml_path,
+                reason,
+            )
+            self._notify(
+                f"Rule `{rule.what} {rule.pattern} {rule.effect}` is active for "
+                f"this chat only — not saved to {self._yaml_path}: {reason}. "
+                f"Save it later with `{permissions_add_command(rule)}`.",
+                kind="warning",
+            )
+            return
+        authz = self._authz()
+        if not isinstance(authz, RuleBasedAuthorizationProvider):
+            return
+        live = [rule_identity(r) for r in authz.rules_snapshot() if r is not rule]
+        disk = [rule_identity(r) for r in result.disk_rules_before]
+        if live == disk:
+            return
+        drift = _rule_drift_signature(live, disk)
+        if drift in self._drift_noticed:
+            return
+        self._drift_noticed.add(drift)
+        self._notify(
+            f"{self._yaml_path.name}'s rules changed on disk since this chat "
+            "loaded them; those changes are not enforced yet. Review them "
+            "(`kolsch permissions list`), then run `/reload`.",
+            kind="warning",
+        )
+
+
+def _rule_drift_signature(
+    live: list[tuple[Any, ...]], disk: list[tuple[Any, ...]]
+) -> tuple[Any, ...]:
+    """Summarize how the disk rules differ from the chat's loaded rules.
+
+    The drift-notice key: the rules only on disk and only in memory
+    (multiset difference), or `("reordered",)` when only the order
+    differs. Rules the chat itself added since appear on both sides and
+    cancel out, so a later "always" answer doesn't re-notice the same
+    unapplied edit.
+    """
+    from collections import Counter  # noqa: PLC0415
+
+    live_c, disk_c = Counter(live), Counter(disk)
+    only_disk = tuple(sorted((disk_c - live_c).elements(), key=repr))
+    only_live = tuple(sorted((live_c - disk_c).elements(), key=repr))
+    if not only_disk and not only_live:
+        return ("reordered",)
+    return (only_disk, only_live)
