@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 import yaml
 
+from assets.platform_config import default_platform_payload
 from cli._setup import _copy_kolsch_bundle, _setup_platform_payload
 from platform_runtime import bootstrap_runtime
 from platform_runtime import runtime as runtime_mod
@@ -157,12 +158,18 @@ async def test_scoped_deny_last_is_not_a_tail(
     assert len(_tail_records(caplog)) == 1
 
 
-async def test_bare_default_payload_mentions_catch_all_allow(
+async def test_allow_all_without_tail_mentions_catch_all_allow(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     caplog.set_level(logging.WARNING, logger="platform_runtime")
-    # No platform.yaml: `load_or_create` writes the first-run
-    # allow-all payload (F1 — no tail).
+    # Explicitly seeded allow-all (no tail) rather than relying on the
+    # first-run `default_platform_payload`, which bug-157 changes.
+    payload = default_platform_payload()
+    payload["authorization"] = {
+        "variant": "rule_based",
+        "config": {"rules": [{"who": ".*", "what": ".*", "effect": "allow"}]},
+    }
+    (tmp_path / "platform.yaml").write_text(yaml.safe_dump(payload), encoding="utf-8")
     runtime = await bootstrap_runtime(root=tmp_path)
     loaded = await runtime.authz.list_rules()
     assert [(r.who, r.what, r.effect) for r in loaded] == [(".*", ".*", "allow")]
