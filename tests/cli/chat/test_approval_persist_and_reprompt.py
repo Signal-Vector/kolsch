@@ -613,3 +613,22 @@ async def test_bug162_persist_failure_mounts_notice_and_keeps_rule_live(
             timeout=1.0,
         )
         assert again.allowed is True
+
+
+@pytest.mark.asyncio
+async def test_bug162_unmount_clears_registration_on_the_current_provider(
+    chat_app: Any,
+) -> None:
+    """After a `/reload` swap, chat exit clears the NEW provider's registration."""
+    async with chat_app.run_test() as pilot:
+        await pilot.pause()
+        runtime = pilot.app.session.runtime
+        old = runtime.authz
+        assert old.registered_prompt_callback is not None
+        swapped = RuleBasedAuthorizationProvider(config={"rules": []})
+        swapped.register_prompt_callback(
+            old.registered_prompt_callback, on_rule_added=old.rule_added_hook
+        )
+        runtime.authz = swapped  # what `handle_reload`'s Phase B does
+    assert swapped.registered_prompt_callback is None
+    assert swapped.rule_added_hook is None

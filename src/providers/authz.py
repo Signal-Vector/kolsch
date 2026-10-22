@@ -1593,6 +1593,18 @@ class RuleBasedAuthorizationProvider:
         self._registered_prompt_callback = callback
         self._rule_added_hook = on_rule_added
 
+    @property
+    def registered_prompt_callback(self) -> PromptCallback | None:
+        """The prompt callback registered via `register_prompt_callback`, if any."""
+        return self._registered_prompt_callback
+
+    @property
+    def rule_added_hook(
+        self,
+    ) -> Callable[[RulePersistRequest], Awaitable[None] | None] | None:
+        """The `on_rule_added` hook registered with the prompt callback, if any."""
+        return self._rule_added_hook
+
     def clear_prompt_callback(self) -> None:
         """Remove the registered modal callback and rule-added hook.
 
