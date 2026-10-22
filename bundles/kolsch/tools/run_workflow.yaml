@@ -1,6 +1,0 @@
-name: run_workflow
-description: Start a workflow. Returns run_id + card anchor.
-entry: run_workflow.py
-requires:
-  - cards
-  - workflows

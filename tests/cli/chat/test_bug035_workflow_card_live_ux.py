@@ -31,7 +31,6 @@ import asyncio
 import contextlib
 import uuid
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -47,8 +46,8 @@ from cli.chat.widgets.user_chatbox import UserChatbox
 from schemas.entities import Actor
 from schemas.events import Event, EventType
 from schemas.identifiers import AgentId, EventId, SessionId, ThreadId
+from tests.fixtures.bundle_paths import STARTER_TOOLS_DIR, load_bundle_tool
 from tools.decorator import ToolContext, get_tool_definition
-from tools.discovery import discover_tools_in_file
 from tools.dispatch import _invoke_tool
 from workflows.events import (
     WorkflowNodeCompletedEvent,
@@ -61,24 +60,14 @@ from workflows.run import RunDirectory, WorkflowRunStatus
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
+    from pathlib import Path
 
     from cli.chat.widgets.workflow_node_row import WorkflowNodeRow
-
-_BUNDLE_TOOLS_DIR = Path(__file__).resolve().parents[3] / "bundles" / "kolsch" / "tools"
-
-
-def _load_tool(filename: str, tool_name: str) -> Callable[..., Awaitable[Any]]:
-    path = _BUNDLE_TOOLS_DIR / filename
-    for fn in discover_tools_in_file(path):
-        if get_tool_definition(fn).name == tool_name:
-            return fn
-    msg = f"tool {tool_name!r} not found in {path}"
-    raise LookupError(msg)
 
 
 @pytest.fixture
 def run_workflow_tool() -> Callable[..., Awaitable[Any]]:
-    return _load_tool("run_workflow.py", "run_workflow")
+    return load_bundle_tool(STARTER_TOOLS_DIR, "run_workflow.py", "run_workflow")
 
 
 class _MockAuthz:

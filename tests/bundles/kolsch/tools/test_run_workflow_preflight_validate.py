@@ -24,7 +24,6 @@ ChatApp / Pilot needed. Mirrors the shape of the bug-025 tests in
 
 from __future__ import annotations
 
-import importlib.util
 from pathlib import Path
 from typing import Any, ClassVar
 from uuid import uuid4
@@ -33,6 +32,7 @@ import pytest
 
 from errors import PlatformError
 from schemas.identifiers import AgentId, SessionId, ThreadId
+from tests.fixtures.bundle_paths import STARTER_TOOLS_DIR, load_bundle_tool
 from tools.decorator import ToolContext
 
 # ----------------------------------------------------------------------
@@ -40,20 +40,9 @@ from tools.decorator import ToolContext
 # ----------------------------------------------------------------------
 
 
-_REPO = Path(__file__).resolve().parents[4]
-_TOOL_PATH = _REPO / "bundles" / "kolsch" / "tools" / "run_workflow.py"
-
-
 def _load_run_workflow() -> Any:
-    spec = importlib.util.spec_from_file_location(
-        "bundles.kolsch.tools.run_workflow_preflight_probe",
-        _TOOL_PATH,
-    )
-    assert spec is not None
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    return module.run_workflow
+    """Load the shipped ``run_workflow`` tool from the starter bundle."""
+    return load_bundle_tool(STARTER_TOOLS_DIR, "run_workflow.py", "run_workflow")
 
 
 # ----------------------------------------------------------------------
@@ -270,7 +259,7 @@ graph:
     from workflows.parser import load_workflow
     from workflows.validator import validate_workflow
 
-    tmp_dir = Path(_REPO) / "tests" / "bundles" / "kolsch" / "tools"
+    tmp_dir = Path(__file__).resolve().parent
     tmp = tmp_dir / "_qol088_map_scope_fixture.yaml"
     try:
         tmp.write_text(yaml_source, encoding="utf-8")

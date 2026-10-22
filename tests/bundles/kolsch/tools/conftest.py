@@ -1,4 +1,4 @@
-"""Shared fixtures + helpers for the ``bundles/kolsch/tools/`` smoke suite.
+"""Shared fixtures + helpers for the ``tests/bundles/kolsch/tools/`` smoke suite.
 
 Two seams reusable across future example-tool tests:
 
@@ -13,18 +13,18 @@ Two seams reusable across future example-tool tests:
   ``ToolNotAvailable`` when the platform hasn't wired the required
   services.
 
-The suite works around the fact that ``bundles/`` is not on the
-Python import path: tools are loaded via
-[`discover_tools_in_file`][tools.discovery.discover_tools_in_file],
-the first-class discovery API the Tools subsystem itself uses at
-registration time.
+Bundle tools are not on the Python import path: they are loaded via
+[`load_bundle_tool`][tests.fixtures.bundle_paths.load_bundle_tool],
+which wraps the first-class discovery API the Tools subsystem itself
+uses at registration time. The tutorial example tools come from
+``CARD_EXAMPLES_TOOLS_DIR``; shipped tools from ``STARTER_TOOLS_DIR``
+(both in ``tests/fixtures/bundle_paths.py``).
 """
 
 from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -32,69 +32,38 @@ import pytest
 
 from cli.chat.app import ChatApp
 from schemas.identifiers import AgentId, SessionId, ThreadId
+from tests.fixtures.bundle_paths import CARD_EXAMPLES_TOOLS_DIR, load_bundle_tool
 from tools.decorator import ToolContext, get_tool_definition
-from tools.discovery import discover_tools_in_file
 from tools.dispatch import _invoke_tool
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
+    from pathlib import Path
 
 # --------------------------------------------------------------------
 # Bundle-tool loading
 # --------------------------------------------------------------------
 
-_BUNDLE_TOOLS_DIR = Path(__file__).resolve().parents[4] / "bundles" / "kolsch" / "tools"
-"""Absolute path to ``bundles/kolsch/tools/`` at the repo root.
-
-Resolved lazily via ``__file__`` so the path is portable across
-checkout locations. Four ``.parents[]`` hops:
-
-- ``[0]`` — ``tests/bundles/kolsch/tools/conftest.py``.
-- ``[1]`` — ``tests/bundles/kolsch/tools/``.
-- ``[2]`` — ``tests/bundles/kolsch/``.
-- ``[3]`` — ``tests/bundles/``.
-- ``[4]`` — repo root.
-"""
-
-
-def _load_tool(filename: str, tool_name: str) -> Callable[..., Awaitable[Any]]:
-    """Import ``bundles/kolsch/tools/<filename>`` and return the tool.
-
-    Args:
-        filename: File under ``bundles/kolsch/tools/`` (e.g.
-            ``"hello_card.py"``).
-        tool_name: The ``@tool(name=...)`` value to select — a single
-            file may declare multiple tools.
-
-    Returns:
-        The ``@tool``-decorated callable, unmodified. Its
-        ``_tool_definition`` attribute carries the ``ToolDefinition``
-        metadata the dispatch pipeline reads.
-    """
-    path = _BUNDLE_TOOLS_DIR / filename
-    for fn in discover_tools_in_file(path):
-        if get_tool_definition(fn).name == tool_name:
-            return fn
-    msg = f"tool {tool_name!r} not found in {path}"
-    raise LookupError(msg)
-
 
 @pytest.fixture
 def hello_card_tool() -> Callable[..., Awaitable[Any]]:
     """Load the ``hello_card`` example tool."""
-    return _load_tool("hello_card.py", "hello_card")
+    return load_bundle_tool(CARD_EXAMPLES_TOOLS_DIR, "hello_card.py", "hello_card")
 
 
 @pytest.fixture
 def download_with_progress_tool() -> Callable[..., Awaitable[Any]]:
     """Load the ``download_with_progress`` example tool."""
-    return _load_tool("download_with_progress.py", "download_with_progress")
+    return load_bundle_tool(
+        CARD_EXAMPLES_TOOLS_DIR, "download_with_progress.py", "download_with_progress"
+    )
 
 
 @pytest.fixture
 def confirm_dangerous_action_tool() -> Callable[..., Awaitable[Any]]:
     """Load the ``confirm_dangerous_action`` example tool."""
-    return _load_tool(
+    return load_bundle_tool(
+        CARD_EXAMPLES_TOOLS_DIR,
         "confirm_dangerous_action.py",
         "confirm_dangerous_action",
     )

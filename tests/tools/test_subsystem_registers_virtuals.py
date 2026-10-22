@@ -24,9 +24,7 @@ channel used to register ``run_workflow`` — the ONLY guard is
 
 from __future__ import annotations
 
-import importlib.util
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
@@ -35,28 +33,20 @@ from cli.chat.service_registry import ChatServiceRegistry
 from providers import DotenvSecretsProvider, NativeSandboxProvider
 from providers.authz import RuleBasedAuthorizationProvider
 from schemas import AgentId
+from tests.fixtures.bundle_paths import STARTER_TOOLS_DIR, load_bundle_tool
 from tools.subsystem import ToolsSubsystem
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Fixtures.
 # ---------------------------------------------------------------------------
 
 
-_REPO = Path(__file__).resolve().parents[2]
-_RUN_WORKFLOW_PATH = _REPO / "bundles" / "kolsch" / "tools" / "run_workflow.py"
-
-
 def _load_run_workflow() -> Any:
-    """Load the shipped ``run_workflow`` tool from the bundle."""
-    spec = importlib.util.spec_from_file_location(
-        "bundles.kolsch.tools.run_workflow_probe_028",
-        _RUN_WORKFLOW_PATH,
-    )
-    assert spec is not None
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    return module.run_workflow
+    """Load the shipped ``run_workflow`` tool from the starter bundle."""
+    return load_bundle_tool(STARTER_TOOLS_DIR, "run_workflow.py", "run_workflow")
 
 
 class _MockWorkflows:

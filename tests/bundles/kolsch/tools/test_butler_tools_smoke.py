@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -43,8 +42,7 @@ from tests.cli.chat.services.mocks import (
     MockExecutorSpec,
     install_mock_executor_factory,
 )
-from tools.decorator import get_tool_definition
-from tools.discovery import discover_tools_in_file
+from tests.fixtures.bundle_paths import STARTER_TOOLS_DIR, load_bundle_tool
 from tools.services.exceptions import ToolNotAvailable
 from workflows.events import (
     WorkflowRunCompletedEvent,
@@ -62,32 +60,19 @@ if TYPE_CHECKING:
 # --------------------------------------------------------------------
 
 
-_TOOLS_DIR = Path(__file__).resolve().parents[4] / "bundles" / "kolsch" / "tools"
-
-
-def _load_tool(filename: str, tool_name: str) -> Callable[..., Awaitable[Any]]:
-    """Load a bundle tool by filename + tool name."""
-    path = _TOOLS_DIR / filename
-    for fn in discover_tools_in_file(path):
-        if get_tool_definition(fn).name == tool_name:
-            return fn
-    msg = f"tool {tool_name!r} not found in {path}"
-    raise LookupError(msg)
-
-
 @pytest.fixture
 def run_workflow_tool() -> Callable[..., Awaitable[Any]]:
-    return _load_tool("run_workflow.py", "run_workflow")
+    return load_bundle_tool(STARTER_TOOLS_DIR, "run_workflow.py", "run_workflow")
 
 
 @pytest.fixture
 def workflow_status_tool() -> Callable[..., Awaitable[Any]]:
-    return _load_tool("workflow_status.py", "workflow_status")
+    return load_bundle_tool(STARTER_TOOLS_DIR, "workflow_status.py", "workflow_status")
 
 
 @pytest.fixture
 def cancel_workflow_tool() -> Callable[..., Awaitable[Any]]:
-    return _load_tool("cancel_workflow.py", "cancel_workflow")
+    return load_bundle_tool(STARTER_TOOLS_DIR, "cancel_workflow.py", "cancel_workflow")
 
 
 def _mk_events() -> list[Any]:
