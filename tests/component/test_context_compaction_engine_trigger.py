@@ -42,6 +42,7 @@ from schemas import (
 )
 from skills import SkillsSubsystem
 from store import SessionStore, SqliteBackend
+from tests.fixtures.assertions import assert_event_content, assert_event_sequence
 from tools import ToolsSubsystem
 
 if TYPE_CHECKING:
@@ -252,3 +253,222 @@ async def test_compaction_fires_when_estimate_exceeds_threshold(tmp_path: Path) 
     assert any(e.type == EventType.CONTEXT_COMPACTED for e in events), [
         e.type.value for e in events
     ]
+
+
+# ---------------------------------------------------------------------------
+# bug-156 — the compaction summary must reach the model on the turn it
+# fires. The per-exchange pre-flight emits `context.compacted` AFTER the
+# trigger `user.message`, so Assembly projects the summary after the user
+# message and the engine's history split used to slice it off.
+# ---------------------------------------------------------------------------
+
+_COMPACTION_TAG = "<context-compaction>"
+_FIRST_Q = "first question about the deployment plan"
+_MIDDLE_Q = "middle question " + ("about the rollout window and its risks " * 52)
+_THIRD_Q = "third question"
+_LONG_REPLY = "answer " + ("with enough detail to carry token weight " * 25)
+_SUMMARY_JSON = (
+    '{"schema_version": 1, "summary_text": "earlier turns covered rollout", '
+    '"refs": [], "kept_files": [], '
+    '"span": {"first_event_id": "ev_x", "last_event_id": "ev_y", '
+    '"event_count": 2}}'
+)
+_LARGE_CONTEXT = 100_000
+
+
+class _RecordingLLM:
+    """Main-LLM callable that records every request it receives."""
+
+    def __init__(self) -> None:
+        self.requests: list[LLMRequest] = []
+
+    async def __call__(self, request: LLMRequest) -> LLMResponse:
+        self.requests.append(request)
+        return LLMResponse(content=_LONG_REPLY, tool_calls=None, usage={}, raw={})
+
+
+def _summariser_factory(*, fail: bool) -> Any:
+    class _Handle:
+        async def __call__(self, request: LLMRequest) -> LLMResponse:
+            if fail:
+                raise RuntimeError("summariser unavailable")
+            return LLMResponse(content=_SUMMARY_JSON, tool_calls=None, usage={}, raw={})
+
+    async def factory(_spec: Any, *, context: Any = None) -> Any:
+        return _Handle()
+
+    return factory
+
+
+def _mock_provider(context_length: int) -> ProviderConfig:
+    return ProviderConfig(
+        name="mock",
+        type="mock",
+        api_key_secret=None,
+        base_url=None,
+        timeout_seconds=None,
+        extras={},
+        models=[{"id": "mock-model", "context_length": context_length}],
+    )
+
+
+def _set_context_length(llm_providers: dict[str, ProviderConfig], value: int) -> None:
+    llm_providers["mock"].models[0]["context_length"] = value
+
+
+async def _build_recording(
+    tmp_path: Path, *, fail_summariser: bool = False
+) -> tuple[AgentEngine, SessionStore, _RecordingLLM, dict[str, ProviderConfig]]:
+    llm = _RecordingLLM()
+    llm_providers = {"mock": _mock_provider(_LARGE_CONTEXT)}
+    provider = ReferenceSummaryCompactionProvider(
+        llm_for_model=_summariser_factory(fail=fail_summariser),
+        config={},
+    )
+    engine, store = await _build(
+        tmp_path,
+        compaction_provider=provider,
+        llm_providers=llm_providers,
+        llm=llm,
+    )
+    return engine, store, llm, llm_providers
+
+
+async def _run_turn(engine: AgentEngine, thread_id: Any, content: str) -> None:
+    await engine.execute(
+        _config(),
+        ExecutionContext(
+            thread_id=thread_id,
+            trigger={"kind": "user_message", "content": content},
+        ),
+    )
+
+
+async def _seed_three_exchanges(engine: AgentEngine, store: SessionStore) -> Any:
+    """Exchanges 1-3 at a large context_length (no compaction)."""
+    session = await store.create_session("ag_test", name="test-session")
+    thread_id = (await store.list_threads(session.session_id))[0].thread_id
+    await _run_turn(engine, thread_id, _FIRST_Q)
+    await _run_turn(engine, thread_id, _MIDDLE_Q)
+    await _run_turn(engine, thread_id, _THIRD_Q)
+    return thread_id
+
+
+def _role_content(messages: list[Any]) -> list[tuple[str, str]]:
+    """(role, content) pairs from Message models or their JSON dumps."""
+    pairs: list[tuple[str, str]] = []
+    for m in messages:
+        if isinstance(m, dict):
+            pairs.append((m["role"], m.get("content") or ""))
+        else:
+            pairs.append((m.role, m.content or ""))
+    return pairs
+
+
+def _assert_summary_right_before_user(
+    messages: list[Any], *, user_text: str, absent: str | None = None
+) -> None:
+    pairs = _role_content(messages)
+    shown = [(role, content[:40]) for role, content in pairs]
+    summaries = [
+        i
+        for i, (role, content) in enumerate(pairs)
+        if role == "system" and content.startswith(_COMPACTION_TAG)
+    ]
+    assert len(summaries) == 1, f"expected exactly one compaction summary: {shown}"
+    assert pairs[-1] == ("user", user_text), shown
+    assert summaries[0] == len(pairs) - 2, (
+        f"summary not immediately before the user message: {shown}"
+    )
+    if absent is not None:
+        assert not any(absent in content for _, content in pairs), shown
+
+
+async def _events_since_last_exchange_start(
+    store: SessionStore, thread_id: Any
+) -> list[dict[str, Any]]:
+    events = [
+        e.model_dump(mode="json") async for e in store.read_path_to_leaf(thread_id)
+    ]
+    start = max(
+        i for i, e in enumerate(events) if e["type"] == "thread.exchange_started"
+    )
+    return events[start:]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("trigger", ["auto", "auto_truncation"])
+async def test_per_exchange_compaction_summary_reaches_framework(
+    tmp_path: Path, trigger: str
+) -> None:
+    engine, store, llm, llm_providers = await _build_recording(
+        tmp_path, fail_summariser=trigger == "auto_truncation"
+    )
+    session = await store.create_session("ag_test", name="test-session")
+    thread_id = (await store.list_threads(session.session_id))[0].thread_id
+    await _run_turn(engine, thread_id, _FIRST_Q)
+    await _run_turn(engine, thread_id, _MIDDLE_Q)
+
+    # Shrink the window so the exchange-3 pre-flight fires.
+    _set_context_length(llm_providers, 4700)
+    await _run_turn(engine, thread_id, _THIRD_Q)
+
+    exchange = await _events_since_last_exchange_start(store, thread_id)
+    ordered = [
+        e
+        for e in exchange
+        if e["type"] in ("user.message", "context.compacted", "model.request")
+    ]
+    assert_event_sequence(
+        ordered, ["user.message", "context.compacted", "model.request"]
+    )
+    assert_event_content(ordered[1], trigger=trigger)
+    assert_event_content(ordered[0], content={"text": _THIRD_Q})
+
+    # (a) what the main LLM actually received on exchange 3.
+    assert len(llm.requests) == 3
+    _assert_summary_right_before_user(
+        llm.requests[-1].messages, user_text=_THIRD_Q, absent="middle question"
+    )
+    # (b) what the log recorded on `model.request`.
+    _assert_summary_right_before_user(
+        ordered[2]["data"]["messages"], user_text=_THIRD_Q, absent="middle question"
+    )
+
+
+@pytest.mark.asyncio
+async def test_manual_compact_summary_reaches_next_exchange(tmp_path: Path) -> None:
+    engine, store, llm, llm_providers = await _build_recording(tmp_path)
+    thread_id = await _seed_three_exchanges(engine, store)
+
+    # A small window makes the kept recent tail short enough that the
+    # middle span is non-empty (otherwise `manual_compact` returns None).
+    _set_context_length(llm_providers, 4700)
+    event = await engine.manual_compact(config=_config(), thread_id=thread_id)
+    assert event is not None
+    assert event.type == EventType.CONTEXT_COMPACTED
+
+    _set_context_length(llm_providers, _LARGE_CONTEXT)
+    await _run_turn(engine, thread_id, "fourth question")
+    _assert_summary_right_before_user(
+        llm.requests[-1].messages, user_text="fourth question"
+    )
+
+
+@pytest.mark.asyncio
+async def test_eager_compact_summary_reaches_next_exchange(tmp_path: Path) -> None:
+    engine, store, llm, llm_providers = await _build_recording(tmp_path)
+    thread_id = await _seed_three_exchanges(engine, store)
+
+    _set_context_length(llm_providers, 4300)
+    event = await engine.maybe_compact_thread_eagerly(
+        thread_id=thread_id, spec=_config().model
+    )
+    assert event is not None
+    assert event.type == EventType.CONTEXT_COMPACTED
+
+    _set_context_length(llm_providers, _LARGE_CONTEXT)
+    await _run_turn(engine, thread_id, "fourth question")
+    _assert_summary_right_before_user(
+        llm.requests[-1].messages, user_text="fourth question"
+    )
