@@ -102,6 +102,7 @@ async def test_tail_removed_warns_once_with_path_and_fix(
     assert message.startswith(f"{tmp_path.resolve() / 'platform.yaml'}: ")
     assert _FIX in message
     assert "ask for approval in `kolsch chat`" in message
+    assert "`kolsch chat --auto-approve`" in message
 
 
 async def test_second_bootstrap_same_root_is_silent(

@@ -256,7 +256,9 @@ These are non-negotiable. Violating them blocks merges.
   workspace and `kolsch doctor` reports an advisory finding (both
   via `providers.authz.inspect_default_deny_tail`; reuse it, don't
   re-derive the tail check). Without a tail, an action no rule
-  covers asks for approval in chat and is denied everywhere else.
+  covers asks for approval in chat (and is allowed without asking
+  under `kolsch chat --auto-approve`) and is denied everywhere else;
+  with the tail it is denied outright everywhere, chat included.
   The `allow_all_test` variant is for tests only: it is registered
   unconditionally, but its constructor refuses unless
   `KOLSCH_TEST_BUILD=1`, and the runtime bootstrap always builds

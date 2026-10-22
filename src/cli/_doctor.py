@@ -209,19 +209,36 @@ def _authz_tail_note(workspace_root: Path) -> str | None:
     return describe_default_deny_tail_problem(inspect_default_deny_tail(rules))
 
 
+def _yaml_kind(value: object) -> str:
+    """Name `value`'s YAML kind (`null`, `string`, `list`, …) for user text."""
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "a boolean"
+    if isinstance(value, (int, float)):
+        return "a number"
+    if isinstance(value, str):
+        return "a string"
+    if isinstance(value, list):
+        return "a list"
+    if isinstance(value, dict):
+        return "a mapping"
+    return type(value).__name__
+
+
 def _authz_shape_problem(data: dict[str, object]) -> str | None:
     """Name why `authorization.config.rules` can't be read, or `None`."""
     if "authorization" not in data:
         return "`authorization` section is missing"
     authorization = data["authorization"]
     if not isinstance(authorization, dict):
-        return f"`authorization` is {type(authorization).__name__}, not a mapping"
+        return f"`authorization` is {_yaml_kind(authorization)}, not a mapping"
     config = authorization.get("config", {})
     if not isinstance(config, dict):
-        return f"`authorization.config` is {type(config).__name__}, not a mapping"
+        return f"`authorization.config` is {_yaml_kind(config)}, not a mapping"
     if platform_rules_from_config(config) is None:
         rules = config.get("rules")
-        return f"`authorization.config.rules` is {type(rules).__name__}, not a list"
+        return f"`authorization.config.rules` is {_yaml_kind(rules)}, not a list"
     return None
 
 
