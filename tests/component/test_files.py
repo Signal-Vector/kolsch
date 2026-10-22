@@ -22,6 +22,7 @@ from errors import (
     FileAccessPolicyLoadFailed,
 )
 from files import (
+    PROTECTED_WRITE_PATHS,
     PathPolicy,
     assert_writable_destination,
     check_path_allowed,
@@ -267,6 +268,151 @@ def test_writable_destination_accepts_data_directory(tmp_path: Path) -> None:
     root = _root(tmp_path)
     # Does not raise. Returns None.
     assert_writable_destination("data/reports/x.md", root=root)
+
+
+# ===========================================================================
+# bug-161 — casefolded deny matching + the protected write floor
+#
+# Filesystem-independent: the policy compares casefolded resolved paths,
+# so these hold on case-sensitive Linux (where `.ENV` is a different,
+# missing file) and on case-insensitive macOS APFS (where it IS `.env`).
+# ===========================================================================
+
+
+def test_writable_destination_rejects_content_directory_any_case(
+    tmp_path: Path,
+) -> None:
+    root = _root(tmp_path)
+    for target in ("CONTENT/x", "Content/sub/x.bin", "data/../CONTENT/x"):
+        with pytest.raises(FileAccessDenied):
+            assert_writable_destination(target, root=root)
+
+
+@pytest.mark.parametrize(
+    "target",
+    [".ENV", ".Env", "data/../.ENV", ".PLATFORM/entities.db"],
+)
+def test_denied_paths_match_any_case(tmp_path: Path, target: str) -> None:
+    """A `.env` deny must not be bypassable by `.ENV` (the macOS read
+    bypass: `.` allows the root, and the case-sensitive deny missed)."""
+    root = _root(tmp_path)
+    policy = PathPolicy(allowed_paths=["."], denied_paths=[".env", ".platform/"])
+    allowed, reason = is_path_allowed(target, policy=policy, root=root)
+    assert allowed is False
+    assert reason is not None
+    assert "denied by rule" in reason
+
+
+def test_user_denied_path_matches_lowercase_target(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    policy = PathPolicy(allowed_paths=["."], denied_paths=["Secret/"])
+    with pytest.raises(FileAccessDenied) as exc_info:
+        check_path_allowed("secret/x", policy=policy, root=root)
+    assert exc_info.value.detail["matched_rule"] == {
+        "pattern": "Secret/",
+        "type": "denied_paths",
+    }
+
+
+def test_allow_never_grants_on_case_alone(tmp_path: Path) -> None:
+    """Casefolding widens denies only; an allow entry stays exact."""
+    root = _root(tmp_path)
+    policy = PathPolicy(allowed_paths=["data/"], denied_paths=[])
+    assert is_path_allowed("data/x", policy=policy, root=root) == (
+        True,
+        None,
+    )
+    allowed, reason = is_path_allowed("DATA/x", policy=policy, root=root)
+    assert allowed is False
+    assert reason == "default deny"
+
+
+def test_protected_write_paths_constant() -> None:
+    assert PROTECTED_WRITE_PATHS == ("platform.yaml", ".kolsch/", ".env", ".platform/")
+
+
+@pytest.mark.parametrize(
+    ("target", "entry"),
+    [
+        ("platform.yaml", "platform.yaml"),
+        ("PLATFORM.YAML", "platform.yaml"),
+        ("bundles/../platform.yaml", "platform.yaml"),
+        ("platform.yaml/.", "platform.yaml"),
+        (".kolsch", ".kolsch/"),
+        (".kolsch/default-rules.json", ".kolsch/"),
+        (".KOLSCH/x", ".kolsch/"),
+        (".env", ".env"),
+        (".Env", ".env"),
+        (".platform/entities.db", ".platform/"),
+    ],
+)
+def test_writable_destination_rejects_protected_floor(
+    tmp_path: Path, target: str, entry: str
+) -> None:
+    """No `file_access` policy is involved: the floor is in the guard."""
+    root = _root(tmp_path)
+    with pytest.raises(FileAccessDenied) as exc_info:
+        assert_writable_destination(target, root=root)
+    err = exc_info.value
+    assert err.detail["matched_rule"] == {
+        "pattern": entry,
+        "type": "protected_write_floor",
+    }
+    assert f"{entry} is protected" in str(err)
+    assert "kolsch permissions" in str(err)
+
+
+def test_writable_destination_rejects_absolute_protected_path(
+    tmp_path: Path,
+) -> None:
+    root = _root(tmp_path)
+    with pytest.raises(FileAccessDenied):
+        assert_writable_destination(str(root / "platform.yaml"), root=root)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges")
+def test_writable_destination_rejects_symlinks_into_floor(tmp_path: Path) -> None:
+    root = _root(tmp_path)
+    (root / "platform.yaml").write_text("x: 1\n", encoding="utf-8")
+    (root / "data" / "link").symlink_to("../platform.yaml")
+    (root / "data" / "up").symlink_to("..", target_is_directory=True)
+    for target in ("data/link", "data/up/platform.yaml", "data/up/.kolsch/x"):
+        with pytest.raises(FileAccessDenied):
+            assert_writable_destination(target, root=root)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="hard links differ on Windows")
+def test_writable_destination_rejects_hard_link_to_protected_file(
+    tmp_path: Path,
+) -> None:
+    """An in-place writer (`make_write` / `make_edit`) through a hard
+    link would change `platform.yaml`'s bytes; refuse it by inode."""
+    root = _root(tmp_path)
+    (root / "platform.yaml").write_text("x: 1\n", encoding="utf-8")
+    (root / "data" / "hl").hardlink_to(root / "platform.yaml")
+    with pytest.raises(FileAccessDenied) as exc_info:
+        assert_writable_destination("data/hl", root=root)
+    assert exc_info.value.detail["matched_rule"]["pattern"] == "platform.yaml"
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "data/platform.yaml",
+        "platform.yaml.bak",
+        "platform.yaml.tmp.123",
+        ".envrc",
+        ".env.example",
+        "data/.kolsch/x",
+        ".kolschrc",
+        "bundles/user/workflows/w.yaml",
+    ],
+)
+def test_writable_destination_floor_does_not_over_match(
+    tmp_path: Path, target: str
+) -> None:
+    root = _root(tmp_path)
+    assert_writable_destination(target, root=root)
 
 
 # ===========================================================================

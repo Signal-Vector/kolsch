@@ -13,17 +13,26 @@ Evaluation order is denies-then-allows-then-default-deny; paths are
 normalised via `Path.resolve` before policy evaluation so symlink
 escape is prevented.
 
+Deny matching (`denied_paths`, the `content/` guard and the protected
+write floor) is case-insensitive: both sides are casefolded, so
+`.ENV` cannot slip past a `.env` deny on a case-insensitive
+filesystem such as default macOS APFS. Allow matching stays
+case-sensitive, so case never *grants* access.
+
 Two write-side guards sit alongside the read-path policy:
 [`assert_writable_destination`][files.policy.assert_writable_destination]
-refuses any write target under `content/` regardless of policy (the
-content sidecar is engine-owned), and
-[`validate_file_ref`][files.policy.validate_file_ref] sanity-checks
-the `file_ref` string (non-empty, no null bytes) before any path
-policy evaluation runs.
+refuses any write target under `content/` (the content sidecar is
+engine-owned) or under one of the
+[`PROTECTED_WRITE_PATHS`][files.policy.PROTECTED_WRITE_PATHS]
+(kolsch's own configuration and state), regardless of policy and of
+authorization. [`validate_file_ref`][files.policy.validate_file_ref]
+sanity-checks the `file_ref` string (non-empty, no null bytes) before
+any path policy evaluation runs.
 """
 
 from __future__ import annotations
 
+import unicodedata
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -40,6 +49,38 @@ if TYPE_CHECKING:
 
 
 _FILE_ACCESS_SECTION = "file_access"
+
+PROTECTED_WRITE_PATHS: tuple[str, ...] = (
+    "platform.yaml",
+    ".kolsch/",
+    ".env",
+    ".platform/",
+)
+"""Workspace paths no agent file tool may ever write (bug-161).
+
+Each entry is relative to the workspace root; a write target is
+refused when its resolved path equals the entry or sits under it,
+compared casefolded.
+[`assert_writable_destination`][files.policy.assert_writable_destination]
+enforces it, so it holds under every authorization outcome — an
+allow-all rule set, a `bundles/*` allow (which also matches
+`bundles/../platform.yaml`), or `kolsch chat --auto-approve`.
+
+- `platform.yaml` — authorization rules, `file_access`, provider
+  topology. An agent that could write it could grant itself anything.
+- `.kolsch/` — setup's bundle baseline and rule ledgers.
+- `.env` — secrets and endpoint-redirect environment variables.
+- `.platform/` — the session store database.
+
+Not configurable, by design: there is no config key or environment
+variable to turn it off, so an agent cannot disable it by editing a
+file it can reach. kolsch's own writers (`kolsch permissions`, the
+approval modal's "always allow", `kolsch connect`, `kolsch setup`)
+are Python and never go through this guard. The floor does NOT
+cover `bash` (unconstrained under the native sandbox) or
+`bundles/**` (writing bundle code or permission YAML is equivalent
+to code execution).
+"""
 
 
 class PathPolicy(BaseModel):
@@ -109,6 +150,29 @@ def _is_under(child: Path, parent: Path) -> bool:
     except ValueError:
         return False
     return True
+
+
+def _fold(part: str) -> str:
+    """Canonical caseless form of one path component (NFD + casefold)."""
+    return unicodedata.normalize("NFD", unicodedata.normalize("NFD", part).casefold())
+
+
+def _is_under_casefold(child: Path, parent: Path) -> bool:
+    """Case-insensitive [`_is_under`][files.policy._is_under] for deny checks.
+
+    Both paths must already be resolved. Compares components
+    element-wise after casefolding, so `/ws/.ENV` is under `/ws/.env`
+    on every platform. On a case-sensitive filesystem this over-matches
+    (fail-safe: it only ever widens a deny); on a case-insensitive one
+    (default macOS APFS) it matches what the filesystem actually opens.
+    """
+    child_parts = child.parts
+    parent_parts = parent.parts
+    if len(child_parts) < len(parent_parts):
+        return False
+    return all(
+        _fold(c) == _fold(p) for c, p in zip(child_parts, parent_parts, strict=False)
+    )
 
 
 def is_path_allowed(
@@ -227,10 +291,13 @@ def evaluate_path(
     resolved = _resolve_against_root(path, root)
 
     # Denies are evaluated FIRST. A path that matches both a deny and
-    # an allow rule is denied; the deny pattern fires.
+    # an allow rule is denied; the deny pattern fires. Deny matching
+    # is casefolded (bug-161) so `.ENV` can't slip past `.env` on a
+    # case-insensitive filesystem; allow matching below stays
+    # case-sensitive so case never grants access.
     for denied in policy.denied_paths:
         denied_abs = _resolve_against_root(denied, root)
-        if _is_under(resolved, denied_abs):
+        if _is_under_casefold(resolved, denied_abs):
             return _PathDecision(
                 allowed=False,
                 reason=f"denied by rule {denied!r}",
@@ -254,19 +321,52 @@ def evaluate_path(
 
 
 # ---------------------------------------------------------------------------
-# Write-side guard — tools never write to content/
+# Write-side guard — tools never write to content/ or the protected floor
 # ---------------------------------------------------------------------------
 
 
-def assert_writable_destination(path: str, *, root: Path) -> None:
-    """Refuse a write target that resolves under `<root>/content/`.
+_WRITE_GUARD_WHERE = "files.policy.assert_writable_destination"
 
-    The `content/` sidecar store is engine-owned: tools writing there
-    would violate the engine's sole-writer invariant and the
-    hash-naming convention. Tools that need to persist outputs land
-    in `data/` instead. This guard runs in addition to the path
-    policy — read access to `content/` is still gated by the regular
-    policy, only writes are refused here.
+
+def _same_existing_file(a: Path, b: Path) -> bool:
+    """Return `True` when both paths exist and are the same inode.
+
+    Catches what a path comparison can't: a pre-existing hard link to
+    a protected file, and any filesystem-specific aliasing beyond
+    casefolding. Missing paths (the common write-a-new-file case)
+    are simply not the same file.
+    """
+    try:
+        return a.samefile(b)
+    except OSError:
+        return False
+
+
+def assert_writable_destination(path: str, *, root: Path) -> None:
+    """Refuse a write target under `content/` or a protected path.
+
+    Every write-capable file tool calls this from its body, after
+    authorization and after
+    [`check_path_allowed`][files.policy.check_path_allowed], so it
+    holds whatever the authz rules, `file_access` lists or
+    `--auto-approve` say. Two refusals:
+
+    - `<root>/content/` — the sidecar store is engine-owned: tools
+      writing there would violate the engine's sole-writer invariant
+      and the hash-naming convention. Tools that need to persist
+      outputs land in `data/` instead. Read access to `content/` is
+      still gated by the regular policy; only writes are refused here.
+    - [`PROTECTED_WRITE_PATHS`][files.policy.PROTECTED_WRITE_PATHS]
+      (bug-161) — `platform.yaml`, `.kolsch/`, `.env`, `.platform/`.
+      Agents must not change kolsch's own configuration or state;
+      people change it with `kolsch permissions`, the approval modal,
+      `kolsch setup`, or an editor. Reads are not affected.
+
+    Matching is on the *resolved* target (symlinks and `..` followed,
+    so `bundles/../platform.yaml` and a `data/link -> ../platform.yaml`
+    symlink are both caught) and casefolded (so `PLATFORM.YAML` is
+    caught on every platform). An existing target that is the same
+    file as a protected path (a hard link) is refused too.
 
     Args:
         path: The candidate write target. Absolute or relative to
@@ -274,15 +374,34 @@ def assert_writable_destination(path: str, *, root: Path) -> None:
         root: The platform root, used to resolve relative paths.
 
     Raises:
-        FileAccessDenied: The path resolves under `<root>/content/`.
+        FileAccessDenied: The path resolves under `<root>/content/`
+            or a protected path. A floor refusal carries
+            `matched_rule={"pattern": <entry>, "type":
+            "protected_write_floor"}`.
     """
     resolved = _resolve_against_root(path, root)
-    content_dir = (root / "content").resolve(strict=False)
-    if _is_under(resolved, content_dir):
+    content_dir = _resolve_against_root("content", root)
+    if _is_under_casefold(resolved, content_dir):
         raise FileAccessDenied(
             path=path,
             reason=("tools may not write to content/; only the engine writes there"),
         )
+    for entry in PROTECTED_WRITE_PATHS:
+        protected = _resolve_against_root(entry, root)
+        if _is_under_casefold(resolved, protected) or _same_existing_file(
+            resolved, protected
+        ):
+            raise FileAccessDenied(
+                path=path,
+                reason=(
+                    f"{entry} is protected: agents cannot change kolsch "
+                    "configuration or state. Change permissions with "
+                    "`kolsch permissions` or the approval modal; edit other "
+                    "settings by hand or with `kolsch setup`."
+                ),
+                matched_rule={"pattern": entry, "type": "protected_write_floor"},
+                where=_WRITE_GUARD_WHERE,
+            )
 
 
 # ---------------------------------------------------------------------------
