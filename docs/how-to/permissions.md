@@ -332,10 +332,13 @@ The command atomically:
    the chat started (so `bundles/new-bundle/bundle.yaml` created
    mid-session is picked up).
 2. Re-parses every YAML in all 4 layers.
-3. If ANY parse fails: aborts, keeps the old authz provider live,
+3. If `platform.yaml` is missing (deleted mid-session): aborts and
+   keeps the old authz provider live. `/reload` never re-creates the
+   file — restore it, or run `kolsch setup`, then `/reload` again.
+4. If ANY parse fails: aborts, keeps the old authz provider live,
    prints the offending `file:line`. Enforcement never enters a
    half-loaded state.
-4. Otherwise: swaps in the fresh provider and prints a summary
+5. Otherwise: swaps in the fresh provider and prints a summary
    like `reloaded 17 rules across 4 layers [+1 bundle, -1 agent]`.
 
 Next authz decision uses the new rules. In-flight tool calls
@@ -462,6 +465,25 @@ authorization:
 ```
 
 Reloads on the next authz check — no restart.
+
+### An auto-generated `platform.yaml`
+
+When something boots the platform on a root with no `platform.yaml`
+(the programmatic `bootstrap_runtime` API, for example — the CLI
+refuses to run there and points you at `kolsch setup`), kolsch writes
+a default file and logs a WARNING. Its rules are fail-closed:
+
+```yaml
+      - { what: agent.execute.*,  pattern: "*",  effect: allow }
+      - { what: "*",              pattern: "*",  effect: deny }
+```
+
+Agents may run; every tool is denied, in chat too — the tail matches
+before the approval prompt, so no modal appears. Run `kolsch setup`
+for the full workspace rule set, or add rules with `kolsch permissions
+add` (they go before the tail). The file starts with a comment header
+explaining this; the first `kolsch permissions` rewrite drops that
+header, since only a trailing comment block is preserved.
 
 ### If your rule list has no default-deny tail
 

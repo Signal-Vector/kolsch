@@ -214,7 +214,12 @@ These are non-negotiable. Violating them blocks merges.
   add the tool file instead.
 - **The production Authorization rule set should end with the
   default-deny tail** (`{what: "*", pattern: "*", effect: deny}`,
-  id `rl_default_deny`), which `kolsch setup` writes.
+  id `rl_default_deny`), which `kolsch setup` writes. The
+  `platform.yaml` auto-generated on a root that has none is
+  fail-closed and also ends with the tail
+  (`assets.default_rules.fail_closed_default_rules`: agents may run,
+  every tool is denied); never make that default permissive — tests
+  that need permissive authz seed an explicit rule list.
   `kolsch permissions remove rl_default_deny` is refused
   (`authz.protected_rule`). A hand-edited `platform.yaml` with no
   tail, or with the tail not last, still **loads** — it is not

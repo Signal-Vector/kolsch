@@ -253,9 +253,17 @@ authorization:
       # `kolsch permissions {remove, show}`. Effect values:
       # "allow" | "deny" | "prompt" (Phase 2.0; see
       # `docs/explanation/secrets-sandbox-authz-contract.md` §3.7).
-      - what: "*"
+      #
+      # The auto-generated default (§3.10 step 1) is fail-closed:
+      # the engine pre-flight allow, then the protected
+      # default-deny tail (`rl_default_deny`). Agents may run;
+      # every tool is denied.
+      - what: "agent.execute.*"
         pattern: "*"
         effect: "allow"
+      - what: "*"
+        pattern: "*"
+        effect: "deny"
 storage:
   entity_backend: "sqlite"          # sqlite (default) | postgres
   entity_path: ".platform/entities.db"
@@ -504,6 +512,15 @@ Asset Management is the platform-bootstrap module. At startup, in order:
 1. **Read `<platform-root>/platform.yaml`.** If absent, generate a
    default (per File Handling §4.1 for the `file_access` section, and
    sensible defaults for other sections — see §3.2 for the schema).
+   The generated authorization is **fail-closed** and
+   catalog-independent:
+   [`fail_closed_default_rules`][assets.default_rules.fail_closed_default_rules]
+   (`agent.execute.*` allow, then the default-deny tail), so agents
+   may run and every tool is denied — in chat too, since the tail
+   matches before the approval prompt. Generation logs a WARNING and
+   writes a header comment pointing at `kolsch setup`, which writes
+   the full workspace rule set
+   ([`workspace_only_default_rules`][assets.default_rules.workspace_only_default_rules]).
 2. **Parse and validate the top-level structure.** Each section
    (`secrets`, `sandbox`, `authorization`, `event_bus`, `file_access`,
    `defaults`) is checked for required fields.

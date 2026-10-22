@@ -479,7 +479,10 @@ path policy.
 On first run with no `platform.yaml`, the platform MUST generate one
 with the standard `allowed_paths` populated. On subsequent runs, the
 platform MUST NOT modify the file's policy lists. The lists are the
-user's after first run.
+user's after first run. The generated file's authorization is
+fail-closed (agents may run; every tool is denied by the
+default-deny tail), so the `allowed_paths` only take effect once rules
+allow a file tool — `kolsch setup` writes those.
 
 ### Fh-I8 — `file_ref` validation at input time
 
