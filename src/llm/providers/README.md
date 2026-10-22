@@ -100,6 +100,11 @@ questions. Each maps to a Protocol method:
   `lookup_model_metadata(provider, model_id, credentials)`
   method. Returns a `ModelMetadata` if known, `None` otherwise.
 
+- **Never put credentials in a URL query string.** httpx logs every
+  request's full URL at INFO, and `kolsch` writes INFO records to
+  `<workspace>/logs/kolsch.log` (and to stderr under `kolsch -v`). Send
+  keys in headers (`Authorization`, `x-api-key`, …) only.
+
 If the answer to any of the first five is "I don't know yet,"
 the provider isn't ready — document the open question in the
 connector module's docstring and either don't ship it or ship

@@ -287,9 +287,37 @@ session's full event log:
 kolsch sessions events <the printed session id>
 ```
 
+If the test run could not start at all — for example the agent's
+config did not resolve — the banner's `Cause:` line says "the test run
+did not start" and the next step is `kolsch doctor`, since no session
+was created.
+
 Fix the cause (for example, re-run `kolsch connect <provider>` for a
 bad key), then re-run `kolsch setup` (it is idempotent and skips what
 is already done) or run the agent directly with `kolsch run`.
+
+## When a run fails
+
+A failed `kolsch run` exits `2` and prints a short block: the error
+code and message, a one-line cause, the session id, and the command to
+inspect it:
+
+```bash
+kolsch sessions events <the printed session id>   # the full event log of the failed run
+```
+
+For more detail:
+
+- `kolsch -v run …` adds third-party log records (CrewAI, the OpenAI
+  SDK, httpx) and the Python traceback to stderr. `-v` goes before the
+  command.
+- `<workspace>/logs/kolsch.log` always has every log record at INFO and
+  above, including tracebacks, whether or not you passed `-v`. It
+  rotates at 5 MB (3 backups). It can contain provider error bodies but
+  never API keys.
+
+See [CLI: Failure output and logging](../architecture/cli.md#failure-output-and-logging)
+for the exact format.
 
 ## Where to read next
 
