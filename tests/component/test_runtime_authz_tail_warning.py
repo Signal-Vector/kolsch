@@ -180,6 +180,30 @@ async def test_allow_all_without_tail_mentions_catch_all_allow(
     assert "ask for approval" not in message
 
 
+@pytest.mark.parametrize("shape", ["rules_null", "rules_absent", "config_absent"])
+async def test_absent_or_null_rules_warns(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, shape: str
+) -> None:
+    # The provider normalizes these to an EMPTY enforced rule set (no
+    # tail) — the warning must normalize the same way.
+    caplog.set_level(logging.WARNING, logger="platform_runtime")
+    payload = default_platform_payload()
+    authorization: dict[str, Any] = {"variant": "rule_based"}
+    if shape == "rules_null":
+        authorization["config"] = {"rules": None}
+    elif shape == "rules_absent":
+        authorization["config"] = {}
+    payload["authorization"] = authorization
+    (tmp_path / "platform.yaml").write_text(yaml.safe_dump(payload), encoding="utf-8")
+    runtime = await bootstrap_runtime(root=tmp_path)
+    assert await runtime.authz.list_rules() == []
+    records = _tail_records(caplog)
+    assert len(records) == 1
+    message = records[0].getMessage()
+    assert "no default-deny tail" in message
+    assert _FIX in message
+
+
 async def test_direct_provider_construction_is_silent(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
