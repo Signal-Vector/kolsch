@@ -69,7 +69,7 @@ integrity, and common misconfigurations, including (advisory) a missing
 or misplaced authorization default-deny tail, and an "Agent write
 access" section that lists the paths agents can never write and flags
 `allow` rules for `bash`, and `write_file` allows that point into
-`bundles/` or use a `*` pattern.
+`bundles/` or use a glob pattern.
 
 ## Failure output and logging
 

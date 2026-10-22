@@ -799,14 +799,16 @@ three things:
 - an `allow` for `write_file` whose pattern points into `bundles/`:
   `bundles/*`, `bundles/<name>/*`, a literal path under `bundles/`, the
   same under the absolute workspace path, or `*`;
-- any other `allow` for `write_file` whose pattern contains `*`, such
-  as `data/*`. Because patterns match the path as written, these also
-  reach `bundles/` through `../`.
+- any other `allow` for `write_file` whose pattern uses a glob
+  character (`*`, `?` or `[`), such as `data/*`. Patterns match the
+  path as written, and each glob character also matches `/` and `.`,
+  so these reach `bundles/` too: `data/*` matches
+  `data/../bundles/…`, and `?undles/*` matches `bundles/…`.
 
 Matching rules are grouped into one line per kind, by position and the
 id `kolsch permissions list` shows. `prompt` and `deny` rules,
-patterns without `*` outside `bundles/`, and rules for other tools are
-not flagged. Doctor doesn't consider rule order, so an `allow` that an
+literal paths outside `bundles/` (no glob characters), and rules for
+other tools are not flagged. Doctor doesn't consider rule order, so an `allow` that an
 earlier `deny` shadows is still reported. Agent, workflow and bundle
 `permissions:` / `policy:` layers aren't checked. The section is
 advisory: doctor's exit code doesn't change.
@@ -815,14 +817,16 @@ advisory: doctor's exit code doesn't change.
 Agent write access — advisory, exit code unchanged:
   agent file tools can never write: platform.yaml, .kolsch/, .env, .platform/ (whatever the rules allow)
   ! rules 1 (rl_4f188373), 2 (rl_d125ce8f) allow `write_file` under `bundles/` without asking: agents can change bundle code and permission YAML (equivalent to running code).
-  ! rule 3 (rl_cff8db4b) allow `write_file` on a `*` pattern without asking: rule patterns match the path as the agent wrote it, so `*` also matches `../` and these rules reach `bundles/` too (until authz patterns are matched against normalized paths).
+  ! rule 3 (rl_cff8db4b) allow `write_file` on a glob pattern without asking: rule patterns match the path as the agent wrote it, and `*`, `?` and `[...]` also match `/` and `.`, so these rules can reach `bundles/` too (for example through `../`) until authz patterns are matched against normalized paths.
   see these rules (by id) with `kolsch permissions list`.
   note: `kolsch chat --auto-approve` turns every `prompt` rule into an allow.
 ```
 
-With none of those rules, the section ends with `✓ no rule allows
-`bash`, and no rule allows `write_file` under `bundles/` or with a `*`
-pattern, without asking`.
+With none of those rules, the section ends with:
+
+```text
+  ✓ no rule allows `bash`, and no rule allows `write_file` under `bundles/` or with a glob pattern (`*`, `?`, `[`), without asking
+```
 
 ---
 

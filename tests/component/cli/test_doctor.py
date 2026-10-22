@@ -577,11 +577,11 @@ _FLOOR_LINE = (
 )
 _ALL_CLEAR = (
     "✓ no rule allows `bash`, and no rule allows `write_file` under "
-    "`bundles/` or with a `*` pattern, without asking"
+    "`bundles/` or with a glob pattern (`*`, `?`, `[`), without asking"
 )
 _BASH_LINE = "allow `bash` without asking: agents can run shell commands"
 _BUNDLES_LINE = "allow `write_file` under `bundles/` without asking"
-_WILDCARD_LINE = "allow `write_file` on a `*` pattern without asking"
+_WILDCARD_LINE = "allow `write_file` on a glob pattern without asking"
 
 
 def _rid(rule: dict[str, Any]) -> str:
@@ -643,7 +643,7 @@ async def test_agent_write_access_owner_shaped_rules_are_grouped(
     wildcard = [line for line in text.splitlines() if _WILDCARD_LINE in line]
     assert len(wildcard) == 1
     assert wildcard[0].startswith(f"  ! rule 4 ({_rid(owner[3])}) allow")
-    assert "`*` also matches `../`" in wildcard[0]
+    assert "also match `/` and `.`" in wildcard[0]
     assert "kolsch permissions list" in text
     assert _ALL_CLEAR not in text
 
@@ -675,17 +675,35 @@ async def test_agent_write_access_bundles_reach_is_flagged(
 
 @pytest.mark.parametrize(
     "pattern",
-    ["data/*", "logs/*.txt", "/elsewhere/Resumes/*", "data/../logs/*"],
+    [
+        "data/*",
+        "logs/*.txt",
+        "/elsewhere/Resumes/*",
+        "data/../logs/*",
+        # `?` and `[...]` match any one char, including `/` and `.` (R3-2).
+        "data/?",
+        "?undles/mine/nodes/n.py",
+        "[b]undles/mine/nodes/n.py",
+        "data/??/bundles/mine/nodes/n.py",
+    ],
 )
-async def test_agent_write_access_star_pattern_is_flagged_as_dotdot_reach(
+async def test_agent_write_access_glob_pattern_is_flagged(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pattern: str
 ) -> None:
-    """A `*` in a write_file pattern matches `../` (raw-path matching), so
-    `data/*` also allows `data/../bundles/x/nodes/n.py` (spec F1)."""
+    """Glob characters match `/` and `.` against the raw path, so `data/*`
+    allows `data/../bundles/x/nodes/n.py` and `?undles/…` allows
+    `bundles/…` (spec F1, QA R3-2)."""
     from fnmatch import fnmatchcase
 
     if pattern == "data/*":
         assert fnmatchcase("data/../bundles/x/nodes/n.py", pattern)
+    if pattern.endswith("nodes/n.py"):
+        reach = (
+            "data/../bundles/mine/nodes/n.py"
+            if "??" in pattern
+            else "bundles/mine/nodes/n.py"
+        )
+        assert fnmatchcase(reach, pattern)
     text = await _doctor_with(tmp_path, monkeypatch, [_wf(pattern)])
     assert _WILDCARD_LINE in text, text
     assert _BUNDLES_LINE not in text
@@ -720,7 +738,6 @@ async def test_agent_write_access_bash_allow_is_flagged(
             "pattern": "data/notes.md",
             "effect": "allow",
         },
-        {"what": "kolsch/tools/write_file", "pattern": "data/?", "effect": "allow"},
         {"what": "kolsch/tools/bash", "pattern": "*", "effect": "deny"},
         {"what": "kolsch/tools/read_file", "pattern": "bundles/*", "effect": "allow"},
         {"who": ".*", "what": "[unclosed", "effect": "allow"},

@@ -281,14 +281,15 @@ _BUNDLES_FINDING = (
     "agents can change bundle code and permission YAML (equivalent to running code).",
 )
 _WILDCARD_FINDING = (
-    "allow `write_file` on a `*` pattern without asking",
-    "rule patterns match the path as the agent wrote it, so `*` also "
-    "matches `../` and these rules reach `bundles/` too (until authz "
-    "patterns are matched against normalized paths).",
+    "allow `write_file` on a glob pattern without asking",
+    "rule patterns match the path as the agent wrote it, and `*`, `?` and "
+    "`[...]` also match `/` and `.`, so these rules can reach `bundles/` "
+    "too (for example through `../`) until authz patterns are matched "
+    "against normalized paths.",
 )
 _ALL_CLEAR = (
     "no rule allows `bash`, and no rule allows `write_file` under "
-    "`bundles/` or with a `*` pattern, without asking"
+    "`bundles/` or with a glob pattern (`*`, `?`, `[`), without asking"
 )
 
 
@@ -331,13 +332,13 @@ def _agent_write_access_findings(rules: list[object], root: Path) -> list[str]:
       sits under `bundles/` or `<root>/bundles/`. Compared casefolded,
       since the filesystem may be case-insensitive. A legacy rule has
       no target pattern, so a legacy `write_file` allow counts.
-    - **wildcard** — any other `write_file` `allow` whose pattern
-      contains `*`. Patterns match the raw path argument, so `*` also
-      matches `../` and reaches `bundles/` (and the rest of the
-      workspace) — spec F1.
+    - **glob** — any other `write_file` `allow` whose pattern contains
+      a glob character (`*`, `?`, `[`). Patterns match the raw path
+      argument and `fnmatch` lets each of these match `/` and `.`, so
+      `data/*` reaches `data/../bundles/…` and `?undles/…` reaches
+      `bundles/…` — spec F1.
 
-    `?` and `[...]` patterns without `*` aren't flagged (they match a
-    bounded number of characters). New-shape rules match `what` with
+    New-shape rules match `what` with
     `fnmatchcase`, as the provider does; legacy rules (`who` present)
     fullmatch `what` as a regex. Rule order is not considered: an
     `allow` shadowed by an earlier `deny` is still reported (advisory).
@@ -363,7 +364,7 @@ def _agent_write_access_findings(rules: list[object], root: Path) -> list[str]:
         pattern = str(rule.get("pattern", "*"))
         if _pattern_reaches_bundles(pattern, root):
             bundles.append(label)
-        elif "*" in pattern:
+        elif any(char in pattern for char in _GLOB_CHARS):
             wildcard.append(label)
     findings: list[str] = []
     for labels, (subject, consequence) in (

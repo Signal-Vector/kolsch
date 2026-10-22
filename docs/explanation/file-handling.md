@@ -468,7 +468,8 @@ editor; those writers are Python and never go through file tools.
 `kolsch doctor`'s "Agent write access" section lists the floor and
 flags platform `allow` rules for `bash`, `write_file` allows whose
 pattern points into `bundles/`, and other `write_file` allows whose
-pattern contains `*` (which reaches `bundles/` through `../`). See
+pattern uses a glob character (`*`, `?`, `[` each also match `/` and
+`.`, so they can reach `bundles/`). See
 [Manage Permissions](../how-to/permissions.md#check-your-workspace)
 for exactly what it checks.
 
