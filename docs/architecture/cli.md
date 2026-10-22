@@ -66,7 +66,9 @@ external agent can drive over stdio, and `mcp bridge` bridges the
 running session's tools to an in-workflow external-harness agent.
 `kolsch doctor` diagnoses a workspace — provider connectivity, catalog
 integrity, and common misconfigurations, including (advisory) a missing
-or misplaced authorization default-deny tail.
+or misplaced authorization default-deny tail, and an "Agent write
+access" section that lists the paths agents can never write and flags
+rules that let agents run `bash` or write `bundles/` without asking.
 
 ## Failure output and logging
 

@@ -565,3 +565,174 @@ async def test_doctor_unreadable_authorization_shape_installed_keeps_rc(
     assert rc == 0, text
     assert "no drift detected" in text
     assert "couldn't check the default-deny tail" in text
+
+
+# ---------------------------------------------------------------------------
+# bug-161 — advisory "Agent write access" section
+# ---------------------------------------------------------------------------
+
+_WRITE_ACCESS = "Agent write access — advisory, exit code unchanged:"
+_FLOOR_LINE = (
+    "agent file tools can never write: platform.yaml, .kolsch/, .env, .platform/"
+)
+_BASH_LINE = "agents can run shell commands without asking"
+_BUNDLES_LINE = "agents can change bundle code and permission YAML without asking"
+
+
+async def test_agent_write_access_setup_defaults_have_no_findings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _run_install(tmp_path, monkeypatch)
+    out = io.StringIO()
+    rc = await cmd_doctor(argparse.Namespace(), out=out, root=tmp_path)
+    text = out.getvalue()
+    assert rc == 0, text
+    assert _WRITE_ACCESS in text
+    assert _FLOOR_LINE in text
+    assert "no rule lets agents write bundles/ or run bash without asking" in text
+    assert "--auto-approve" in text
+    assert _BASH_LINE not in text
+    assert _BUNDLES_LINE not in text
+
+
+async def test_agent_write_access_owner_shaped_rules_flag_both_write_allows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The owner's workspace: absolute-root `*` and `bundles/*` allows."""
+    await _run_install(tmp_path, monkeypatch)
+    owner_rules = [
+        {
+            "what": "kolsch/tools/write_file",
+            "pattern": f"{tmp_path}/*",
+            "effect": "allow",
+        },
+        {"what": "kolsch/tools/write_file", "pattern": "bundles/*", "effect": "allow"},
+    ]
+    _edit_rules(tmp_path, lambda rules: [*owner_rules, *rules])
+    hash_before = _dir_hash(tmp_path)
+
+    out = io.StringIO()
+    rc = await cmd_doctor(argparse.Namespace(), out=out, root=tmp_path)
+    text = out.getvalue()
+    assert rc == 0, text
+    flagged = [line for line in text.splitlines() if _BUNDLES_LINE in line]
+    assert len(flagged) == 2, text
+    assert flagged[0].startswith("  ! rule 1, ")
+    assert f"`pattern: {tmp_path}/*`" in flagged[0]
+    assert flagged[1].startswith("  ! rule 2, ")
+    assert "`pattern: bundles/*`" in flagged[1]
+    assert _BASH_LINE not in text
+    assert _dir_hash(tmp_path) == hash_before
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        {"what": "kolsch/tools/bash", "pattern": "*", "effect": "allow"},
+        {"what": "kolsch/tools/bash", "pattern": "git *", "effect": "allow"},
+        {"what": "kolsch/tools/*", "pattern": "*", "effect": "allow"},
+        {"who": ".*", "what": "tool\\.bash", "effect": "allow"},
+    ],
+)
+async def test_agent_write_access_bash_allow_is_flagged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rule: dict[str, Any]
+) -> None:
+    await _run_install(tmp_path, monkeypatch)
+    _edit_rules(tmp_path, lambda rules: [rule, *rules])
+    out = io.StringIO()
+    rc = await cmd_doctor(argparse.Namespace(), out=out, root=tmp_path)
+    text = out.getvalue()
+    assert rc == 0, text
+    assert _BASH_LINE in text
+    assert "bypasses every file protection, including this one" in text
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        {"what": "kolsch/tools/write_file", "pattern": "data/*", "effect": "allow"},
+        {"what": "kolsch/tools/write_file", "pattern": "bundles/*", "effect": "prompt"},
+        {"what": "kolsch/tools/bash", "pattern": "*", "effect": "deny"},
+        {"what": "kolsch/tools/read_file", "pattern": "bundles/*", "effect": "allow"},
+        {"who": ".*", "what": "[unclosed", "effect": "allow"},
+    ],
+)
+async def test_agent_write_access_non_findings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rule: dict[str, Any]
+) -> None:
+    await _run_install(tmp_path, monkeypatch)
+    _edit_rules(tmp_path, lambda rules: [rule, *rules])
+    out = io.StringIO()
+    rc = await cmd_doctor(argparse.Namespace(), out=out, root=tmp_path)
+    text = out.getvalue()
+    assert rc == 0, text
+    assert _BASH_LINE not in text
+    assert _BUNDLES_LINE not in text
+
+
+async def test_agent_write_access_catch_all_allow_flags_both(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _run_install(tmp_path, monkeypatch)
+    _edit_rules(
+        tmp_path,
+        lambda rules: [
+            {"id": "rl_wide", "what": "*", "pattern": "*", "effect": "allow"},
+            *rules,
+        ],
+    )
+    out = io.StringIO()
+    rc = await cmd_doctor(argparse.Namespace(), out=out, root=tmp_path)
+    text = out.getvalue()
+    assert rc == 0, text
+    assert f"rule 1 (rl_wide), `what: *`, `pattern: *`, allow: {_BASH_LINE}" in text
+    assert _BUNDLES_LINE in text
+
+
+async def test_agent_write_access_does_not_change_drift_rc(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _run_install(tmp_path, monkeypatch)
+    stray = tmp_path / "bundles" / "kolsch" / "tools" / "fetch_website.py"
+    stray.write_text("# retired stub\n", encoding="utf-8")
+    _edit_rules(
+        tmp_path,
+        lambda rules: [
+            {"what": "kolsch/tools/bash", "pattern": "*", "effect": "allow"},
+            *rules,
+        ],
+    )
+    out = io.StringIO()
+    rc = await cmd_doctor(argparse.Namespace(), out=out, root=tmp_path)
+    text = out.getvalue()
+    assert rc == 1  # bundle drift, exactly as without the finding
+    assert text.index("Bundle drift report") < text.index(_WRITE_ACCESS)
+    assert _BASH_LINE in text
+
+
+@pytest.mark.parametrize(
+    ("content", "reason"),
+    [
+        (None, "platform.yaml not found"),
+        (
+            "not: valid: yaml:\n  - [unclosed\n",
+            "platform.yaml couldn't be read or parsed",
+        ),
+        ("- just\n- a list\n", "platform.yaml is not a mapping"),
+        (
+            "authorization:\n  config:\n    rules: 5\n",
+            "`authorization.config.rules` is a number, not a list",
+        ),
+    ],
+)
+async def test_agent_write_access_unreadable_says_couldnt_check(
+    tmp_path: Path, content: str | None, reason: str
+) -> None:
+    if content is not None:
+        (tmp_path / "platform.yaml").write_text(content, encoding="utf-8")
+    out = io.StringIO()
+    rc = await cmd_doctor(argparse.Namespace(), out=out, root=tmp_path)
+    text = out.getvalue()
+    assert rc == 0, text
+    assert _FLOOR_LINE in text
+    assert f"couldn't check agent write access: {reason}." in text

@@ -30,6 +30,13 @@ has it somewhere other than last. Same text as the runtime bootstrap
 WARNING. Advisory — it never changes the exit code — and printed on
 the pre-``kolsch setup`` path too.
 
+Then, always, an advisory **Agent write access** section (bug-161):
+the paths agent file tools can never write
+(``files.PROTECTED_WRITE_PATHS``), plus a warning for each platform
+``allow`` rule that lets agents run ``bash`` or write ``bundles/``
+without asking — the two routes around that floor. Never changes the
+exit code.
+
 qol-089 spec section §Acceptance Criteria (5) and (6) drive the
 contract. qol-093 will consume the same detection logic for its
 ``--sync-bundle`` path.
@@ -37,7 +44,9 @@ contract. qol-093 will consume the same detection logic for its
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import re
+from fnmatch import fnmatchcase
+from typing import TYPE_CHECKING, Any
 
 from cli._bundle_baseline import (
     read_baseline,
@@ -47,6 +56,7 @@ from cli._migrations.tools import (
     ToolsMigrationResult,
     migrate_tool_refs,
 )
+from files import PROTECTED_WRITE_PATHS
 from kolsch._yamlio import YAMLError
 from kolsch._yamlio import load as _yaml_load
 from providers.authz import (
@@ -102,6 +112,7 @@ async def cmd_doctor(args: object, *, out: TextIO, root: Path) -> int:
             "run `kolsch setup` to install the starter bundle.\n"
         )
         _render_authz_tail(report.authz_tail_note, out=out)
+        _render_agent_write_access(report.agent_write_access, out=out)
         return 0
     _render(report, out=out)
     return 1 if report.has_drift else 0
@@ -133,6 +144,9 @@ class _Report:
         # bug-152 — default-deny tail finding for `platform.yaml`, or
         # `None`. Advisory: deliberately NOT part of `has_drift`.
         self.authz_tail_note: str | None = None
+        # bug-161 — "Agent write access" findings (list) or a
+        # "couldn't check" reason (str). Advisory: NOT part of `has_drift`.
+        self.agent_write_access: list[str] | str = []
 
     @property
     def has_drift(self) -> bool:
@@ -151,6 +165,7 @@ def _build_report(workspace_root: Path) -> _Report:
     """Assemble the drift report — pure detection, no writes."""
     report = _Report()
     report.authz_tail_note = _authz_tail_note(workspace_root)
+    report.agent_write_access = _agent_write_access(workspace_root)
     source_dir = _starter_bundle_dir()
     workspace_bundle = workspace_root / "bundles" / "kolsch"
 
@@ -242,6 +257,103 @@ def _authz_shape_problem(data: dict[str, object]) -> str | None:
     return None
 
 
+# bug-161 — the refs whose `allow` rules route around the write floor.
+_BASH_REFS = ("kolsch/tools/bash", "tool.bash")
+_WRITE_FILE_REFS = (
+    "kolsch/tools/write_file",
+    "kolsch/nodes/write_file",
+    "tool.write_file",
+)
+_BASH_CONSEQUENCE = (
+    "agents can run shell commands without asking, which bypasses every "
+    "file protection, including this one"
+)
+_BUNDLES_CONSEQUENCE = (
+    "agents can change bundle code and permission YAML without asking "
+    "(equivalent to running code)"
+)
+
+
+def _agent_write_access(workspace_root: Path) -> list[str] | str:
+    """Return the "Agent write access" findings, or why they can't be computed.
+
+    Read-only. A list (possibly empty) of warning lines when
+    `platform.yaml`'s rules can be read; otherwise a short reason
+    string for the "couldn't check" line.
+    """
+    path = workspace_root / "platform.yaml"
+    try:
+        data = _yaml_load(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return "platform.yaml not found"
+    except (OSError, UnicodeDecodeError, YAMLError):
+        return "platform.yaml couldn't be read or parsed"
+    if not isinstance(data, dict):
+        return "platform.yaml is not a mapping"
+    reason = _authz_shape_problem(data)
+    if reason is not None:
+        return reason
+    rules = platform_rules_from_config(data["authorization"].get("config", {}))
+    if rules is None:  # unreachable after `_authz_shape_problem`; keeps mypy honest
+        return "`authorization.config.rules` is not a list"
+    return _agent_write_access_findings(
+        [r for r in rules if isinstance(r, dict)], workspace_root
+    )
+
+
+def _agent_write_access_findings(rules: list[dict[str, Any]], root: Path) -> list[str]:
+    """Flag platform `allow` rules that route around the write floor.
+
+    Pure. Two findings, per bug-161 SC2:
+
+    - an `allow` rule whose `what` covers `kolsch/tools/bash`;
+    - an `allow` rule whose `what` covers `write_file` and whose
+      `pattern` covers `bundles/x` (relative) or `<root>/bundles/x`
+      (absolute). A `dir/*` pattern counts too when it matches through
+      `..`, but only these two literal probes are checked.
+
+    New-shape rules match `what`/`pattern` with `fnmatchcase`, as the
+    provider does. Legacy rules (`who` present) fullmatch `what` as a
+    regex and have no target pattern, so a legacy `write_file` allow
+    covers `bundles/` too. Rule order is not considered: an `allow`
+    shadowed by an earlier `deny` is still reported (advisory).
+    """
+    bundle_targets = ("bundles/x", str(root / "bundles" / "x"))
+    findings: list[str] = []
+    for index, rule in enumerate(rules):
+        if rule.get("effect") != "allow":
+            continue
+        what = str(rule.get("what", ""))
+        pattern = str(rule.get("pattern", "*"))
+        if "who" in rule:
+            covers_bash = _legacy_what_covers(what, _BASH_REFS)
+            covers_bundles = _legacy_what_covers(what, _WRITE_FILE_REFS)
+            shape = f"`what: {what}` (legacy)"
+        else:
+            covers_bash = any(fnmatchcase(ref, what) for ref in _BASH_REFS)
+            covers_bundles = any(
+                fnmatchcase(ref, what) for ref in _WRITE_FILE_REFS
+            ) and any(fnmatchcase(t, pattern) for t in bundle_targets)
+            shape = f"`what: {what}`, `pattern: {pattern}`"
+        label = f"rule {index + 1}"
+        if rule.get("id"):
+            label += f" ({rule['id']})"
+        if covers_bash:
+            findings.append(f"{label}, {shape}, allow: {_BASH_CONSEQUENCE}.")
+        if covers_bundles:
+            findings.append(f"{label}, {shape}, allow: {_BUNDLES_CONSEQUENCE}.")
+    return findings
+
+
+def _legacy_what_covers(what: str, refs: tuple[str, ...]) -> bool:
+    """Return `True` when legacy regex `what` fullmatches any of `refs`."""
+    try:
+        compiled = re.compile(what)
+    except re.error:
+        return False
+    return any(compiled.fullmatch(ref) for ref in refs)
+
+
 def _relative_files(root: Path) -> set[str]:
     """Return every non-directory file under ``root``, as relative POSIX paths."""
     if not root.is_dir():
@@ -286,6 +398,7 @@ def _render(report: _Report, *, out: TextIO) -> None:
     if not report.has_drift and not report.no_baseline_note:
         out.write("✓ no drift detected — bundle in sync with source.\n")
         _render_authz_tail(report.authz_tail_note, out=out)
+        _render_agent_write_access(report.agent_write_access, out=out)
         return
 
     out.write("Bundle drift report\n")
@@ -305,6 +418,7 @@ def _render(report: _Report, *, out: TextIO) -> None:
             "(not yet shipped).\n"
         )
     _render_authz_tail(report.authz_tail_note, out=out)
+    _render_agent_write_access(report.agent_write_access, out=out)
 
 
 def _render_authz_tail(note: str | None, *, out: TextIO) -> None:
@@ -313,6 +427,26 @@ def _render_authz_tail(note: str | None, *, out: TextIO) -> None:
         return
     out.write("\nAuthorization (platform.yaml) — advisory, exit code unchanged:\n")
     out.write(f"  ! {note}\n")
+
+
+def _render_agent_write_access(findings: list[str] | str, *, out: TextIO) -> None:
+    """Print the advisory "Agent write access" section (always)."""
+    out.write("\nAgent write access — advisory, exit code unchanged:\n")
+    protected = ", ".join(PROTECTED_WRITE_PATHS)
+    out.write(
+        f"  agent file tools can never write: {protected} (whatever the rules allow)\n"
+    )
+    if isinstance(findings, str):
+        out.write(f"  ? couldn't check agent write access: {findings}.\n")
+        return
+    if not findings:
+        out.write("  ✓ no rule lets agents write bundles/ or run bash without asking\n")
+    for line in findings:
+        out.write(f"  ! {line}\n")
+    out.write(
+        "  note: `kolsch chat --auto-approve` turns every `prompt` rule "
+        "into an allow.\n"
+    )
 
 
 def _render_missing(missing: list[str], *, out: TextIO) -> None:
