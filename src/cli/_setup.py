@@ -31,6 +31,9 @@ from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, TextIO
 
+from assets.default_rules import (
+    workspace_only_default_rules as _workspace_only_rules_source,
+)
 from assets.platform_config import default_platform_payload as _stock_defaults
 from kolsch._yamlio import dump, dump_preserving_trailing_comment_block, load
 
@@ -908,55 +911,14 @@ def _setup_platform_payload() -> dict[str, Any]:
 def _workspace_only_default_rules() -> list[dict[str, str]]:
     """The workspace-only default rules.
 
-    `what` is the 3-seg catalog ref `<bundle>/tools/<name>` for
-    builtin tools, the system action namespace
-    (`agent.execute.*`) for the engine pre-flight, and the
-    catch-all `*` for the default-deny tail. New workspaces start
-    in the 3-seg canonical form so the action matches the rule
-    without translation.
-
-    Includes an `agent.execute.*` allow at the top so the engine's
-    pre-flight authz check passes — without this the default-deny
-    tail would block every exchange.
+    Delegates to
+    [`workspace_only_default_rules`][assets.default_rules.workspace_only_default_rules],
+    the single source shared with the auto-generated `platform.yaml`
+    (pre-flight `agent.execute.*` allow first, protected
+    `rl_default_deny` tail last). Kept under this name for the
+    setup re-run migration and its callers.
     """
-    return [
-        # Pre-flight gate — the engine requires agent.execute.<id>
-        # to run any exchange. Default to allow; users tighten by
-        # adding a more specific deny before this rule.
-        {"what": "agent.execute.*", "pattern": "*", "effect": "allow"},
-        # The canonical builtins — owned by the kolsch bundle.
-        {"what": "kolsch/tools/read_file", "pattern": "*", "effect": "allow"},
-        {"what": "kolsch/tools/list_files", "pattern": "*", "effect": "allow"},
-        {"what": "kolsch/tools/write_file", "pattern": "*", "effect": "prompt"},
-        {"what": "kolsch/tools/bash", "pattern": "*", "effect": "prompt"},
-        # qol-fetch-url-tool — network access is a fresh capability;
-        # conservative default per bash/write_file.
-        {"what": "kolsch/tools/fetch_url", "pattern": "*", "effect": "prompt"},
-        # qol-browse-url-tool — Tier 2 (opt-in `kolsch[browse]`
-        # extra). Same conservative prompt default as fetch_url so the
-        # chat surface asks before the agent drives headless Chromium.
-        {"what": "kolsch/tools/browse_url", "pattern": "*", "effect": "prompt"},
-        # spec-136: `jev_decide` sends workspace data (the `state`) to a
-        # third party (OpenRouter / TypeSafe) — same conservative
-        # `prompt` default as fetch_url.
-        {"what": "kolsch/tools/jev_decide", "pattern": "*", "effect": "prompt"},
-        # bug-024: workflow-service tools. `run_workflow` opens a
-        # WorkflowCard AND queues a run; conservative `prompt` so the
-        # user confirms the run before any nodes fire. `workflow_status`
-        # is read-only; safe to `allow`. `cancel_workflow` is user-
-        # initiated safety; `allow` so the model can react to an Esc
-        # or an explicit "cancel that" instruction without a modal.
-        {"what": "kolsch/tools/run_workflow", "pattern": "*", "effect": "prompt"},
-        {"what": "kolsch/tools/workflow_status", "pattern": "*", "effect": "allow"},
-        {"what": "kolsch/tools/cancel_workflow", "pattern": "*", "effect": "allow"},
-        # bug-027: `workflow_inspect` is read-only introspection —
-        # the model calls it to discover a workflow's required
-        # inputs before `run_workflow`. Safe to `allow`; no side
-        # effects, no run started.
-        {"what": "kolsch/tools/workflow_inspect", "pattern": "*", "effect": "allow"},
-        # Default-deny tail (protected).
-        {"what": "*", "pattern": "*", "effect": "deny"},
-    ]
+    return _workspace_only_rules_source()
 
 
 # ---------------------------------------------------------------------------
