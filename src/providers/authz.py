@@ -310,6 +310,31 @@ def _catch_all_shape(
     return None
 
 
+def platform_rules_from_config(config: object) -> list[object] | None:
+    """Return `authorization.config`'s rule list as the provider enforces it.
+
+    Mirrors the normalization in
+    [`RuleBasedAuthorizationProvider`][providers.authz.RuleBasedAuthorizationProvider]:
+    an absent or `null` `rules` key is an **empty** rule set (`[]`),
+    which has no default-deny tail. Returns `None` when `config` is not
+    a mapping or `rules` is not a list after normalization — shapes the
+    provider rejects, so there is no enforced rule set to inspect.
+    Feed the result to
+    [`inspect_default_deny_tail`][providers.authz.inspect_default_deny_tail].
+
+    Args:
+        config: The `authorization.config` value (callers pass `{}`
+            when the key is absent, as `bootstrap_runtime` does).
+
+    Returns:
+        The rule list, or `None` when there is none to inspect.
+    """
+    if not isinstance(config, Mapping):
+        return None
+    rules = config.get("rules", []) or []
+    return rules if isinstance(rules, list) else None
+
+
 def inspect_default_deny_tail(rules: Sequence[object]) -> DefaultDenyTailStatus:
     """Classify where `rules` carries the default-deny tail.
 

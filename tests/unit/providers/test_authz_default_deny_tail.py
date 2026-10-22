@@ -13,6 +13,7 @@ from providers import (
     DefaultDenyTailStatus,
     describe_default_deny_tail_problem,
     inspect_default_deny_tail,
+    platform_rules_from_config,
 )
 
 _TAIL = {"what": "*", "pattern": "*", "effect": "deny"}
@@ -218,3 +219,22 @@ def test_owner_shaped_list_is_missing_without_catch_all_allow() -> None:
     text = describe_default_deny_tail_problem(status)
     assert text is not None
     assert "ask for approval in `kolsch chat`" in text
+
+
+@pytest.mark.parametrize(
+    ("config", "expected"),
+    [
+        ({}, []),
+        ({"rules": None}, []),
+        ({"rules": []}, []),
+        ({"rules": [_TAIL]}, [_TAIL]),
+        ({"rules": 5}, None),
+        ({"rules": {"a": 1}}, None),
+        (None, None),
+        ([_TAIL], None),
+    ],
+)
+def test_platform_rules_from_config_mirrors_provider(
+    config: object, expected: list[object] | None
+) -> None:
+    assert platform_rules_from_config(config) == expected

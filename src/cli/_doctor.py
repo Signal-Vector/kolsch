@@ -1,6 +1,7 @@
 """``kolsch doctor`` — read-only bundle drift report (qol-089).
 
-Prints five report sections and exits ``0`` clean / ``1`` drift.
+Prints five bundle report sections plus an advisory Authorization
+section, and exits ``0`` clean / ``1`` drift.
 Writes nothing to disk. Complements ``kolsch setup``'s install path
 (which records ``.kolsch/bundle-baseline.json``) and precedes qol-093's
 ``kolsch setup --sync-bundle`` (which will actually repair the drift
@@ -23,6 +24,12 @@ Report sections:
 5. **Retired-tool refs in user-owned YAMLs** — the migrator surfaces
    these but never rewrites them. Includes the suggested manual fix.
 
+Plus, only when there is a finding, an **Authorization** section
+(bug-152): ``platform.yaml``'s rule set has no default-deny tail, or
+has it somewhere other than last. Same text as the runtime bootstrap
+WARNING. Advisory — it never changes the exit code — and printed on
+the pre-``kolsch setup`` path too.
+
 qol-089 spec section §Acceptance Criteria (5) and (6) drive the
 contract. qol-093 will consume the same detection logic for its
 ``--sync-bundle`` path.
@@ -39,6 +46,13 @@ from cli._bundle_baseline import (
 from cli._migrations.tools import (
     ToolsMigrationResult,
     migrate_tool_refs,
+)
+from kolsch._yamlio import YAMLError
+from kolsch._yamlio import load as _yaml_load
+from providers.authz import (
+    describe_default_deny_tail_problem,
+    inspect_default_deny_tail,
+    platform_rules_from_config,
 )
 
 if TYPE_CHECKING:
@@ -87,6 +101,7 @@ async def cmd_doctor(args: object, *, out: TextIO, root: Path) -> int:
             "no kolsch bundle materialized at this workspace — "
             "run `kolsch setup` to install the starter bundle.\n"
         )
+        _render_authz_tail(report.authz_tail_note, out=out)
         return 0
     _render(report, out=out)
     return 1 if report.has_drift else 0
@@ -115,6 +130,9 @@ class _Report:
         # the pre-`kolsch setup` case. Rendered as a friendly hint
         # rather than a false-positive drift dump.
         self.not_yet_installed: bool = False
+        # bug-152 — default-deny tail finding for `platform.yaml`, or
+        # `None`. Advisory: deliberately NOT part of `has_drift`.
+        self.authz_tail_note: str | None = None
 
     @property
     def has_drift(self) -> bool:
@@ -132,6 +150,7 @@ class _Report:
 def _build_report(workspace_root: Path) -> _Report:
     """Assemble the drift report — pure detection, no writes."""
     report = _Report()
+    report.authz_tail_note = _authz_tail_note(workspace_root)
     source_dir = _starter_bundle_dir()
     workspace_bundle = workspace_root / "bundles" / "kolsch"
 
@@ -161,6 +180,30 @@ def _build_report(workspace_root: Path) -> _Report:
     # Ref-drift detection: kolsch-owned rewrites + user-owned hits.
     report.migration = migrate_tool_refs(workspace_root)
     return report
+
+
+def _authz_tail_note(workspace_root: Path) -> str | None:
+    """Describe a missing / misplaced default-deny tail, or return `None`.
+
+    Read-only. Normalizes `authorization.config.rules` exactly as the
+    runtime does (absent / `null` → `[]`). Returns `None` silently when
+    `platform.yaml` is absent, unreadable, unparseable, or not shaped
+    like a platform config — other surfaces own reporting those.
+    """
+    path = workspace_root / "platform.yaml"
+    try:
+        data = _yaml_load(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, YAMLError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    authorization = data.get("authorization")
+    if not isinstance(authorization, dict):
+        return None
+    rules = platform_rules_from_config(authorization.get("config", {}))
+    if rules is None:
+        return None
+    return describe_default_deny_tail_problem(inspect_default_deny_tail(rules))
 
 
 def _relative_files(root: Path) -> set[str]:
@@ -206,6 +249,7 @@ def _render(report: _Report, *, out: TextIO) -> None:
     """Print the five report sections; write nothing on a clean workspace."""
     if not report.has_drift and not report.no_baseline_note:
         out.write("✓ no drift detected — bundle in sync with source.\n")
+        _render_authz_tail(report.authz_tail_note, out=out)
         return
 
     out.write("Bundle drift report\n")
@@ -224,6 +268,15 @@ def _render(report: _Report, *, out: TextIO) -> None:
             "`kolsch setup --sync-bundle` support is planned in qol-093 "
             "(not yet shipped).\n"
         )
+    _render_authz_tail(report.authz_tail_note, out=out)
+
+
+def _render_authz_tail(note: str | None, *, out: TextIO) -> None:
+    """Print the advisory Authorization section; nothing when `note` is None."""
+    if note is None:
+        return
+    out.write("\nAuthorization (platform.yaml) — advisory, exit code unchanged:\n")
+    out.write(f"  ! {note}\n")
 
 
 def _render_missing(missing: list[str], *, out: TextIO) -> None:
