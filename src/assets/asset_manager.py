@@ -252,7 +252,11 @@ class AssetManagement:
            [`build_resolved_config`][assets.asset_manager.AssetManagement.build_resolved_config]
            — covers explicit and derived `agent_id` YAMLs. When two
            YAMLs declare the same explicit `agent_id`, the most
-           recently built one wins.
+           recently built one wins: the cache is overwritten on every
+           build, so in a long-lived process an exchange can be
+           attributed to the other agent's ref (a duplicate explicit
+           `agent_id` is a workspace misconfiguration that no loader
+           rejects today).
         2. Fallback: walk the catalog and match
            [`schemas.derive_agent_id`][schemas.derive_agent_id]
            outputs (derived ids only).

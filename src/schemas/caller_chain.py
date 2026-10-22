@@ -47,7 +47,10 @@ class CallerChain:
     frames: tuple[str, ...]
 
     def __post_init__(self) -> None:
-        """Reject an empty chain and empty / non-string frames."""
+        """Freeze `frames` to a tuple; reject empty chains and bad frames."""
+        # A list (or other iterable) input would leave the "frozen"
+        # chain mutable and unhashable.
+        object.__setattr__(self, "frames", tuple(self.frames))
         if not self.frames:
             msg = "CallerChain needs at least one frame; use CallerChain.unattributed()"
             raise ValueError(msg)

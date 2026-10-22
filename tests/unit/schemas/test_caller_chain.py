@@ -47,6 +47,15 @@ def test_frames_are_lenient_about_shape() -> None:
     assert CallerChain(("test/hello",)).frames == ("test/hello",)
 
 
+def test_list_frames_are_frozen_to_a_tuple() -> None:
+    source = [_A, _W]
+    chain = CallerChain(source)
+    source.append("kolsch/agents/x")
+    assert chain.frames == (_A, _W)
+    assert isinstance(chain.frames, tuple)
+    assert hash(chain) == hash(CallerChain((_A, _W)))
+
+
 def test_push_prepends_and_returns_new_chain() -> None:
     base = CallerChain((_W,))
     pushed = base.push(_A)
