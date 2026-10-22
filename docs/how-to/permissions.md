@@ -14,10 +14,15 @@ matches what you're doing:
 | Surface | When to use |
 |---|---|
 | **`/perm` slash commands (in chat)** | Quick adjustments while chatting — write a rule, undo a rule, see the rule list, all without leaving the conversation. |
-| **`kolsch permissions` CLI** | Scripted edits, batch changes, audit reports. Same atomic write as the in-chat modal. |
-| **Hand-edit `platform.yaml`** | Cross-machine sync, version control, comments. The runtime reloads on the next authz check. |
+| **`kolsch permissions` CLI** | Scripted edits, batch changes, audit reports. Same locked, insert-only write as the in-chat modal. |
+| **Hand-edit `platform.yaml`** | Cross-machine sync, version control, comments. A running chat keeps enforcing the rules it loaded until you run `/reload` (or restart it); new `kolsch` commands read the file fresh. |
 
-All three write the same shape; you can mix and match.
+All three write the same shape; you can mix and match. Every rule
+write — an "always" answer, `/perm`, `kolsch permissions add/remove` —
+inserts or removes **one** rule in the file as it is on disk right
+now, under a lock (`.platform/platform.yaml.lock`), and keeps your
+comments and every other edit. So a chat and `kolsch permissions` in
+another terminal can run at the same time without undoing each other.
 
 ---
 
@@ -255,10 +260,21 @@ below):
 ```
 
 After an `allow`/`deny`/`prompt`, the chat prints the position the
-rule landed at:
+rule landed at in `platform.yaml`:
 
 ```
-/perm allow: added rule  what='kolsch/tools/bash'  pattern='find *'  effect=allow  (above the catch-all, position 4)
+/perm allow: added rule  what='kolsch/tools/bash'  pattern='find *'  effect=allow  (above the catch-all, position 4 in platform.yaml)
+```
+
+`/perm` changes the chat's live rules **and** the file. The file write
+inserts into (or removes from) the rules as they are on disk now, so
+edits made outside this chat survive. If the file can't be written —
+it's missing, unparseable, its rules don't load, or another writer
+holds the lock — the change still applies to this chat and `/perm`
+says so:
+
+```
+/perm allow: applied for this chat only — not saved: unparseable: …
 ```
 
 If you write a duplicate `(what, pattern)`, `/perm` replaces the
@@ -267,7 +283,7 @@ the replaced position:
 
 ```
 /perm allow: replaced previous rule at position 4
-/perm allow: added rule  what='kolsch/tools/bash'  pattern='find *'  effect=allow  (above the catch-all, position 4)
+/perm allow: added rule  what='kolsch/tools/bash'  pattern='find *'  effect=allow  (above the catch-all, position 4 in platform.yaml)
 ```
 
 ### Why didn't my `/perm` rule take effect?
@@ -343,7 +359,23 @@ The command atomically:
 
 Next authz decision uses the new rules. In-flight tool calls
 straddling a `/reload` are race-safe — they see the old provider
-consistently across all their decisions.
+consistently across all their decisions. Approval prompts keep
+working after a `/reload`.
+
+`/reload` is the **only** way a running chat starts enforcing rule
+edits made on disk — by hand, by `kolsch permissions`, by `kolsch
+setup`, or by another chat. Answering **always** or running `/perm`
+never undoes those edits (they're kept in the file), but it doesn't
+apply them either. When an **always** answer finds that the file's
+rules differ from the ones the chat loaded, the chat shows a one-time
+notice:
+
+```
+platform.yaml's rules changed on disk since this chat loaded them; those changes are not enforced yet. Review them (`kolsch permissions list`), then run `/reload`.
+```
+
+Review the file before you `/reload` — it applies every edit in it,
+whoever made it.
 
 Common `/why` → edit → `/reload` loop:
 
@@ -379,6 +411,12 @@ optional `--from <ref>` scopes the rule to invocations whose
 caller-chain contains a matching 3-segment agent/workflow ref (see
 ["Scoping rules to a specific agent or workflow"](#scoping-rules-to-a-specific-agent-or-workflow)
 below).
+
+`add` and `remove` edit the file as it is on disk (under the same
+lock the chat uses) and print the rule's position. An `add` of a rule
+that's already in effect prints `already present at position N;
+nothing written`. Any failure exits 1 with an `error:` line and leaves
+the file untouched.
 
 The default-deny tail is **removal-protected**:
 `kolsch permissions remove rl_default_deny` exits 1 with
@@ -464,7 +502,38 @@ authorization:
       - { what: "*",                pattern: "*",        effect: deny }
 ```
 
-Reloads on the next authz check — no restart.
+New `kolsch` commands pick the edit up immediately. A chat that is
+already open keeps enforcing the rules it loaded: run `/reload` in it
+(or restart it) to apply the edit. The chat never undoes a hand edit —
+its own rule writes insert into the file as it is on disk.
+
+---
+
+## If you answered "always" or used `/perm` before bug-162 was fixed
+
+Before this fix, answering **always** (`[a]`/`[d]`) or using `/perm`
+in a chat rewrote `platform.yaml`'s rules from the copy the chat
+loaded at startup. Any rule change made on disk while that chat was
+open — `kolsch permissions`, a hand edit, `kolsch setup`, an agent's
+write — was undone, including a re-added default-deny tail and added
+`deny` rules.
+
+To check your workspace:
+
+1. Review `kolsch permissions list`: the last rule should be the
+   default-deny tail `what='*' pattern='*' effect=deny`, and every
+   `deny` you added should still be there. (`kolsch doctor` reports a
+   missing or misplaced tail once bug-152 lands.)
+2. List the **always** answers you gave in a session:
+
+   ```bash
+   kolsch sessions events ses_<id> | jq -c 'select(.type=="ui.event" and .data.kind=="kolsch.prompt.answered" and (.data.payload.response=="a" or .data.payload.response=="d")) | [.created_at, .data.payload.rule.what, .data.payload.rule.pattern, .data.payload.rule.effect]'
+   ```
+
+3. `kolsch setup` migration backups are in
+   `.platform/platform.yaml.bak.*`.
+
+Re-add anything that was lost with `kolsch permissions add`.
 
 ### An auto-generated `platform.yaml`
 
@@ -720,9 +789,17 @@ anymore. An unconfigured tool fires the `[y]/[a]/[n]/[d]` modal:
 
 - **`[y]`** — allow once; no rule written.
 - **`[a]`** — always allow; a new rule with the suggested glob
-  pattern is appended to `platform.yaml`.
+  pattern is saved to `platform.yaml`.
 - **`[n]`** — deny once; no rule written; next call prompts again.
-- **`[d]`** — always deny; a new deny rule lands in `platform.yaml`.
+- **`[d]`** — always deny; a new deny rule is saved to `platform.yaml`.
+
+An **always** rule is inserted into the file as it is on disk now:
+immediately before the `prompt` rule that asked (when that rule is in
+`platform.yaml`), otherwise before the default-deny tail, otherwise at
+the end. Comments and every other edit in the file are kept. If the
+rule is already in effect, nothing is written. If the file can't be
+written, the rule still applies for the rest of this chat and a notice
+gives the `kolsch permissions add …` command that saves it later.
 
 The suggested pattern is a glob: `find /` → `find *`, `/abs/X.py`
 → `/abs/*`. Edit before committing if you want it narrower or
