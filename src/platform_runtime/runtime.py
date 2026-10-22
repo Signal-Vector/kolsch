@@ -281,11 +281,15 @@ def _warn_if_default_deny_tail_missing(root: Path, authz_config: object) -> None
     """Log one WARNING per process per root when the tail is missing/not last.
 
     Observability only — never refuses, never edits rules. `authz_config`
-    is the `authorization.config` mapping handed to the provider; a
-    non-mapping config or non-list `rules` is skipped (the provider owns
-    validating those).
+    is the `authorization.config` mapping handed to the provider. `rules`
+    is normalized exactly as the provider does (absent / `null` → `[]`,
+    i.e. an empty enforced rule set, which has no tail). A non-mapping
+    config or a non-list `rules` is skipped — the provider raises on
+    those before this runs.
     """
-    rules = authz_config.get("rules") if isinstance(authz_config, dict) else None
+    if not isinstance(authz_config, dict):
+        return
+    rules = authz_config.get("rules", []) or []
     if not isinstance(rules, list):
         return
     message = describe_default_deny_tail_problem(inspect_default_deny_tail(rules))
