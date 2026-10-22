@@ -61,6 +61,12 @@ def _in_test_mode() -> bool:
 # breakage.
 ASSEMBLY_VERSION = "2"
 
+# The opening tag of every compaction-summary system message
+# (`_format_compaction_summary`). bug-156 — the engine's history split
+# recognises these messages by role + this prefix, because `Message`
+# carries no metadata slot; keep the knowledge next to the formatter.
+COMPACTION_MESSAGE_TAG = "<context-compaction>"
+
 
 class AssembledContext(BaseModel):
     """The output of the Assembly Procedure for one model call.
@@ -629,6 +635,23 @@ def _format_memory_retrieval(results: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def is_compaction_summary_message(message: Any) -> bool:
+    """Return whether ``message`` is a projected compaction summary.
+
+    True for a ``system``-role message whose content starts with
+    :data:`COMPACTION_MESSAGE_TAG` — the shape
+    :func:`_format_compaction_summary` produces for a
+    `context.compacted` event. Users cannot author ``system`` messages
+    and memory blocks start with ``<memory>``, so role + prefix is
+    unambiguous. Accepts any object with ``role`` / ``content``
+    attributes (``engine.framework.Message`` in practice).
+    """
+    if getattr(message, "role", None) != "system":
+        return False
+    content = getattr(message, "content", None)
+    return isinstance(content, str) and content.startswith(COMPACTION_MESSAGE_TAG)
+
+
 def _format_compaction_summary(summary: dict[str, Any]) -> str:
     """Format a `context.compacted.data.summary` block as a system msg.
 
@@ -640,7 +663,7 @@ def _format_compaction_summary(summary: dict[str, Any]) -> str:
     summary_text = str(summary.get("summary_text") or "").strip()
     body = json.dumps(summary, sort_keys=True, separators=(",", ":"))
     lines = [
-        "<context-compaction>",
+        COMPACTION_MESSAGE_TAG,
         "The following prose summary replaces a span of earlier events "
         "that were compacted to fit the model's context window. Use "
         "`context.reference_lookup` with the event_ids in `refs` to "

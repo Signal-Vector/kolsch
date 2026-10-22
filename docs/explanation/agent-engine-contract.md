@@ -522,6 +522,21 @@ default: 80% of the model's window), the engine triggers compaction:
    place of the compacted events (per §B.5's projection table).
 5. Continues the exchange.
 
+**Mid-exchange placement (bug-156).** The per-exchange pre-flight runs
+after the trigger `user.message` is emitted, so its `context.compacted`
+event (and the summary system message step 4 projects for it) lands
+*after* that user message. The engine hands the framework the user
+message separately from `history`, so for step 4 to hold on the
+exchange in flight the engine appends every compaction summary that
+follows the last user message to the end of `history`, immediately
+before the user message (`_history_for_framework`; summaries are
+recognised by `engine.assembly.is_compaction_summary_message`). Any
+other message after the last user message is dropped, as before.
+Assembly placement is unchanged: on later exchanges the summary
+projects at its logged position. No event is rewritten. Manual
+`/compact` and session-open eager compaction emit before the next user
+message and need no move.
+
 The compaction *algorithm* is the Memory provider's concern; the
 *triggering* and *event emission* are the engine's. The log loses
 nothing — the full pre-compaction content is in the event.

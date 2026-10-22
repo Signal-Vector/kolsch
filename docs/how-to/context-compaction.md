@@ -91,6 +91,17 @@ The `<summary-json>` block carries the same schema you can inspect
 via `/why-compact` — see [the JSON schema](#the-summary-json-schema)
 below.
 
+**On the turn the per-turn pre-flight fires,** the summary reaches
+the model on that same request: it sits immediately before your new
+message, because the compaction is emitted after that message is
+logged. From the next turn on it sits at its logged position,
+between that message and the agent's reply. Before bug-156 the
+summary was dropped from the request on the turn it fired and
+reached the model only from the following turn, so the agent answered
+that one turn without the compacted middle of the conversation.
+`/compact` and the session-open eager check were never affected:
+they compact before your next message.
+
 **Retrieving originals:** the model can call
 `context.reference_lookup(event_id="ev_...")` — a builtin the
 engine auto-registers on agents whose compaction is active — with

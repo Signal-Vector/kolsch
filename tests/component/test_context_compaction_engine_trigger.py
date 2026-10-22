@@ -24,6 +24,7 @@ from engine import (
     LLMResponse,
     MinimalFramework,
 )
+from engine.assembly import COMPACTION_MESSAGE_TAG
 from files import PathPolicy
 from llm import ProviderConfig
 from providers import (
@@ -262,7 +263,6 @@ async def test_compaction_fires_when_estimate_exceeds_threshold(tmp_path: Path) 
 # message and the engine's history split used to slice it off.
 # ---------------------------------------------------------------------------
 
-_COMPACTION_TAG = "<context-compaction>"
 _FIRST_Q = "first question about the deployment plan"
 _MIDDLE_Q = "middle question " + ("about the rollout window and its risks " * 52)
 _THIRD_Q = "third question"
@@ -373,7 +373,7 @@ def _assert_summary_right_before_user(
     summaries = [
         i
         for i, (role, content) in enumerate(pairs)
-        if role == "system" and content.startswith(_COMPACTION_TAG)
+        if role == "system" and content.startswith(COMPACTION_MESSAGE_TAG)
     ]
     assert len(summaries) == 1, f"expected exactly one compaction summary: {shown}"
     assert pairs[-1] == ("user", user_text), shown
@@ -434,6 +434,24 @@ async def test_per_exchange_compaction_summary_reaches_framework(
     _assert_summary_right_before_user(
         ordered[2]["data"]["messages"], user_text=_THIRD_Q, absent="middle question"
     )
+
+    # Next turn, no new compaction: the summary is still delivered exactly
+    # once, at its projected position between "third question" and its
+    # reply (Assembly placement) — not moved to the end again.
+    _set_context_length(llm_providers, _LARGE_CONTEXT)
+    await _run_turn(engine, thread_id, "fourth question")
+    pairs = _role_content(llm.requests[-1].messages)
+    shown = [(role, content[:40]) for role, content in pairs]
+    summaries = [
+        i
+        for i, (role, content) in enumerate(pairs)
+        if role == "system" and content.startswith(COMPACTION_MESSAGE_TAG)
+    ]
+    assert len(summaries) == 1, shown
+    idx = summaries[0]
+    assert pairs[idx - 1] == ("user", _THIRD_Q), shown
+    assert pairs[idx + 1] == ("assistant", _LONG_REPLY), shown
+    assert pairs[-1] == ("user", "fourth question"), shown
 
 
 @pytest.mark.asyncio
