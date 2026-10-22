@@ -19,6 +19,7 @@ for the engine-side wiring.
 from __future__ import annotations
 
 import importlib
+import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -43,6 +44,8 @@ from providers import (
     RuleBasedAuthorizationProvider,
     SandboxProvider,
     SecretsProvider,
+    describe_default_deny_tail_problem,
+    inspect_default_deny_tail,
     make_compaction_provider,
     validate_recent_buffer_config,
     validate_reference_summary_config,
@@ -264,6 +267,37 @@ def _resolve_approval_window(
     return None if raw is None else float(raw)
 
 
+_log = logging.getLogger("platform_runtime")
+
+# bug-152 — workspace roots (resolved) already warned about a missing /
+# misplaced default-deny tail in this process. Bootstrap-only on
+# purpose: the chat `/reload` rebuild and every other direct
+# `RuleBasedAuthorizationProvider(...)` construction stay silent, so a
+# stderr write can never land while the inline Textual app is running.
+_TAIL_WARNED_ROOTS: set[Path] = set()
+
+
+def _warn_if_default_deny_tail_missing(root: Path, authz_config: object) -> None:
+    """Log one WARNING per process per root when the tail is missing/not last.
+
+    Observability only — never refuses, never edits rules. `authz_config`
+    is the `authorization.config` mapping handed to the provider; a
+    non-mapping config or non-list `rules` is skipped (the provider owns
+    validating those).
+    """
+    rules = authz_config.get("rules") if isinstance(authz_config, dict) else None
+    if not isinstance(rules, list):
+        return
+    message = describe_default_deny_tail_problem(inspect_default_deny_tail(rules))
+    if message is None:
+        return
+    key = root.resolve()
+    if key in _TAIL_WARNED_ROOTS:
+        return
+    _TAIL_WARNED_ROOTS.add(key)
+    _log.warning("%s: %s", key / "platform.yaml", message)
+
+
 async def bootstrap_runtime(  # noqa: PLR0915 — linear runtime-assembly sequence
     *,
     root: Path,
@@ -338,11 +372,13 @@ async def bootstrap_runtime(  # noqa: PLR0915 — linear runtime-assembly sequen
     # Pass the catalog so the provider can validate qualified tool refs
     # in rule `what:` fields AND build the action→tool_ref map so
     # `what: kolsch/bash` matches the `tool.bash` action namespace.
+    authz_config = authz_cfg.get("config", {})
     authz = RuleBasedAuthorizationProvider(
-        config=authz_cfg.get("config", {}),
+        config=authz_config,
         catalog=am.catalog(),
         source_map=authz_source_map,
     )
+    _warn_if_default_deny_tail_missing(root, authz_config)
     path_policy = load_policy(file_access_cfg)
 
     storage_cfg = am.get_platform_config("storage")

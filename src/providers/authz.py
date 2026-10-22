@@ -31,6 +31,7 @@ import fnmatch
 import hashlib
 import os
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Literal, Protocol
@@ -54,7 +55,7 @@ from workflows.errors import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
 
     from assets.catalog import AssetCatalog
     from engine.context import ExecutionContext
@@ -246,6 +247,184 @@ def derive_rule_id(who: str, what: str, effect: str) -> str:
     payload = f"{who}|{what}|{effect}"
     digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:8]
     return f"rl_{digest}"
+
+
+@dataclass(frozen=True)
+class DefaultDenyTailStatus:
+    """Where (if anywhere) a raw rule list carries the default-deny tail.
+
+    Returned by
+    [`inspect_default_deny_tail`][providers.authz.inspect_default_deny_tail];
+    rendered into user-facing text by
+    [`describe_default_deny_tail_problem`][providers.authz.describe_default_deny_tail_problem].
+    All indices are 0-based positions in the inspected list
+    (non-mapping entries keep their slot, so indices line up with the
+    YAML list).
+
+    Attributes:
+        state: `"last"` when the first tail is the final entry,
+            `"not_last"` when a tail exists but entries follow it (those
+            entries can never match), `"missing"` when no entry has the
+            tail shape.
+        index: Index of the first tail-shaped entry, or `None` when
+            `state == "missing"`.
+        rule_count: Length of the inspected list.
+        catch_all_allow_index: Index of the first unconditional
+            catch-all `allow` (the tail's shape with `effect: allow`)
+            that precedes the tail — or that appears anywhere, when
+            there is no tail. `None` when there is none.
+        tail_shape: `"canonical"` (`{what: "*", pattern: "*", effect:
+            deny}`) or `"legacy"` (`{who: ".*", what: ".*", effect:
+            deny}`) for the first tail; `None` when missing.
+    """
+
+    state: Literal["last", "not_last", "missing"]
+    index: int | None
+    rule_count: int
+    catch_all_allow_index: int | None
+    tail_shape: Literal["canonical", "legacy"] | None
+
+
+def _catch_all_shape(
+    entry: object, effect: str
+) -> Literal["canonical", "legacy"] | None:
+    """Return the catch-all shape `entry` has with `effect`, else `None`.
+
+    Legacy: `who == ".*"`, `what == ".*"`. Canonical (no `who`, matching
+    [`Rule.is_legacy`][providers.authz.Rule.is_legacy]): `what == "*"`
+    with `pattern` absent or `"*"`. Either shape is disqualified by a
+    non-`None` `from` / `from_` scope — a scoped catch-all only covers
+    one principal, so it is not an unconditional floor.
+    """
+    if not isinstance(entry, Mapping) or entry.get("effect") != effect:
+        return None
+    if entry.get("from") is not None or entry.get("from_") is not None:
+        return None
+    who = entry.get("who")
+    if who is not None:
+        if who == ".*" and entry.get("what") == ".*":
+            return "legacy"
+        return None
+    if entry.get("what") == "*" and entry.get("pattern", "*") == "*":
+        return "canonical"
+    return None
+
+
+def inspect_default_deny_tail(rules: Sequence[object]) -> DefaultDenyTailStatus:
+    """Classify where `rules` carries the default-deny tail.
+
+    Pure: no I/O, no logging. `rules` is the raw platform rule list as
+    parsed from `platform.yaml`'s `authorization.config.rules`
+    (mappings; any non-mapping entry is skipped but keeps its index).
+
+    The tail is detected by **shape**, never by id. Ids are an
+    unreliable signal: [`derive_rule_id`][providers.authz.derive_rule_id]
+    ignores `from`, so a scoped catch-all deny is also assigned
+    [`DEFAULT_DENY_RULE_ID`][providers.authz.DEFAULT_DENY_RULE_ID], and a
+    legacy rule may carry any caller-supplied `id`. A tail is an
+    unscoped catch-all deny in either schema:
+
+    - canonical: `{what: "*", pattern: "*" (or absent), effect: deny}`
+      with no `who`;
+    - legacy: `{who: ".*", what: ".*", effect: deny}`;
+
+    and in both cases `from` / `from_` absent or `None`.
+
+    Shared by the runtime bootstrap warning and `kolsch doctor`; other
+    surfaces that need "is the tail present / where" should call this
+    rather than re-deriving it.
+
+    Args:
+        rules: The raw rule entries, in evaluation order.
+
+    Returns:
+        The [`DefaultDenyTailStatus`][providers.authz.DefaultDenyTailStatus]
+        for the list. An empty list is `missing`.
+    """
+    tail_index: int | None = None
+    tail_shape: Literal["canonical", "legacy"] | None = None
+    allow_index: int | None = None
+    for i, entry in enumerate(rules):
+        shape = _catch_all_shape(entry, "deny")
+        if shape is not None:
+            tail_index, tail_shape = i, shape
+            break
+        if allow_index is None and _catch_all_shape(entry, "allow") is not None:
+            allow_index = i
+    count = len(rules)
+    if tail_index is None:
+        state: Literal["last", "not_last", "missing"] = "missing"
+    elif tail_index == count - 1:
+        state = "last"
+    else:
+        state = "not_last"
+    return DefaultDenyTailStatus(
+        state=state,
+        index=tail_index,
+        rule_count=count,
+        catch_all_allow_index=allow_index,
+        tail_shape=tail_shape,
+    )
+
+
+_DEFAULT_DENY_FIX_COMMAND = (
+    "kolsch permissions add --what '*' --pattern '*' --effect deny"
+)
+
+
+def describe_default_deny_tail_problem(status: DefaultDenyTailStatus) -> str | None:
+    """Render a tail problem as one user-facing paragraph, or `None` if fine.
+
+    Pure. Returns `None` when `status.state == "last"`. Otherwise the
+    text says what is wrong, what it means for enforcement today, and
+    how to fix it; it always points at `kolsch doctor` for a re-check.
+    Positions in the text are 1-based (as a user counts YAML list
+    entries). Used verbatim by the runtime bootstrap WARNING and the
+    `kolsch doctor` "Authorization" section so both surfaces say the
+    same thing.
+
+    Args:
+        status: The result of
+            [`inspect_default_deny_tail`][providers.authz.inspect_default_deny_tail].
+
+    Returns:
+        The problem description, or `None` when the tail is last.
+    """
+    if status.state == "last":
+        return None
+    if status.state == "not_last" and status.index is not None:
+        after = status.rule_count - status.index - 1
+        tail_rule = (
+            '{who: ".*", what: ".*", effect: deny}'
+            if status.tail_shape == "legacy"
+            else '{what: "*", pattern: "*", effect: deny}'
+        )
+        noun = "rule" if after == 1 else "rules"
+        verb = "never matches" if after == 1 else "never match"
+        return (
+            f"the authorization default-deny tail ({DEFAULT_DENY_RULE_ID}) is at "
+            f"position {status.index + 1} of {status.rule_count}, so the {after} "
+            f"{noun} after it {verb}. Fix: move the `{tail_rule}` rule to the "
+            "end of `authorization.config.rules` in `platform.yaml` by hand "
+            "(`kolsch permissions add` would not move it), then run "
+            "`kolsch doctor` to re-check."
+        )
+    head = (
+        "the authorization rule set has no default-deny tail "
+        f'(`{{what: "*", pattern: "*", effect: deny}}`, id {DEFAULT_DENY_RULE_ID}).'
+    )
+    if status.catch_all_allow_index is not None:
+        return (
+            f"{head} Effect: the catch-all allow rule at position "
+            f"{status.catch_all_allow_index + 1} allows every action no earlier "
+            "rule denies. Fix: remove or narrow that catch-all allow, then run "
+            f"`{_DEFAULT_DENY_FIX_COMMAND}` and `kolsch doctor` to re-check."
+        )
+    return (
+        f"{head} Effect: actions no rule covers will ask for approval in "
+        "`kolsch chat` and be denied everywhere else. Fix: run "
+        f"`{_DEFAULT_DENY_FIX_COMMAND}`, then `kolsch doctor` to re-check."
+    )
 
 
 class AuthorizationResult(BaseModel):
