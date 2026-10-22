@@ -14,6 +14,8 @@ Build agents, compose workflows, replay sessions. Everything is local, everythin
 
 ## Quick example
 
+Requires Python 3.12 or 3.13 (3.14 isn't supported yet). If uv picks 3.14, run `uv tool install --python 3.13 kolsch` instead.
+
 ```bash
 uv tool install kolsch
 kolsch setup
