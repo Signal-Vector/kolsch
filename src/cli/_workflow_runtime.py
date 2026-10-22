@@ -177,12 +177,21 @@ def build_workflow_executor(
     default_node_timeout_seconds = getattr(
         runtime, "workflow_default_node_timeout_seconds", None
     )
+    # bug-158: rebuild the run's workflow call chain from its persisted
+    # parent / fork pointers. A fresh root run gets `(ref,)` (the
+    # executor's own default); a directly resumed or forked CHILD run
+    # gets `(root, …, parent, child)` back, so its nodes keep the parent
+    # frames that `from:`-scoped authz rules match and the nesting
+    # depth stays right.
+    call_chain = store.call_chain_for(run)
     return IterativeExecutor(
         workflow=workflow,
         run=run,
         store=store,
         registry=registry,
         catalog=catalog,
+        _call_depth=len(call_chain) - 1,
+        _call_chain=call_chain,
         event_observer=event_observer,
         cancel_token=cancel_token,
         sub_agent_event_observer=sub_agent_event_observer,

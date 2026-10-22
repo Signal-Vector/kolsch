@@ -26,6 +26,7 @@ NO executor logic here — pure data and filesystem plumbing.
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import time
 import uuid
@@ -37,6 +38,13 @@ from typing import Any, Literal
 from schemas.entities import ForkedFrom, ParentRunPointer
 from workflows.ids import TraceId, WorkflowRunId
 from workflows.run import RunDirectory, WorkflowRun, WorkflowRunStatus
+
+_log = logging.getLogger(__name__)
+
+# Upper bound on the lineage walk in `call_chain_for` — well above the
+# executor's nesting cap (16), so it only guards against a corrupt
+# pointer loop.
+_MAX_LINEAGE = 64
 
 __all__ = ["WorkflowRunStore"]
 
@@ -177,6 +185,55 @@ class WorkflowRunStore:
                 }
             )
         return run
+
+    def call_chain_for(self, run: WorkflowRun) -> tuple[str, ...]:
+        """Rebuild the workflow call chain of `run` from persisted pointers.
+
+        Returns the root-first tuple of workflow refs ending with
+        `run.workflow_ref` — the same shape `WorkflowSubRunner` hands a
+        child executor as `_call_chain` (`(root, …, parent, child)`).
+        A resumed or forked run is rebuilt outside its parent's
+        process, so the executor builder uses this to restore the
+        parent frames that authz `from:` rules and the nesting cap
+        depend on.
+
+        Each step finds the run that spawned the current one: its
+        `parent` pointer, or — for a fork, whose meta carries only
+        `forked_from` — the parent of the run it was forked from
+        (following fork-of-fork pointers). A root run returns
+        `(run.workflow_ref,)`. If a caller's run directory is gone
+        (deleted), the walk stops there with a warning and the chain
+        keeps the frames found so far.
+        """
+        chain = [run.workflow_ref]
+        current = run
+        for _ in range(_MAX_LINEAGE):
+            try:
+                caller_id = self._caller_run_id(current)
+                if caller_id is None:
+                    break
+                current = self.read(caller_id)
+            except FileNotFoundError:
+                _log.warning(
+                    "workflow run %s: lineage walk stopped at a missing run; "
+                    "caller chain is %s",
+                    run.run_id,
+                    tuple(reversed(chain)),
+                )
+                break
+            chain.append(current.workflow_ref)
+        return tuple(reversed(chain))
+
+    def _caller_run_id(self, run: WorkflowRun) -> WorkflowRunId | None:
+        """The id of the run whose workflow node spawned `run`, or `None`."""
+        origin = run
+        seen: set[WorkflowRunId] = set()
+        while origin.parent is None and origin.forked_from is not None:
+            if origin.run_id in seen:
+                return None
+            seen.add(origin.run_id)
+            origin = self.read(origin.forked_from.run_id)
+        return origin.parent.workflow_run_id if origin.parent is not None else None
 
     def update_status(self, run_id: WorkflowRunId, status: WorkflowRunStatus) -> None:
         """Atomically update the run's `meta.json` status.

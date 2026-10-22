@@ -25,6 +25,7 @@ import os
 import subprocess
 import sys
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 import yaml
 
@@ -70,6 +71,32 @@ _WORKFLOWS: dict[str, dict[str, Any]] = {
             "ask": {"type": "kolsch/nodes/agent", "agent": _AGENT},
         },
         "graph": {"edges": [{"from": "run", "to": "ask"}]},
+    },
+    # S5: children rebuilt OUTSIDE the parent's process (direct resume /
+    # fork of the child run) must keep the parent frame.
+    "parent_ui": {
+        "nodes": {
+            "sub": {"type": "kolsch/nodes/workflow", "ref": "wf/workflows/child_ui"}
+        },
+    },
+    "child_ui": {
+        "nodes": {
+            "ask": {"type": "kolsch/nodes/user_input", "prompt": "go?"},
+            "run": {"type": "kolsch/nodes/bash", "command": "echo after-resume"},
+        },
+        "graph": {"edges": [{"from": "ask", "to": "run"}]},
+    },
+    "parent_fk": {
+        "nodes": {
+            "sub": {"type": "kolsch/nodes/workflow", "ref": "wf/workflows/child_fk"}
+        },
+    },
+    "child_fk": {
+        "nodes": {
+            "first": {"type": "kolsch/nodes/noop"},
+            "run": {"type": "kolsch/nodes/bash", "command": "echo forked"},
+        },
+        "graph": {"edges": [{"from": "first", "to": "run"}]},
     },
     # The agent node runs first so a W-scoped bash deny is observed on
     # the agent's tool call before the builtin bash node fails the run.
@@ -288,3 +315,158 @@ async def test_workflow_scoped_deny_leaves_bash_alone_outside_w(
     events = [e async for e in runtime.engine.execute_stream(config, ctx)]
     assert any(e.type == EventType.TOOL_RESULT for e in events)
     assert not any(e.type == EventType.TOOL_FAILED for e in events)
+
+
+# ---------------------------------------------------------------------------
+# S5 — a child run resumed or forked on its own keeps the parent frame
+# ---------------------------------------------------------------------------
+
+
+def _executor_for(runtime: PlatformRuntime, root: Path, run_id: Any) -> Any:
+    """The production executor for an existing run (resume / fork wiring)."""
+    store = WorkflowRunStore(root)
+    run = store.read(run_id)
+    name = run.workflow_ref.rsplit("/", 1)[-1]
+    return build_workflow_executor(
+        root=root,
+        runtime=runtime,
+        workflow=Workflow.model_validate(_WORKFLOWS[name]),
+        run=run,
+        store=store,
+    )
+
+
+def _child_run_id(root: Path) -> Any:
+    store = WorkflowRunStore(root)
+    (child,) = [
+        run
+        for run in (store.read(p.name) for p in store.runs_root.iterdir())
+        if run.parent is not None
+    ]
+    return child.run_id
+
+
+async def test_directly_resumed_child_keeps_parent_frame(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A paused child run resumed directly (`kolsch workflows resume
+    <child>`) authorizes as `(C, P)`, so a `from: P` deny still blocks
+    its bash node after the resume."""
+    parent, child = "wf/workflows/parent_ui", "wf/workflows/child_ui"
+    _setup_workspace(
+        tmp_path,
+        rules=[
+            {"what": _BASH, "pattern": "*", "from": parent, "effect": "deny"},
+            _ALLOW_ALL,
+        ],
+    )
+    runtime = await _boot(tmp_path)
+
+    status, _ = await _run_workflow(runtime, tmp_path, parent)
+    assert status == "waiting_for_input"
+    child_id = _child_run_id(tmp_path)
+    assert WorkflowRunStore(tmp_path).call_chain_for(
+        WorkflowRunStore(tmp_path).read(child_id)
+    ) == (parent, child)
+
+    calls = _record_allow(runtime, monkeypatch)
+    executor = _executor_for(runtime, tmp_path, child_id)
+    resumed = await executor.resume(response={"response": "yes"})
+
+    assert calls == [(_BASH, (child, parent))]
+    assert resumed.value == "failed"
+
+
+async def test_forked_child_keeps_parent_frame(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A fork of a child run (whose meta carries only `forked_from`, no
+    `parent`) authorizes as `(C, P)` too."""
+    from schemas.entities import ForkedFrom
+    from schemas.identifiers import EventId
+
+    parent, child = "wf/workflows/parent_fk", "wf/workflows/child_fk"
+    _setup_workspace(tmp_path, rules=[_ALLOW_ALL])
+    runtime = await _boot(tmp_path)
+
+    status, _ = await _run_workflow(runtime, tmp_path, parent)
+    assert status == "succeeded"
+    store = WorkflowRunStore(tmp_path)
+    child_run = store.read(_child_run_id(tmp_path))
+    events = [
+        json.loads(line)
+        for line in store.directory(child_run.run_id)
+        .events_path.read_text(encoding="utf-8")
+        .splitlines()
+        if line.strip()
+    ]
+    (fork_point,) = [
+        e["event_id"]
+        for e in events
+        if e["kind"] == "workflow.node.completed" and e["node_name"] == "first"
+    ]
+    forked = store.create(
+        workflow_ref=child_run.workflow_ref,
+        inputs=dict(child_run.inputs),
+        trace_id=child_run.trace_id,
+        forked_from=ForkedFrom(
+            run_id=child_run.run_id, fork_event_id=EventId(fork_point)
+        ),
+    )
+    assert forked.parent is None
+    assert store.call_chain_for(forked) == (parent, child)
+
+    calls = _record_allow(runtime, monkeypatch)
+    executor = _executor_for(runtime, tmp_path, forked.run_id)
+    forked_status = await executor.start_from_fork(fork_event_id=fork_point)
+
+    assert forked_status.value == "succeeded"
+    assert calls == [(_BASH, (child, parent))]
+
+
+async def test_root_run_chain_is_unchanged(tmp_path: Path) -> None:
+    """Root runs, and forks of root runs, rebuild to just `(W,)`."""
+    from schemas.entities import ForkedFrom
+    from schemas.identifiers import EventId
+
+    store = WorkflowRunStore(tmp_path)
+    root_run = store.create(workflow_ref=_SOLO)
+    fork = store.create(
+        workflow_ref=_SOLO,
+        forked_from=ForkedFrom(
+            run_id=root_run.run_id, fork_event_id=EventId(f"ev_{uuid4()}")
+        ),
+    )
+    fork_of_fork = store.create(
+        workflow_ref=_SOLO,
+        forked_from=ForkedFrom(
+            run_id=fork.run_id, fork_event_id=EventId(f"ev_{uuid4()}")
+        ),
+    )
+    assert store.call_chain_for(root_run) == (_SOLO,)
+    assert store.call_chain_for(fork) == (_SOLO,)
+    assert store.call_chain_for(fork_of_fork) == (_SOLO,)
+
+
+async def test_lineage_walk_stops_at_a_deleted_parent(tmp_path: Path) -> None:
+    """A child whose parent run directory is gone keeps only the frames
+    that can still be proven (its own)."""
+    import shutil
+
+    from schemas.entities import ParentRunPointer
+    from workflows.ids import InvocationId
+
+    store = WorkflowRunStore(tmp_path)
+    parent_run = store.create(workflow_ref=_PARENT)
+    child_run = store.create(
+        workflow_ref=_CHILD,
+        parent=ParentRunPointer(
+            workflow_run_id=parent_run.run_id,
+            invocation_id=InvocationId("inv_00000000-0000-0000-0000-000000000001"),
+        ),
+    )
+    assert store.call_chain_for(child_run) == (_PARENT, _CHILD)
+    shutil.rmtree(store.directory(parent_run.run_id).root)
+    assert store.call_chain_for(child_run) == (_CHILD,)
