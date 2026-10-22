@@ -23,6 +23,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from schemas.caller_chain import CallerChain
+
 if TYPE_CHECKING:
     from engine.context import CancelToken
     from schemas import EventId, SessionId
@@ -86,10 +88,11 @@ class NodeContext:
     # spawned session's events so the two JSONLs cross-correlate
     # exactly. `None` only outside the executor's worklist.
     trace_id: TraceId | None = None
-    # The workflow run's `caller_chain`. The agent runner prepends the
-    # agent's ref before passing into the engine so authz audit events
-    # record the workflow→agent frame. Proximate first; default `()`
-    # for root-level invocations.
+    # Frames that invoked this workflow run from OUTSIDE the workflow
+    # tree (proximate first). Always `()` today: `WorkflowRun` carries
+    # no caller chain, so a workflow launched by an agent does not
+    # record the launching agent's frame. `node_caller_chain` appends
+    # it after the workflow frames.
     caller_chain: tuple[str, ...] = field(default_factory=tuple)
     # Set by the agent runner to the session it spawned; read by the
     # executor's `workflow.node.completed` payload builder. Frozen
@@ -254,6 +257,22 @@ class NodeContext:
             iteration_index=iteration_index,
             iteration_total=iteration_total,
         )
+
+    def node_caller_chain(self) -> CallerChain:
+        """Return the caller chain this node's authz checks are judged against.
+
+        Proximate first: this run's own workflow ref, then each
+        enclosing workflow out to the root (`call_chain` reversed —
+        it is stored root-first), then any external callers
+        (`caller_chain`). A builtin tool node in W gets `(W,)`; in child
+        C of parent P, `(C, P)`. The agent runner passes the same frames
+        as the spawned agent's callers, and the engine prepends the
+        agent's own ref: `(A, W)`. Unattributed only for a context
+        built outside the executor with neither chain (e.g.
+        `for_test`).
+        """
+        frames = (*reversed(self.call_chain), *self.caller_chain)
+        return CallerChain(frames) if frames else CallerChain.unattributed()
 
     def require_trace_id(self) -> TraceId:
         """Return `self.trace_id`, raising if it is `None`.
