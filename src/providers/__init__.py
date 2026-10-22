@@ -27,6 +27,7 @@ from providers.authz import (
     describe_default_deny_tail_problem,
     inspect_default_deny_tail,
     make_authorization_provider,
+    platform_rules_from_config,
     register_authorization_variant,
 )
 from providers.compaction import (
@@ -98,6 +99,7 @@ __all__ = [
     "make_memory_provider",
     "make_sandbox_provider",
     "make_secrets_provider",
+    "platform_rules_from_config",
     "register_authorization_variant",
     "register_compaction_variant",
     "register_memory_variant",
