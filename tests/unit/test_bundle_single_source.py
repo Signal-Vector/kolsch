@@ -110,8 +110,14 @@ def _root_bundles_joins(source: str) -> list[int]:
 
 
 def test_containerfile_does_not_copy_repo_root_bundles() -> None:
-    """(a1) The image never ships a repo-root ``bundles/`` tree."""
+    """(a1) The image never ships a repo-root ``bundles/`` tree.
+
+    Skips inside the gate image, which doesn't copy the ``Containerfile``
+    into itself; every checkout has it.
+    """
     containerfile = _REPO_ROOT_DIR / "Containerfile"
+    if not containerfile.is_file():
+        pytest.skip(f"{containerfile} not in this tree (e.g. the gate image)")
     offending = [
         f"Containerfile:{lineno}: {line.strip()}"
         for lineno, line in enumerate(
@@ -164,8 +170,15 @@ def test_git_tracks_no_repo_root_bundles() -> None:
 
 
 def test_gitignore_ignores_repo_root_bundles() -> None:
-    """(a3) A workspace bundle at the repo root can't be committed by accident."""
-    lines = (_REPO_ROOT_DIR / ".gitignore").read_text(encoding="utf-8").splitlines()
+    """(a3) A workspace bundle at the repo root can't be committed by accident.
+
+    Skips inside the gate image, which doesn't copy ``.gitignore``;
+    every checkout has it.
+    """
+    gitignore = _REPO_ROOT_DIR / ".gitignore"
+    if not gitignore.is_file():
+        pytest.skip(f"{gitignore} not in this tree (e.g. the gate image)")
+    lines = gitignore.read_text(encoding="utf-8").splitlines()
     assert "/bundles/" in (line.strip() for line in lines), (
         ".gitignore must ignore the repo-root workspace artefact with a "
         "'/bundles/' entry (anchored, so tests/bundles/ stays tracked)."
