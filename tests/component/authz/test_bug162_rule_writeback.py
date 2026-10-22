@@ -315,6 +315,58 @@ async def test_i_no_drift_notice_when_disk_matches_memory(tmp_path: Path) -> Non
     assert ("kolsch/tools/bash", "ls *", "allow") in _disk_rules(yaml_path)
 
 
+async def test_i_failed_save_is_not_reported_as_disk_drift(tmp_path: Path) -> None:
+    """A session-only rule (save failed) differs from disk because of this chat."""
+    yaml_path = tmp_path / "platform.yaml"
+    _write_platform(yaml_path, [_READ, _BASH_PROMPT, _TAIL])
+    provider = _bootstrap(yaml_path)
+    notices: list[tuple[str, str]] = []
+    _wire_like_chat(provider, yaml_path, pattern="ls *", notices=notices)
+    good = yaml_path.read_bytes()
+
+    _break_unparseable(yaml_path)
+    await provider.allow("agent.ag_x", "kolsch/tools/bash", target="ls a")  # fails
+    yaml_path.write_bytes(good)  # the user repairs the file
+    # A target `ls *` doesn't cover → the bash prompt rule asks again.
+    await provider.allow("agent.ag_x", "kolsch/tools/bash", target="cat a")
+
+    assert [t for _, t in notices if "changed on disk" in t] == []
+    assert len([t for _, t in notices if "active for this chat only" in t]) == 1
+    assert ("kolsch/tools/bash", "ls *", "allow") in _disk_rules(yaml_path)
+
+
+async def test_i_back_to_back_always_answers_do_not_report_drift(
+    tmp_path: Path,
+) -> None:
+    """Two saves in flight at once each see the other in memory, not on disk."""
+    import asyncio
+
+    yaml_path = tmp_path / "platform.yaml"
+    _write_platform(yaml_path, [_READ])  # tail-less: uncovered actions prompt
+    provider = _bootstrap(yaml_path)
+    notices: list[tuple[str, str]] = []
+    _wire_like_chat(provider, yaml_path, notices=notices)
+
+    results = await asyncio.gather(
+        provider.allow("agent.ag_x", "kolsch/tools/list_files", target="."),
+        provider.allow("agent.ag_x", "kolsch/tools/write_file", target="a"),
+        provider.allow("agent.ag_x", "kolsch/tools/bash", target="ls"),
+    )
+
+    assert all(r.allowed for r in results)
+    assert notices == []
+    assert sorted(_disk_rules(yaml_path)[1:]) == [
+        ("kolsch/tools/bash", "*", "allow"),
+        ("kolsch/tools/list_files", "*", "allow"),
+        ("kolsch/tools/write_file", "*", "allow"),
+    ]
+
+    # Sequential back-to-back answers too.
+    await provider.allow("agent.ag_x", "kolsch/tools/read_more", target="x")
+    await provider.allow("agent.ag_x", "kolsch/tools/fetch_url", target="y")
+    assert notices == []
+
+
 def _key_of(rule: Rule) -> tuple[str, str, str]:
     return (rule.what, rule.pattern, rule.effect)
 

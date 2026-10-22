@@ -331,7 +331,8 @@ These are non-negotiable. Violating them blocks merges.
   the current disk list, under
   `assets.platform_config.platform_yaml_lock`). A provider's rule
   list is a session-old snapshot; writing it back silently erases
-  rule edits made on disk since (bug-162).
+  rule edits made on disk since (bug-162). (Setup migrations /
+  connect / refresh still rewrite directly — follow-up F1.)
 - **Multi-spec refactors require a composition invariant and a
   live-runtime gate at each milestone.** Component-scoped specs
   cannot ship a working feature on their own — the seams between

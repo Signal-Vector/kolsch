@@ -296,7 +296,8 @@ class RulePersistHook:
     only, a WARNING is logged and `notify` gets a warning naming the
     path, the reason and the `kolsch permissions add …` command that
     saves it. On success, when the disk rules (before the insert)
-    differ from the chat's loaded rules (minus the new one), `notify`
+    differ from the chat's loaded rules — both sides minus every rule
+    this hook saved, is saving, or failed to save — `notify`
     gets a one-time warning per distinct difference: those edits are
     kept on disk but not enforced until `/reload` (D1 — the in-memory
     rules are never rebuilt from disk here).
@@ -323,6 +324,15 @@ class RulePersistHook:
         self._catalog = catalog
         self._notify = notify
         self._drift_noticed: set[tuple[Any, ...]] = set()
+        # Rules this hook is saving right now (another "always" answer
+        # can land while a save is in flight), rules it saved, and rules
+        # whose save failed (session-only). All are left out of the
+        # drift comparison — they differ from (or sit at a different
+        # position on) disk because of this chat, not because someone
+        # edited the file. Tracked by object identity.
+        self._in_flight: list[Rule] = []
+        self._saved: list[Rule] = []
+        self._unsaved: list[Rule] = []
 
     async def __call__(self, request: RulePersistRequest) -> None:
         """Persist `request.rule`; report failures and disk drift via `notify`."""
@@ -335,6 +345,7 @@ class RulePersistHook:
         from providers.authz import RuleBasedAuthorizationProvider  # noqa: PLC0415
 
         rule = request.rule
+        self._in_flight.append(rule)
         try:
             result = await asyncio.to_thread(
                 persist_rule_request,
@@ -343,6 +354,7 @@ class RulePersistHook:
                 catalog=self._catalog(),
             )
         except Exception as exc:  # noqa: BLE001 — the hook must never raise
+            self._unsaved.append(rule)
             if isinstance(exc, AuthzRulesPersistFailed):
                 reason = f"{exc.detail['reason']}: {exc.detail['detail']}"
                 if exc.detail["reason"] == "invalid_rules":
@@ -367,11 +379,28 @@ class RulePersistHook:
                 kind="warning",
             )
             return
+        finally:
+            self._in_flight = [r for r in self._in_flight if r is not rule]
+        if result.inserted:
+            self._saved.append(rule)
         authz = self._authz()
         if not isinstance(authz, RuleBasedAuthorizationProvider):
             return
-        live = [rule_identity(r) for r in authz.rules_snapshot() if r is not rule]
+        skip = [rule, *self._in_flight, *self._saved, *self._unsaved]
+        live = [
+            rule_identity(r)
+            for r in authz.rules_snapshot()
+            if not any(r is s for s in skip)
+        ]
+        # This chat's other saves (done, or in flight and maybe already
+        # on disk) are dropped from the disk side too — one copy each.
         disk = [rule_identity(r) for r in result.disk_rules_before]
+        for own in (*self._saved, *self._in_flight):
+            if own is rule:
+                continue
+            key = rule_identity(own)
+            if key in disk:
+                disk.remove(key)
         if live == disk:
             return
         drift = _rule_drift_signature(live, disk)

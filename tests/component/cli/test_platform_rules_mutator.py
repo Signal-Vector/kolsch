@@ -21,7 +21,6 @@ import pytest
 
 import cli.permissions as permissions_mod
 from assets.platform_config import (
-    default_platform_payload,
     platform_yaml_lock,
     platform_yaml_lock_path,
 )
@@ -507,15 +506,27 @@ def test_untouched_lines_are_byte_identical(tmp_path: Path) -> None:
 def test_kolsch_generated_file_round_trips_unchanged_but_for_new_entry(
     tmp_path: Path,
 ) -> None:
-    """The `kolsch setup` layout (dash at key indent) is kept as written."""
-    original = dump(default_platform_payload())
+    """The file `kolsch setup` writes (incl. its hooks scaffold) is kept as written."""
+    from cli._setup import (
+        _HOOKS_EXAMPLE_BLOCK,
+        _setup_platform_payload,
+    )
+
+    original = dump(_setup_platform_payload()) + "\n" + _HOOKS_EXAMPLE_BLOCK
     yaml_path = _ws(tmp_path, original)
 
-    result = _insert(yaml_path, _rule("kolsch/tools/list_files", "docs/*"))
+    result = _insert(yaml_path, _rule("kolsch/tools/probe", "docs/*"))
 
     assert result.written
     new_lines = yaml_path.read_text(encoding="utf-8").splitlines()
-    at = new_lines.index("    - what: kolsch/tools/list_files")
+    at = new_lines.index("    - what: kolsch/tools/probe")
+    assert new_lines[at : at + 3] == [
+        "    - what: kolsch/tools/probe",
+        "      pattern: docs/*",
+        "      effect: allow",
+    ]
+    # Lands immediately before the setup-written default-deny tail.
+    assert new_lines[at + 3] == "    - what: '*'"
     del new_lines[at : at + 3]
     assert new_lines == original.splitlines()
 
