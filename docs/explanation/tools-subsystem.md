@@ -283,11 +283,11 @@ path (Option B asset references). The format is
   directory.
 - `kolsch` — platform-shipped tools. The builtin tools (`read_file`,
   `write_file`, `list_files`, `bash`, and the rest of the shipping set
-  in §4.5) are plain bundle files: their source is the starter bundle
-  `src/cli/_starter_bundle/kolsch/tools/`, which `kolsch setup` copies
-  to `<workspace>/bundles/kolsch/tools/`. No bundle-name
-  reservation enforces this — `kolsch` participates in the standard
-  uniqueness rule like any other bundle.
+  in Part 4.5 — Builtin Tools) are plain bundle files: their source
+  is the starter bundle `src/cli/_starter_bundle/kolsch/tools/`,
+  which `kolsch setup` copies to `<workspace>/bundles/kolsch/tools/`.
+  No bundle-name reservation enforces this — `kolsch` participates
+  in the standard uniqueness rule like any other bundle.
 
 The platform's tool discovery scans known tool directories (per Part 5
 below) and the agent's config enables which ones to use.
