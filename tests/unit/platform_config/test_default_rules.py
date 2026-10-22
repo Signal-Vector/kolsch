@@ -121,5 +121,12 @@ def test_default_rules_module_imports_no_cli_or_providers() -> None:
 
 
 def test_rule_literal_no_longer_in_cli() -> None:
-    setup_src = (_SRC / "cli" / "_setup.py").read_text("utf-8")
-    assert '"kolsch/tools/read_file"' not in setup_src
+    # The 13-rule literal's first tool entry, as a rule dict. Other
+    # `cli/` modules may name the tool; none may restate the rule.
+    needle = '"what": "kolsch/tools/read_file", "pattern"'
+    offenders = [
+        str(path.relative_to(_SRC))
+        for path in sorted((_SRC / "cli").rglob("*.py"))
+        if needle in path.read_text("utf-8")
+    ]
+    assert offenders == []
