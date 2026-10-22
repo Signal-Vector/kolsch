@@ -18,6 +18,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from cli._logging import configure_cli_logging
 from errors import AssetsNotFound, ConfigInvalid, PlatformError
 from platform_runtime import (
     bootstrap_runtime,
@@ -97,11 +98,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.print_help()
         return 1
 
-    logging.basicConfig(
-        level=logging.WARNING if not args.verbose else logging.INFO,
-        format="%(levelname)s %(name)s: %(message)s",
-    )
-
     # Resolve the workspace once, intercept the missing-workspace case
     # before any subsystem boots so the user gets a friendly message
     # instead of a stack trace. `setup` is the one command exempt from
@@ -110,6 +106,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     # (including "no workspace at this path"), so a stack trace would
     # be worse than a report saying "nothing to inspect here".
     resolved_root = resolve_workspace(args.root)
+    initialized = workspace_is_initialized(resolved_root)
+    # bug-148 — stderr shows kolsch's own loggers (all with `-v`); an
+    # initialized workspace also gets `logs/kolsch.log` with every
+    # record. Nothing logs before this point.
+    configure_cli_logging(
+        verbose=args.verbose, workspace_root=resolved_root if initialized else None
+    )
     # `mcp bridge` (spec-120) is also exempt: it is a pure socket
     # proxy an EXTERNAL harness spawns — all state lives in the
     # running kolsch process behind KOLSCH_MCP_SOCKET, so requiring a
@@ -117,7 +120,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     workspace_exempt = args.command in {"setup", "doctor"} or (
         args.command == "mcp" and getattr(args, "mcp_command", None) == "bridge"
     )
-    if not workspace_exempt and not workspace_is_initialized(resolved_root):
+    if not workspace_exempt and not initialized:
         sys.stderr.write(_MISSING_WORKSPACE_MESSAGE.format(path=resolved_root))
         return _EXIT_MISSING_WORKSPACE
     args.root = resolved_root
@@ -232,7 +235,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "-v",
         "--verbose",
         action="store_true",
-        help="Enable INFO-level logging.",
+        help=(
+            "Enable INFO-level logging on stderr, including third-party "
+            "libraries and failure tracebacks."
+        ),
     )
 
     sub = parser.add_subparsers(dest="command", metavar="<command>")
@@ -939,7 +945,9 @@ async def _run_agent_once(args: argparse.Namespace) -> _RunOutcome:
         return _RunOutcome(
             rc=2, session_id=session_id, failed_event=exc.failed_event, exc=exc
         )
-    except Exception as exc:  # noqa: BLE001 — surface engine-Fatal as CLI exit
+    # Not an ordinary failure (those arrive as AgentExecutionError):
+    # the kolsch-bug path, reported on the outcome for the caller.
+    except Exception as exc:  # noqa: BLE001 — unexpected engine exception
         return _RunOutcome(rc=2, session_id=session_id, exc=exc)
     return _RunOutcome(rc=0, session_id=session_id, agent_message=agent_msg)
 

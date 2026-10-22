@@ -250,7 +250,49 @@ def make_llm_callable(
                 where="engine._crewai_adapter.make_llm_callable",
             ) from exc
 
-    return call
+    return _quiet_crewai_console(call)
+
+
+def _quiet_crewai_console(
+    call: Callable[[LLMRequest], Awaitable[LLMResponse]],
+) -> Callable[[LLMRequest], Awaitable[LLMResponse]]:
+    """Silence CrewAI's console output for the duration of each `call` (bug-148).
+
+    CrewAI's event listener prints rich panels (`❌ LLM Error`) and
+    `[CrewAIEventsBus]` warnings to stdout on every failed call, which
+    corrupts `kolsch run`'s JSON stdout and duplicates what the event
+    log already records (`thread.exchange_failed`). The engine already
+    treats CrewAI console output as noise (`crewai_framework`'s
+    `redirect_stdout` capture); this is the same policy for the direct
+    `crewai.LLM.call` seam every surface shares (run, chat, workflows,
+    compaction, the API server).
+
+    Uses CrewAI's own `set_suppress_console_output` ContextVar, which
+    both `ConsoleFormatter.print` and `Printer.print` honour. It is set
+    in the awaiting task's context for exactly the span of the call and
+    restored in `finally`: `asyncio.to_thread` copies that context into
+    the worker running `crewai_llm.call`, and CrewAI's event bus copies
+    the worker's context into its handler executor, so the panels and
+    warnings of THIS call are silenced and nothing outside it is.
+    Without CrewAI installed this is the identity.
+    """
+    try:
+        from crewai.events.utils.console_formatter import (  # noqa: PLC0415
+            set_suppress_console_output,
+            should_suppress_console_output,
+        )
+    except ImportError:
+        return call
+
+    async def quiet_call(request: LLMRequest) -> LLMResponse:
+        previous = should_suppress_console_output()
+        set_suppress_console_output(True)
+        try:
+            return await call(request)
+        finally:
+            set_suppress_console_output(previous)
+
+    return quiet_call
 
 
 def _classify_call_error(
