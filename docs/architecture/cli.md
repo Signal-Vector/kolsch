@@ -63,7 +63,8 @@ runs a read-only operator server (list sessions, read events) that an
 external agent can drive over stdio, and `mcp bridge` bridges the
 running session's tools to an in-workflow external-harness agent.
 `kolsch doctor` diagnoses a workspace — provider connectivity, catalog
-integrity, and common misconfigurations.
+integrity, and common misconfigurations, including (advisory) a missing
+or misplaced authorization default-deny tail.
 
 ## Principles
 

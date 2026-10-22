@@ -258,6 +258,29 @@ async def test_permissions_remove_default_deny_is_rejected(tmp_path: Path) -> No
     )
 
 
+@pytest.mark.parametrize("tail", ["present", "absent"])
+async def test_permissions_remove_default_deny_leaves_yaml_byte_identical(
+    tmp_path: Path, tail: str
+) -> None:
+    """bug-152 AC 8 — refused with or without a tail; file untouched."""
+    root = _workspace(tmp_path)
+    path = root / "platform.yaml"
+    if tail == "absent":
+        payload = yaml.safe_load(path.read_text())
+        payload["authorization"]["config"]["rules"].pop()
+        path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    before = path.read_bytes()
+    out, err = io.StringIO(), io.StringIO()
+    rc = await cmd_permissions(
+        _args(root, permissions_command="remove", rule_id="rl_default_deny"),
+        out=out,
+        err=err,
+    )
+    assert rc == 1
+    assert "protected" in err.getvalue().lower()
+    assert path.read_bytes() == before
+
+
 async def test_permissions_remove_unknown_rule(tmp_path: Path) -> None:
     root = _workspace(tmp_path)
     out, err = io.StringIO(), io.StringIO()
