@@ -427,7 +427,10 @@ async def test_scenario_2_deny_always_persists_rule_and_restart_auto_denies(
     state_a = SimpleNamespace(active_cancel=cancel_a, last_cancel_reason=None)
     modal_a = ApprovalModal(
         stdout=io.StringIO(),
-        input_fn=_scripted_input(["d", ""]),  # [d] then accept suggested
+        # [d], accept the suggested pattern, then accept the default
+        # `from:` scope — bug-158: the exchange chain is now
+        # `(kolsch/agents/helper,)`, so the modal asks for a scope.
+        input_fn=_scripted_input(["d", "", ""]),
         state=state_a,
     )
     assert isinstance(runtime_a.authz, RuleBasedAuthorizationProvider)
@@ -486,6 +489,8 @@ async def test_scenario_2_deny_always_persists_rule_and_restart_auto_denies(
         f"in platform.yaml; got rules: "
         f"{[(r.get('what'), r.get('pattern'), r.get('effect')) for r in persisted]}"
     )
+    # The rule is scoped to the agent that triggered the prompt.
+    assert new_deny.get("from") == "kolsch/agents/helper"
 
     # Capture the relevant platform.yaml section for the writeup.
     _emit_evidence(

@@ -134,6 +134,7 @@ from errors import (
     iter_error_classes,
     list_catalog_codes,
 )
+from schemas import CallerChain
 
 # ---------------------------------------------------------------------------
 # Construction map — minimal valid args for every concrete subclass.
@@ -219,6 +220,7 @@ CONSTRUCTOR_ARGS: dict[type[PlatformError], dict[str, Any]] = {
         "tool_name": "bash",
         "action": "tool.bash",
         "principal": "agent.ag_x",
+        "caller_chain": CallerChain(("kolsch/agents/x",)),
     },
     ToolNotFound: {"tool_name": "frobnicate", "agent_id": "ag_x"},
     ToolPermissionsNoContext: {"tool": "bash"},
@@ -661,6 +663,7 @@ def test_where_must_be_non_empty() -> None:
             action="tool.bash",
             principal="agent.ag_x",
             where="",
+            caller_chain=CallerChain.unattributed(),
         )
 
 
@@ -670,6 +673,7 @@ def test_detail_keys_match_catalog_shape_for_known_types() -> None:
         tool_name="bash",
         action="tool.bash",
         principal="agent.ag_x",
+        caller_chain=CallerChain.unattributed(),
     )
     assert set(err.detail) >= {"tool_name", "action", "principal", "matched_rule"}
 

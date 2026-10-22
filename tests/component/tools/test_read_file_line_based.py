@@ -32,7 +32,7 @@ import pytest
 
 from errors import FileLineTooLong
 from files import PathPolicy
-from schemas import AgentId, SessionId, ThreadId
+from schemas import AgentId, CallerChain, SessionId, ThreadId
 from tools import ToolContext
 from tools.discovery import discover_tools_in_file
 
@@ -70,6 +70,7 @@ def _ctx(tmp_path: Path) -> ToolContext:
         workspace_root=tmp_path,
         path_policy=PathPolicy(allowed_paths=["."], denied_paths=[]),
         tool_call_id="tc_read_unit",
+        caller_chain=CallerChain.unattributed(),
     )
 
 

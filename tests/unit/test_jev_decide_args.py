@@ -19,6 +19,8 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
+from schemas import CallerChain
+
 if TYPE_CHECKING:
     from types import ModuleType
 
@@ -195,6 +197,7 @@ def _ctx() -> ToolContext:
         thread_id=ThreadId(f"th_{uuid4()}"),
         principal="agent.ag_test",
         secrets={},
+        caller_chain=CallerChain.unattributed(),
     )
 
 

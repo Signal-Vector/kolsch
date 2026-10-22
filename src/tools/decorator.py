@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any, Literal, get_args
 from pydantic import BaseModel, ConfigDict, SkipValidation
 
 from files import PathPolicy
-from schemas import AgentId, SessionId, ThreadId
+from schemas import AgentId, CallerChain, SessionId, ThreadId
 from tools.services import (
     Cards,
     Prompts,
@@ -45,12 +45,23 @@ _NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 class ToolContext(BaseModel):
     """The runtime context passed to every tool function.
 
-    Eight read-only fields, populated by the dispatch flow before the
+    Read-only fields, populated by the dispatch flow before the
     tool body runs. Tools cannot mutate the event log or override
     authz decisions — those are handled upstream of the tool body.
 
-    The five core fields (`agent_id`, `session_id`, `thread_id`,
-    `principal`, `secrets`) are required for every tool invocation.
+    The six core fields (`agent_id`, `session_id`, `thread_id`,
+    `principal`, `secrets`, `caller_chain`) are required for every
+    tool invocation.
+
+    `caller_chain` is the proximate-first
+    [`CallerChain`][schemas.caller_chain.CallerChain] the call's
+    authorization is judged against — `(agent,)` for an agent's tool
+    call, `(agent, workflow, …)` inside a workflow, `(workflow, …)` for
+    a workflow builtin node. Every authz check for the call
+    (`dispatch_tool`, MCP tools, in-tool `permissions.check` /
+    `require`) reads it from here, so `from:`-scoped rules match. It
+    has no default: a producer that genuinely cannot attribute the
+    call passes `CallerChain.unattributed()` by name.
     `workspace_root` and `path_policy` are optional, populated by the
     [`ToolsSubsystem`][tools.subsystem.ToolsSubsystem] from its
     constructor args when set, so user-authored bundle tools at
@@ -81,6 +92,7 @@ class ToolContext(BaseModel):
     thread_id: ThreadId
     principal: str
     secrets: dict[str, str]
+    caller_chain: CallerChain
     workspace_root: Path | None = None
     path_policy: PathPolicy | None = None
     tool_call_id: str | None = None

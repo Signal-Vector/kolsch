@@ -18,6 +18,7 @@ import uuid
 from typing import TYPE_CHECKING, Any
 
 from errors import ToolUnauthorized
+from schemas.caller_chain import CallerChain
 from schemas.identifiers import AgentId, SessionId, ThreadId
 from tools.decorator import ToolContext
 from workflows.errors import BashNonZeroExit, WorkflowNodeFailed
@@ -126,6 +127,9 @@ class BashRunner:
             thread_id=ThreadId(f"th_{uuid.uuid4()}"),
             principal=f"workflow.{ctx.workflow_run_id}",
             secrets={},
+            # Workflow frames are attached in the node-chain step;
+            # until then the node's call is unattributed.
+            caller_chain=CallerChain.unattributed(),
             workspace_root=ctx.workspace_root,
             path_policy=None,
             tool_call_id=None,

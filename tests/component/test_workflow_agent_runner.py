@@ -454,7 +454,9 @@ async def test_caller_chain_extension_proximate_first(
     tmp_path: Path,
     session_store: SessionStore,
 ) -> None:
-    """AC 2.3 — caller chain prepends the agent ref (proximate first).
+    """AC 2.3 / bug-158 — the runner passes the callers only, proximate
+    first; the engine prepends the agent's own ref when it builds the
+    exchange chain, so the runner must not (that would double it).
 
     Reversed order would break authz audit forensics.
     """
@@ -474,7 +476,7 @@ async def test_caller_chain_extension_proximate_first(
     )
 
     _config, exec_ctx, _inputs = engine.calls[0]
-    assert exec_ctx.caller_chain == (_AGENT_REF, *parent_chain)
+    assert exec_ctx.caller_chain == parent_chain
 
 
 async def test_agent_execution_error_remaps_to_workflow_node_failed(

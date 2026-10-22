@@ -17,6 +17,7 @@ see the
 [architecture pages](../architecture/index.md).
 """
 
+from schemas.caller_chain import CallerChain
 from schemas.config import (
     ContextFileSpec,
     HookRule,
@@ -83,6 +84,7 @@ __all__ = [
     "AgentId",
     "AgentMessageData",
     "AgentTemplateWarningData",
+    "CallerChain",
     "CardId",
     "ConfigSetData",
     "ContentRef",

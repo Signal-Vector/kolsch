@@ -250,7 +250,9 @@ class AgentRunner:
             thread_id=default_thread_id,
             trigger=trigger,
             trace_id=ctx.trace_id,
-            caller_chain=(node_def.agent, *ctx.caller_chain),
+            # Callers only (bug-158): the engine prepends the agent's
+            # own resolved ref when it builds the exchange chain.
+            caller_chain=tuple(ctx.caller_chain),
             # spec-011 r-review r1: stamp the workflow context onto
             # the sub-agent's ExecutionContext so downstream consumers
             # (spec-014's `InlineApprovalCallback._derive_source`) can

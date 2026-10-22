@@ -29,7 +29,7 @@ from pydantic import BaseModel
 from cli.chat.service_registry import ChatServiceRegistry
 from cli.chat.services.cards_impl import CardsImpl
 from providers import DotenvSecretsProvider, NativeSandboxProvider
-from schemas import AgentId, SessionId, ThreadId
+from schemas import AgentId, CallerChain, SessionId, ThreadId
 from schemas.events import EventType
 from schemas.wire_kinds import WIRE_CARD_CLOSED
 from store import SessionStore, SqliteBackend
@@ -76,6 +76,7 @@ def _ctx(session_id: SessionId, thread_id: ThreadId) -> ToolContext:
         workspace_root=None,
         path_policy=None,
         tool_call_id=None,
+        caller_chain=CallerChain.unattributed(),
     )
 
 

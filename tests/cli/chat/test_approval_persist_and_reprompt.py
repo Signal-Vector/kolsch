@@ -50,6 +50,7 @@ from providers.authz import (
     RuleBasedAuthorizationConfig,
     RuleBasedAuthorizationProvider,
 )
+from schemas import CallerChain
 from schemas.events import EventType
 from schemas.identifiers import AgentId, SessionId, ThreadId
 from schemas.wire_kinds import WIRE_PROMPT_REQUESTED
@@ -269,11 +270,14 @@ async def test_persist_rule_prevents_reprompt(chat_app: Any) -> None:
         # (1) Fire authz.allow — the real callback fires the prompt.
         # --------------------------------------------------------------
         target_ref = "acme/workflows/job_description_review"
+        # bug-158: the call carries a real agent chain, so the saved
+        # rule below proves the live widget stays UNSCOPED anyway (D9).
         allow_task = asyncio.create_task(
             authz.allow(
                 "agent.test",
                 "kolsch/tools/run_workflow",
                 target=target_ref,
+                caller_chain=("kolsch/agents/helper",),
             ),
         )
 
@@ -335,6 +339,8 @@ async def test_persist_rule_prevents_reprompt(chat_app: Any) -> None:
                     and rule.get("effect") == "allow"
                 ):
                     rule_persisted = True
+                    # The live chat widget saves unscoped rules.
+                    assert rule.get("from") is None, rule
                     break
             if rule_persisted:
                 break
@@ -497,6 +503,7 @@ async def test_run_workflow_input_validation_surfaces_error() -> None:
         secrets={},
         cards=_MockCards(),
         workflows=_MockWorkflows(),
+        caller_chain=CallerChain.unattributed(),
     )
 
     args_schema = run_workflow._tool_definition.args_schema

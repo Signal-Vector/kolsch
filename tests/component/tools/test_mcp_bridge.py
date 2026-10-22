@@ -37,6 +37,7 @@ from errors import (
     BridgeSocketUnavailable,
     ToolUnauthorized,
 )
+from schemas import CallerChain
 from store import SessionStore, SqliteBackend
 from tools.bridge import (
     MAX_FRAME_BYTES,
@@ -60,6 +61,8 @@ if TYPE_CHECKING:
 
 _TRACE = "tr_00000000-0000-0000-0000-0000000000ab"
 _AGENT_ID = "ag_test"
+# bug-158: the exchange chain the bridge is constructed with.
+_CHAIN = CallerChain(("kolsch/agents/test",))
 _TIMEOUT = 20
 
 # Markers that must NEVER appear in any externally-visible payload for
@@ -130,7 +133,12 @@ class _StubSubsystem:
         context: Any,
     ) -> ToolResult:
         self.calls.append(
-            {"tool_name": tool_name, "args": args, "principal": context.principal}
+            {
+                "tool_name": tool_name,
+                "args": args,
+                "principal": context.principal,
+                "caller_chain": context.caller_chain,
+            }
         )
         if tool_name == "echo":
             self.bodies_run.append(tool_name)
@@ -157,6 +165,7 @@ class _StubSubsystem:
                 "source_line": 42,
                 "from_": "who-chain-user.local",
             },
+            caller_chain=CallerChain.unattributed(),
         )
 
 
@@ -197,6 +206,7 @@ async def _bound_server(tmp_path: Path) -> AsyncIterator[_Bound]:
         thread_id=str(thread_id),
         tools_subsystem=stub,
         emit=sink,
+        caller_chain=_CHAIN,
     )
     await server.open()
     fragment = server.config_fragment()
@@ -394,6 +404,7 @@ async def test_allowed_call_runs_and_emits_engine_equivalent_events(
                 "tool_name": "echo",
                 "args": {"message": "hi"},
                 "principal": f"agent.{_AGENT_ID}",
+                "caller_chain": _CHAIN,
             }
         ]
 
@@ -1046,3 +1057,31 @@ async def test_framing_second_concurrent_bind_rejected(tmp_path: Path) -> None:
         finally:
             await second.close()
             await first.close()
+
+
+# ---------------------------------------------------------------------------
+# bug-158 — the bridge never takes a caller chain from the wire.
+# ---------------------------------------------------------------------------
+
+
+async def test_call_frame_cannot_spoof_caller_chain(tmp_path: Path) -> None:
+    """A `call_tool` frame carrying chain-like fields is dispatched with
+    the server's constructor chain; the wire fields are ignored."""
+    async with _bound_server(tmp_path) as bound:
+        client = await _SocketClient.connect(bound.socket_path)
+        try:
+            await client.request("bind", token=bound.token)
+            result = await client.request(
+                "call_tool",
+                name=mcp_wire_name("kolsch", "echo"),
+                arguments={"message": "hi"},
+                caller_chain=["kolsch/agents/admin"],
+                callerChain=["kolsch/agents/admin"],
+                context={"caller_chain": ["kolsch/agents/admin"]},
+            )
+        finally:
+            await client.close()
+        assert result["isError"] is False
+        assert [c["tool_name"] for c in bound.stub.calls] == ["echo"]
+        assert bound.stub.calls[0]["caller_chain"] == _CHAIN
+        assert bound.stub.calls[0]["caller_chain"] is _CHAIN

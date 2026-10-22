@@ -50,6 +50,7 @@ from providers.compaction import ReferenceSummaryCompactionProvider
 from providers.secrets import DotenvSecretsProvider
 from schemas import (
     AgentId,
+    CallerChain,
     EventType,
     IOSpec,
     ModelSpec,
@@ -297,6 +298,7 @@ async def test_compaction_smoke_end_to_end(tmp_path: Path) -> None:
         principal="system",
         secrets={},
         tool_call_id="tc_smoke",
+        caller_chain=CallerChain.unattributed(),
     )
     ref_id = str(ref_event.event_id)
     # In-scope resolves.

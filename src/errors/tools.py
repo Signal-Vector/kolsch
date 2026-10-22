@@ -7,10 +7,15 @@ binding failures are Fatal. See the
 classification contract.
 """
 
-from typing import Any
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
 
 from errors.base import PlatformError
 from errors.level import Level
+
+if TYPE_CHECKING:
+    from schemas import CallerChain
 
 
 class ToolPermissionsNoContext(PlatformError):
@@ -49,18 +54,24 @@ class ToolUnauthorized(PlatformError):
 
     Diagnostic — the model sees the denial in its tool-result payload
     and the exchange continues.
+
+    `detail.caller_chain` records the proximate-first frames the
+    decision was judged against (the call's
+    [`ToolContext.caller_chain`][tools.decorator.ToolContext]), so the
+    session log shows which agent/workflow a `from:`-scoped rule saw.
     """
 
     code = "tool.unauthorized"
     level = Level.DIAGNOSTIC
 
-    def __init__(
+    def __init__(  # noqa: PLR0913 — one kwarg per `detail` field
         self,
         tool_name: str,
         action: str,
         principal: str,
         matched_rule: dict[str, Any] | None = None,
         *,
+        caller_chain: CallerChain,
         where: str = "tools.dispatch.invoke",
     ) -> None:
         super().__init__(
@@ -71,6 +82,7 @@ class ToolUnauthorized(PlatformError):
                 "action": action,
                 "principal": principal,
                 "matched_rule": matched_rule,
+                "caller_chain": list(caller_chain.frames),
             },
         )
 

@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 from cli.chat.service_registry import ChatServiceRegistry
 from providers import DotenvSecretsProvider, NativeSandboxProvider
-from schemas import AgentId, SessionId, ThreadId
+from schemas import AgentId, CallerChain, SessionId, ThreadId
 from tools.decorator import ToolContext, ToolDefinition
 from tools.dispatch import dispatch_tool
 
@@ -85,6 +85,7 @@ def _ctx() -> ToolContext:
         workspace_root=None,
         path_policy=None,
         tool_call_id=None,
+        caller_chain=CallerChain.unattributed(),
     )
 
 

@@ -27,6 +27,8 @@ from uuid import uuid4
 
 import pytest
 
+from schemas import CallerChain
+
 if TYPE_CHECKING:
     from collections.abc import Iterator
     from types import ModuleType
@@ -220,6 +222,7 @@ def _ctx(
         principal="agent.ag_test",
         secrets={"OPENROUTER_API_KEY": _TEST_KEY} if secrets is None else secrets,
         cancellation=cancellation,
+        caller_chain=CallerChain.unattributed(),
     )
 
 

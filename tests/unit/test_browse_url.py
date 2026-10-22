@@ -34,6 +34,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+from schemas import CallerChain
+
 if TYPE_CHECKING:
     from types import ModuleType
 
@@ -87,6 +89,7 @@ def _ctx() -> ToolContext:
         thread_id=ThreadId(f"th_{uuid4()}"),
         principal=f"agent.{agent_id}",
         secrets={},
+        caller_chain=CallerChain.unattributed(),
     )
 
 

@@ -23,7 +23,7 @@ from uuid import uuid4
 import pytest
 
 from files import PathPolicy
-from schemas import AgentId, SessionId, ThreadId
+from schemas import AgentId, CallerChain, SessionId, ThreadId
 from tools import ToolContext
 from tools.discovery import discover_tools_in_file
 
@@ -64,6 +64,7 @@ def _ctx(tmp_path: Path, *, tool_call_id: str | None = "tc_unit_01") -> ToolCont
         workspace_root=tmp_path,
         path_policy=PathPolicy(allowed_paths=["logs/"], denied_paths=[]),
         tool_call_id=tool_call_id,
+        caller_chain=CallerChain.unattributed(),
     )
 
 
@@ -181,6 +182,7 @@ async def test_bash_persisted_path_under_workspace_logs(
         workspace_root=tmp_path,
         path_policy=PathPolicy(allowed_paths=["logs/"], denied_paths=[]),
         tool_call_id=call_id,
+        caller_chain=CallerChain.unattributed(),
     )
     BashArgs = bash._tool_definition.args_schema
 

@@ -22,6 +22,7 @@ from pydantic import BaseModel
 from engine.framework import ToolCall
 from engine.observers import _ObservedToolHandle
 from errors import ToolExecutionFailed
+from schemas import CallerChain
 from tools.decorator import ToolDefinition
 
 
@@ -71,6 +72,7 @@ async def test_recovery_hint_flows_through_observer() -> None:
         thread_id="th_00000000-0000-0000-0000-000000000002",
         tools_subsystem=_RaisingSubsystem(exc),
         defn=defn,
+        caller_chain=CallerChain.unattributed(),
     )
 
     result = await handle(ToolCall(name="probe", arguments={}, tool_call_id="tc_1"))
@@ -109,6 +111,7 @@ async def test_platform_error_without_recovery_hint_still_works() -> None:
         thread_id="th_00000000-0000-0000-0000-000000000002",
         tools_subsystem=_RaisingSubsystem(exc),
         defn=defn,
+        caller_chain=CallerChain.unattributed(),
     )
 
     result = await handle(ToolCall(name="probe", arguments={}, tool_call_id="tc_2"))

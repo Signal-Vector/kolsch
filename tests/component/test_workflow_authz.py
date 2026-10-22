@@ -579,6 +579,7 @@ def test_audit_level_field_on_pydantic_config_model() -> None:
 
 _SCOPED_WF = "kolsch/workflows/scoped"
 _OTHER_WF = "kolsch/workflows/other"
+_BASH_TOOL = "kolsch/tools/bash"
 
 
 async def _run_bash_workflow(
@@ -587,21 +588,29 @@ async def _run_bash_workflow(
     """Run a one-node ``kolsch/nodes/bash`` workflow as ``workflow_ref``
     under the platform rules ``[{bash, from: _SCOPED_WF, deny}, {*, allow}]``.
 
+    The bash tool is stamped ``home_bundle="kolsch"`` as production's
+    ``build_workflow_executor`` does, so the node authorizes as
+    ``kolsch/tools/bash``.
+
     Returns the terminal status and the run's ``policy.decision.made``
     events.
     """
     catalog = AssetCatalog()
-    for ref in (_SCOPED_WF, _OTHER_WF):
+    for ref, asset_type in (
+        (_SCOPED_WF, "workflow"),
+        (_OTHER_WF, "workflow"),
+        (_BASH_TOOL, "tool"),
+    ):
         catalog.assets[ref] = AssetEntry(
             ref=ref,
-            asset_type="workflow",
+            asset_type=asset_type,
             bundle="kolsch",
             path=f"/var/empty/{ref}",
             metadata={},
         )
     authz = _provider(
         rules=[
-            {"what": "tool.bash", "pattern": "*", "from": _SCOPED_WF, "effect": "deny"},
+            {"what": _BASH_TOOL, "pattern": "*", "from": _SCOPED_WF, "effect": "deny"},
             {"what": "*", "pattern": "*", "effect": "allow"},
         ],
         catalog=catalog,
@@ -612,10 +621,12 @@ async def _run_bash_workflow(
     root = tmp_path / workflow_ref.rsplit("/", 1)[-1]
     root.mkdir()
     policy = PathPolicy(allowed_paths=["."])
+    bash_defn = get_tool_definition(make_bash(policy=policy, root=root))
+    bash_defn.home_bundle = "kolsch"
     registry = RunnerRegistry()
     register_builtins(
         registry,
-        bash_defn=get_tool_definition(make_bash(policy=policy, root=root)),
+        bash_defn=bash_defn,
         authz=authz,
         secrets=DotenvSecretsProvider(root=root, config={"path": ".env"}),
         sandbox=NativeSandboxProvider(config={}),
@@ -648,7 +659,7 @@ async def test_workflow_scoped_deny_blocks_builtin_node_in_that_workflow(
     recorded decision was judged against a chain containing W."""
     status, decisions = await _run_bash_workflow(tmp_path, _SCOPED_WF)
 
-    bash_decisions = [d for d in decisions if d["payload"]["action"] == "tool.bash"]
+    bash_decisions = [d for d in decisions if d["payload"]["action"] == _BASH_TOOL]
     assert [d["payload"]["effect"] for d in bash_decisions] == ["deny"], (
         f"W's bash node must be denied by the W-scoped rule; status={status}, "
         f"decisions={[d['payload'] for d in bash_decisions]}"
@@ -663,6 +674,6 @@ async def test_workflow_scoped_deny_does_not_affect_other_workflow(
     """bug-158 AC4 — the same rule leaves bash in another workflow alone."""
     status, decisions = await _run_bash_workflow(tmp_path, _OTHER_WF)
 
-    bash_decisions = [d for d in decisions if d["payload"]["action"] == "tool.bash"]
+    bash_decisions = [d for d in decisions if d["payload"]["action"] == _BASH_TOOL]
     assert [d["payload"]["effect"] for d in bash_decisions] == ["allow"]
     assert status == "succeeded"

@@ -156,11 +156,15 @@ class ExecutionContext(BaseModel):
     an internal no-op token when omitted); `trace_id` for
     workflow→agent trace propagation (the workflow agent runner sets
     it so the spawned session's JSONL and the originating workflow's
-    JSONL share a single trace id); and `caller_chain` for authz
-    audit framing (the workflow agent runner prepends the agent's ref
-    so audit events record the workflow→agent frame). All three
-    defaults preserve backward-compatibility with callers that
-    haven't opted in.
+    JSONL share a single trace id); and `caller_chain`, the frames
+    that invoked this agent — **callers only**, proximate first (the
+    workflow agent runner passes the workflow frames). The engine
+    prepends the agent's own catalog ref to build the exchange's
+    [`CallerChain`][schemas.caller_chain.CallerChain], which every
+    authz check of the exchange (pre-flight and tool calls) is judged
+    against; chat / `kolsch run` / API callers leave it empty, so their
+    chain is just `(agent,)`. All three defaults preserve
+    backward-compatibility with callers that haven't opted in.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")

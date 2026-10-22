@@ -33,6 +33,7 @@ from errors import (
     ModelServerError,
     PlatformInternalError,
 )
+from schemas import CallerChain
 from tools.bridge import ToolBridgeServer
 from tools.decorator import ToolInfo
 
@@ -70,6 +71,7 @@ async def bridge() -> AsyncIterator[ToolBridgeServer]:
         thread_id="th_test",
         tools_subsystem=_StubSubsystem(),
         emit=_noop_emit,
+        caller_chain=CallerChain.unattributed(),
     )
     await server.open()
     try:

@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import pytest
 
-from schemas import AgentId, SessionId, ThreadId
+from schemas import AgentId, CallerChain, SessionId, ThreadId
 from tools.decorator import ToolContext
 from tools.services import ToolNotAvailable, require_services
 
@@ -18,6 +18,7 @@ def _base_ctx(**overrides: object) -> ToolContext:
         thread_id=ThreadId(f"th_{uuid4()}"),
         principal="test",
         secrets={},
+        caller_chain=CallerChain.unattributed(),
         **overrides,
     )
 

@@ -49,6 +49,7 @@ from errors import (
 )
 from schemas import (
     Actor,
+    CallerChain,
     Event,
     EventId,
     EventType,
@@ -843,7 +844,12 @@ def test_predicate_returns_false_for_non_model_errors() -> None:
     engine bugs.'"""
     from errors import ToolUnauthorized
 
-    err = ToolUnauthorized(tool_name="bash", action="tool.bash", principal="agent.x")
+    err = ToolUnauthorized(
+        tool_name="bash",
+        action="tool.bash",
+        principal="agent.x",
+        caller_chain=CallerChain.unattributed(),
+    )
     assert is_fallback_triggering(err) is False
 
 
