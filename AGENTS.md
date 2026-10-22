@@ -263,6 +263,14 @@ These are non-negotiable. Violating them blocks merges.
   unconditionally, but its constructor refuses unless
   `KOLSCH_TEST_BUILD=1`, and the runtime bootstrap always builds
   `rule_based`.
+- **Agent file tools can never write `platform.yaml`, `.kolsch/`,
+  `.env` or `.platform/`** — enforced by
+  `files.assert_writable_destination` (`files.PROTECTED_WRITE_PATHS`)
+  after authz, so no rule or `--auto-approve` reaches them. Every
+  write-capable file tool MUST call it; there is no switch to turn it
+  off. kolsch's own writers are Python (`cli.permissions._write_back`,
+  setup, connect) and don't go through it. `bundles/**` and `bash` are
+  outside the floor: treat write access to either as code execution.
 - **Every new CLI command or subcommand requires a smoke test
   in `tests/component/test_cli_smoke.py`.** No exceptions. The
   smoke test invokes the CLI in a fresh subprocess

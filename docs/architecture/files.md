@@ -69,12 +69,21 @@ code, not by configuration. No `platform.yaml` setting can let a
 tool write into the content sidecar — that would let a malicious
 agent corrupt the engine's own storage.
 
+**kolsch's own files are hard-denied for writes.** The same function
+refuses writes to `platform.yaml`, `.kolsch/`, `.env` and `.platform/`
+(`PROTECTED_WRITE_PATHS`), after authorization, so no rule or
+`--auto-approve` lets an agent change its own permissions through a
+file tool. Reads aren't affected by this. `bash` and `bundles/**` are
+outside it; see
+[File handling §4.8](../explanation/file-handling.md#48-the-protected-write-floor).
+
 **Defaults deny dotfiles people usually want to protect.** The
 default `platform.yaml` ships `.env` and `.platform/` in
-`denied_paths`. These are policy defaults — a workspace owner can
-edit them — so they're protected by convention rather than by code.
-`.git/` is not denied by default, so make sure to add a rule if you
-want it off-limits.
+`denied_paths`, which blocks reads too. These are policy defaults — a
+workspace owner can edit them — so reads are protected by convention;
+writes are protected by code (above). Deny matching ignores case, so
+`.ENV` can't get around a `.env` entry. `.git/` is not denied by
+default, so make sure to add a rule if you want it off-limits.
 
 ---
 

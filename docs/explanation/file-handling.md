@@ -203,19 +203,23 @@ In `platform.yaml`:
 ```yaml
 file_access:
   allowed_paths:
-    - "bundles/"
+    - "."
     - "data/"
+    - "bundles/"
     - "sessions/"
     - "content/"
     - "logs/"
+    - "platform.yaml"
   denied_paths:
     - ".env"
-    - "platform.yaml"
     - ".platform/"
 ```
 
 Two lists. Both lists hold path prefixes (relative to platform root)
-or absolute paths.
+or absolute paths. This is the default `kolsch setup` writes
+(`assets.platform_config.default_platform_payload`); `.` makes the
+workspace root itself listable and readable, so the narrower entries
+after it are redundant but kept for clarity.
 
 The platform pre-populates `allowed_paths` on first run with the
 standard folders (the ones in the example above). After first run, the
@@ -229,7 +233,8 @@ Given a requested path `P` (resolved to an absolute path):
 1. Normalize `P` (resolve `..`, follow symlinks if policy says to —
    v1 says it does, to prevent symlink-based escape).
 2. **Check denied_paths first.** If `P` is under any denied prefix or
-   equals any denied path: **deny**.
+   equals any denied path: **deny**. This comparison ignores case
+   (both sides are casefolded, per component).
 3. **Check allowed_paths.** If `P` is under any allowed prefix or
    equals any allowed path: **allow**.
 4. **Default deny.** Neither matched: **deny**.
@@ -238,9 +243,20 @@ Denies always win. The user adding `.env` to `allowed_paths` would NOT
 grant access — the deny rule still wins. This is intentional defense-
 in-depth for sensitive files.
 
+**Case.** Deny matching is case-insensitive; allow matching is exact.
+On a case-insensitive filesystem (default macOS APFS) `.ENV` opens the
+same file as `.env`, so a case-sensitive deny could be bypassed by
+changing case. Casefolding the deny closes that. On a case-sensitive
+filesystem (most Linux) it is a visible behaviour change, and a
+deliberate over-match: a `denied_paths: ["Secret/"]` entry also denies
+`secret/`, and a file that differs from a denied or protected name only
+by case (`.ENV`, `Platform.yaml`, `CONTENT/`) can't be read or written
+through file tools. Allow matching stays exact so case never *grants*
+access.
+
 ### 4.3 What's denied by default and why
 
-Three default denies. Each has a real reason.
+Two default denies. Each has a real reason.
 
 **`.env`** — secret values. The Secrets Provider is the legitimate
 mechanism for tool access to secrets, via `ToolContext.secrets`. Reading
@@ -248,19 +264,26 @@ mechanism for tool access to secrets, via `ToolContext.secrets`. Reading
 output (which gets captured in `tool.result` events, violating the
 "secrets never appear in events" invariant).
 
-**`platform.yaml`** — platform configuration. Contains the
-authorization rule list, the path policy itself, potentially provider
-configurations with sensitive defaults. A tool reading this could
-exfiltrate the security configuration. (And in some future variant
-where bundle configs nest in here, could leak more.)
-
 **`.platform/`** — platform-internal state. Caches, indexes,
 scratch. Not for tools.
 
+**`platform.yaml` is readable, not writable.** Earlier drafts of this
+contract listed `platform.yaml` as a default deny; the code never did,
+and the default lists it in `allowed_paths`. Reads stay allowed: the
+`platform` template variable already exposes the file to every agent
+prompt, it must never hold secrets (secrets live in `.env`), and the
+author-workflow agent reads it to find its target bundle. Writes are a
+different matter — an agent that could write `platform.yaml` could
+grant itself any permission — so file tools can never write it,
+whatever `file_access` or authorization says. See §4.8.
+
 ### 4.4 What's allowed by default and why
 
-Five default allows. The user can trim these on the principle of least
-privilege.
+Seven default allows. The user can trim these on the principle of
+least privilege.
+
+**`.`** — the workspace root, so agents can list and read it
+(`qol-workspace-root-listable`). It also covers every entry below.
 
 **`bundles/`** — installed bundles. Tools and skills need to read
 their own bundle's supporting files (a tool's helper script, a skill's
@@ -283,6 +306,9 @@ default; removable.
 
 **`logs/`** — platform diagnostic logs. Same logic as `sessions/` —
 useful for some tools, mostly not needed. Allowed by default.
+
+**`platform.yaml`** — readable, for the reasons in §4.3. Writes are
+refused by the protected write floor (§4.8) regardless of this entry.
 
 ### 4.5 Adding entries (user grants)
 
@@ -381,6 +407,67 @@ policy. For v1, this is an honest gap.
 
 The v1 scope document should note this gap. The path policy is
 "best-effort for `read`/`write`/`edit`; bypassable via `bash`."
+
+### 4.8 The protected write floor
+
+Some workspace files control kolsch itself. File tools can never write
+them, whatever `file_access` or authorization says
+(`files.PROTECTED_WRITE_PATHS`):
+
+| Path | Why |
+|---|---|
+| `platform.yaml` | Authorization rules, `file_access`, provider topology. Writing it means granting yourself any permission. |
+| `.kolsch/` | Setup's bundle baseline and rule ledgers. Tampering hides future security-default offers. |
+| `.env` | Secrets and endpoint-redirect environment variables. |
+| `.platform/` | The session store database. |
+
+`files.assert_writable_destination` enforces the floor. Every
+write-capable file tool calls it from its body: the starter
+`write_file` tool (installed copies import it from the platform, so
+existing workspaces are covered without re-syncing), the
+`tools.builtins` `write` / `edit` / `write_file` factories, and the
+workflow `kolsch/nodes/write_file` node. The check runs **after**
+authorization, so no authz outcome reaches these paths: not an
+allow-all rule set, not a workflow `policy:` or agent / bundle
+`permissions:` allow, not `kolsch chat --auto-approve`, and not a
+`write_file` allow with a `dir/*` pattern (which also matches
+`dir/../platform.yaml`, because rule patterns match the raw path
+argument). The target is resolved first (symlinks and `..` followed)
+and compared casefolded per component; an existing target that is the
+same file as a protected one (a hard link) is refused too. A refusal
+is `file_access.denied` with `matched_rule.type ==
+"protected_write_floor"`.
+
+The floor is not configurable: no config key or environment variable
+turns it off, so an agent can't disable it by editing a file it can
+reach. People change these files with `kolsch permissions`, the
+approval modal's "always allow", `kolsch connect`, `kolsch setup`, or an
+editor; those writers are Python and never go through file tools.
+
+**What the floor does not cover.**
+
+- **`bash`.** The shell isn't path-checked and the `native` sandbox is
+  a passthrough (§4.7). An agent allowed to run `bash` can write
+  anything, these files included.
+- **`bundles/**`.** Agents legitimately write there (the
+  author-workflow agent writes workflows and `@node` files), so it is
+  not floored. But writing `bundles/**` is equivalent to running code:
+  an agent can author a tool or an `@node` `.py` that runs in-process,
+  rewrite a tool file such as `bundles/kolsch/tools/write_file.py`
+  itself, or widen an agent's `permissions:`, a workflow's `policy:`
+  (applies on the workflow's next run, with no `/reload`), or a
+  bundle's `permissions:`. Treat write access to `bundles/**` like
+  `bash`.
+- **Processes outside kolsch**, and races an agent with `bash` could
+  run against the check (TOCTOU).
+- **Anything outside the workspace root.** Entries are relative to
+  the workspace root only. A store or config relocated elsewhere, or a
+  second workspace reachable through an absolute `allowed_paths`
+  entry, is not floored.
+
+`kolsch doctor`'s "Agent write access" section lists the floor and
+flags any platform `allow` rule that lets agents run `bash` or write
+`bundles/` without asking.
 
 ---
 
@@ -500,6 +587,26 @@ use OS tempdir for ephemeral outputs. Tools MUST NOT write to
 The platform MUST NOT automatically copy files referenced via
 `file_ref` into the content store or any other archival location.
 Replay sees current file state.
+
+### Fh-I11 — Protected write floor
+
+No file-tool write (agent `write_file`, the workflow
+`kolsch/nodes/write_file` node, the `tools.builtins` `write` / `edit` /
+`write_file` factories, or any future write-capable file tool) may
+create, overwrite or replace a path under `platform.yaml`, `.kolsch/`,
+`.env` or `.platform/` relative to the workspace root, under any
+authorization outcome (§4.8). Every write-capable file tool MUST call
+`files.assert_writable_destination` before writing. Matching MUST use
+the resolved target and MUST ignore case. The floor MUST NOT be
+configurable. kolsch's own writers of these files MUST NOT go through
+file tools.
+
+The floor does not constrain `bash` (Fh-I6) or `bundles/**`. Writing
+`bundles/**` is equivalent to code execution and is a trust boundary
+equal to `bash`. It covers paths relative to the workspace root only,
+not a relocated store or another workspace reachable through an
+absolute `allowed_paths` entry. Fh-I5 (`content/`) is enforced by the
+same function.
 
 ---
 
