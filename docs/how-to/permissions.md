@@ -781,24 +781,48 @@ See [File Handling §4.8](../explanation/file-handling.md#48-the-protected-write
   So `{what: kolsch/tools/write_file, pattern: "data/*", effect: allow}`
   also allows `data/../bundles/x/agents/y.yaml`. Prefer `prompt` for
   `write_file` over a narrow-looking `allow`.
-- **Claude Code's own tools.** An agent on the `claude_code` provider
-  that uses Claude Code's built-in tools (rather than kolsch tools
-  through the MCP bridge) is governed by your Claude Code settings, not
-  by kolsch rules or this floor.
+- **Claude Code's own tools.** kolsch starts Claude Code with no tools
+  (text-only agents) or with `--allowedTools` listing only the kolsch
+  tools it bridges, which go through kolsch rules and this floor. But
+  Claude Code also loads your user settings (`~/.claude/settings.json`),
+  and any built-in tool those settings allow (`Write`, `Edit`, `Bash`)
+  is governed by Claude Code, not by kolsch rules or this floor.
 
 ### Check your workspace
 
 `kolsch doctor` prints an **Agent write access** section. It lists the
-protected paths and flags every platform `allow` rule that lets agents
-run `bash`, or write under `bundles/`, without asking. The section is
+protected paths, then checks the `allow` rules in `platform.yaml` for
+three things:
+
+- an `allow` for `kolsch/tools/bash` (including `*` and
+  `kolsch/tools/*`);
+- an `allow` for `write_file` whose pattern points into `bundles/`:
+  `bundles/*`, `bundles/<name>/*`, a literal path under `bundles/`, the
+  same under the absolute workspace path, or `*`;
+- any other `allow` for `write_file` whose pattern contains `*`, such
+  as `data/*`. Because patterns match the path as written, these also
+  reach `bundles/` through `../`.
+
+Matching rules are grouped into one line per kind, by position and the
+id `kolsch permissions list` shows. `prompt` and `deny` rules,
+patterns without `*` outside `bundles/`, and rules for other tools are
+not flagged. Doctor doesn't consider rule order, so an `allow` that an
+earlier `deny` shadows is still reported. Agent, workflow and bundle
+`permissions:` / `policy:` layers aren't checked. The section is
 advisory: doctor's exit code doesn't change.
 
 ```text
 Agent write access — advisory, exit code unchanged:
   agent file tools can never write: platform.yaml, .kolsch/, .env, .platform/ (whatever the rules allow)
-  ! rule 2, `what: kolsch/tools/write_file`, `pattern: bundles/*`, allow: agents can change bundle code and permission YAML without asking (equivalent to running code).
+  ! rules 1 (rl_4f188373), 2 (rl_d125ce8f) allow `write_file` under `bundles/` without asking: agents can change bundle code and permission YAML (equivalent to running code).
+  ! rule 3 (rl_cff8db4b) allow `write_file` on a `*` pattern without asking: rule patterns match the path as the agent wrote it, so `*` also matches `../` and these rules reach `bundles/` too (until authz patterns are matched against normalized paths).
+  see these rules (by id) with `kolsch permissions list`.
   note: `kolsch chat --auto-approve` turns every `prompt` rule into an allow.
 ```
+
+With none of those rules, the section ends with `✓ no rule allows
+`bash`, and no rule allows `write_file` under `bundles/` or with a `*`
+pattern, without asking`.
 
 ---
 

@@ -68,7 +68,8 @@ running session's tools to an in-workflow external-harness agent.
 integrity, and common misconfigurations, including (advisory) a missing
 or misplaced authorization default-deny tail, and an "Agent write
 access" section that lists the paths agents can never write and flags
-rules that let agents run `bash` or write `bundles/` without asking.
+`allow` rules for `bash`, and `write_file` allows that point into
+`bundles/` or use a `*` pattern.
 
 ## Failure output and logging
 

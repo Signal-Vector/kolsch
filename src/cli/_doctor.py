@@ -44,9 +44,10 @@ contract. qol-093 will consume the same detection logic for its
 
 from __future__ import annotations
 
+import posixpath
 import re
 from fnmatch import fnmatchcase
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from cli._bundle_baseline import (
     read_baseline,
@@ -60,6 +61,7 @@ from files import PROTECTED_WRITE_PATHS
 from kolsch._yamlio import YAMLError
 from kolsch._yamlio import load as _yaml_load
 from providers.authz import (
+    derive_rule_id,
     describe_default_deny_tail_problem,
     inspect_default_deny_tail,
     platform_rules_from_config,
@@ -264,13 +266,29 @@ _WRITE_FILE_REFS = (
     "kolsch/nodes/write_file",
     "tool.write_file",
 )
-_BASH_CONSEQUENCE = (
-    "agents can run shell commands without asking, which bypasses every "
-    "file protection, including this one"
+_GLOB_CHARS = "*?["
+
+# One finding line per class: (subject, consequence). Rule labels are
+# grouped into the subject so N near-identical rules give one line.
+_BASH_FINDING = (
+    "allow `bash` without asking",
+    "agents can run shell commands, which bypasses every file protection, "
+    "including this one. A `*` in a bash pattern also matches "
+    "`; <any command>`.",
 )
-_BUNDLES_CONSEQUENCE = (
-    "agents can change bundle code and permission YAML without asking "
-    "(equivalent to running code)"
+_BUNDLES_FINDING = (
+    "allow `write_file` under `bundles/` without asking",
+    "agents can change bundle code and permission YAML (equivalent to running code).",
+)
+_WILDCARD_FINDING = (
+    "allow `write_file` on a `*` pattern without asking",
+    "rule patterns match the path as the agent wrote it, so `*` also "
+    "matches `../` and these rules reach `bundles/` too (until authz "
+    "patterns are matched against normalized paths).",
+)
+_ALL_CLEAR = (
+    "no rule allows `bash`, and no rule allows `write_file` under "
+    "`bundles/` or with a `*` pattern, without asking"
 )
 
 
@@ -296,53 +314,100 @@ def _agent_write_access(workspace_root: Path) -> list[str] | str:
     rules = platform_rules_from_config(data["authorization"].get("config", {}))
     if rules is None:  # unreachable after `_authz_shape_problem`; keeps mypy honest
         return "`authorization.config.rules` is not a list"
-    return _agent_write_access_findings(
-        [r for r in rules if isinstance(r, dict)], workspace_root
-    )
+    return _agent_write_access_findings(rules, workspace_root)
 
 
-def _agent_write_access_findings(rules: list[dict[str, Any]], root: Path) -> list[str]:
+def _agent_write_access_findings(rules: list[object], root: Path) -> list[str]:
     """Flag platform `allow` rules that route around the write floor.
 
-    Pure. Two findings, per bug-161 SC2:
+    Pure. Three classes, per bug-161 SC2 / SC7, one line each with the
+    matching rule numbers (1-based positions in the raw list, so
+    non-mapping entries, which are skipped, don't shift the numbers):
 
-    - an `allow` rule whose `what` covers `kolsch/tools/bash`;
-    - an `allow` rule whose `what` covers `write_file` and whose
-      `pattern` covers `bundles/x` (relative) or `<root>/bundles/x`
-      (absolute). A `dir/*` pattern counts too when it matches through
-      `..`, but only these two literal probes are checked.
+    - **bash** — an `allow` rule whose `what` covers `kolsch/tools/bash`.
+    - **bundles** — a `write_file` `allow` rule that reaches
+      `bundles/`: its pattern matches `bundles/x` or `<root>/bundles/x`,
+      or the literal part before its first glob character (normalized)
+      sits under `bundles/` or `<root>/bundles/`. Compared casefolded,
+      since the filesystem may be case-insensitive. A legacy rule has
+      no target pattern, so a legacy `write_file` allow counts.
+    - **wildcard** — any other `write_file` `allow` whose pattern
+      contains `*`. Patterns match the raw path argument, so `*` also
+      matches `../` and reaches `bundles/` (and the rest of the
+      workspace) — spec F1.
 
-    New-shape rules match `what`/`pattern` with `fnmatchcase`, as the
-    provider does. Legacy rules (`who` present) fullmatch `what` as a
-    regex and have no target pattern, so a legacy `write_file` allow
-    covers `bundles/` too. Rule order is not considered: an `allow`
-    shadowed by an earlier `deny` is still reported (advisory).
+    `?` and `[...]` patterns without `*` aren't flagged (they match a
+    bounded number of characters). New-shape rules match `what` with
+    `fnmatchcase`, as the provider does; legacy rules (`who` present)
+    fullmatch `what` as a regex. Rule order is not considered: an
+    `allow` shadowed by an earlier `deny` is still reported (advisory).
     """
-    bundle_targets = ("bundles/x", str(root / "bundles" / "x"))
-    findings: list[str] = []
+    bash: list[str] = []
+    bundles: list[str] = []
+    wildcard: list[str] = []
     for index, rule in enumerate(rules):
-        if rule.get("effect") != "allow":
+        if not isinstance(rule, dict) or rule.get("effect") != "allow":
             continue
         what = str(rule.get("what", ""))
-        pattern = str(rule.get("pattern", "*"))
+        label = f"{index + 1} ({_rule_id(rule)})"
         if "who" in rule:
-            covers_bash = _legacy_what_covers(what, _BASH_REFS)
-            covers_bundles = _legacy_what_covers(what, _WRITE_FILE_REFS)
-            shape = f"`what: {what}` (legacy)"
-        else:
-            covers_bash = any(fnmatchcase(ref, what) for ref in _BASH_REFS)
-            covers_bundles = any(
-                fnmatchcase(ref, what) for ref in _WRITE_FILE_REFS
-            ) and any(fnmatchcase(t, pattern) for t in bundle_targets)
-            shape = f"`what: {what}`, `pattern: {pattern}`"
-        label = f"rule {index + 1}"
-        if rule.get("id"):
-            label += f" ({rule['id']})"
-        if covers_bash:
-            findings.append(f"{label}, {shape}, allow: {_BASH_CONSEQUENCE}.")
-        if covers_bundles:
-            findings.append(f"{label}, {shape}, allow: {_BUNDLES_CONSEQUENCE}.")
+            if _legacy_what_covers(what, _BASH_REFS):
+                bash.append(label)
+            if _legacy_what_covers(what, _WRITE_FILE_REFS):
+                bundles.append(label)
+            continue
+        if any(fnmatchcase(ref, what) for ref in _BASH_REFS):
+            bash.append(label)
+        if not any(fnmatchcase(ref, what) for ref in _WRITE_FILE_REFS):
+            continue
+        pattern = str(rule.get("pattern", "*"))
+        if _pattern_reaches_bundles(pattern, root):
+            bundles.append(label)
+        elif "*" in pattern:
+            wildcard.append(label)
+    findings: list[str] = []
+    for labels, (subject, consequence) in (
+        (bash, _BASH_FINDING),
+        (bundles, _BUNDLES_FINDING),
+        (wildcard, _WILDCARD_FINDING),
+    ):
+        if labels:
+            noun = "rule" if len(labels) == 1 else "rules"
+            findings.append(f"{noun} {', '.join(labels)} {subject}: {consequence}")
     return findings
+
+
+def _rule_id(rule: dict[str, object]) -> str:
+    """The id `kolsch permissions list` shows for `rule` (explicit or derived)."""
+    explicit = rule.get("id")
+    if explicit:
+        return str(explicit)
+    what = str(rule.get("what", ""))
+    effect = str(rule.get("effect", ""))
+    if "who" in rule:
+        return derive_rule_id(str(rule["who"]), what, effect)
+    return derive_rule_id(".*", f"{what}|{rule.get('pattern', '*')}", effect)
+
+
+def _pattern_reaches_bundles(pattern: str, root: Path) -> bool:
+    """Return `True` when a `write_file` pattern targets `bundles/` directly."""
+    bundles_dirs = ("bundles", str(root / "bundles"))
+    probes = ("bundles/x", str(root / "bundles" / "x"))
+    folded = pattern.casefold()
+    if any(fnmatchcase(p.casefold(), folded) for p in probes):
+        return True
+    literal = pattern
+    for i, char in enumerate(pattern):
+        if char in _GLOB_CHARS:
+            literal = pattern[:i]
+            break
+    if not literal:
+        return False
+    prefix = posixpath.normpath(literal).casefold()
+    return any(
+        prefix == d.casefold() or prefix.startswith(d.casefold() + "/")
+        for d in bundles_dirs
+    )
 
 
 def _legacy_what_covers(what: str, refs: tuple[str, ...]) -> bool:
@@ -440,9 +505,11 @@ def _render_agent_write_access(findings: list[str] | str, *, out: TextIO) -> Non
         out.write(f"  ? couldn't check agent write access: {findings}.\n")
         return
     if not findings:
-        out.write("  ✓ no rule lets agents write bundles/ or run bash without asking\n")
+        out.write(f"  ✓ {_ALL_CLEAR}\n")
     for line in findings:
         out.write(f"  ! {line}\n")
+    if findings:
+        out.write("  see these rules (by id) with `kolsch permissions list`.\n")
     out.write(
         "  note: `kolsch chat --auto-approve` turns every `prompt` rule "
         "into an allow.\n"

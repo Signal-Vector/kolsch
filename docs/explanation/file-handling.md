@@ -466,8 +466,11 @@ editor; those writers are Python and never go through file tools.
   entry, is not floored.
 
 `kolsch doctor`'s "Agent write access" section lists the floor and
-flags any platform `allow` rule that lets agents run `bash` or write
-`bundles/` without asking.
+flags platform `allow` rules for `bash`, `write_file` allows whose
+pattern points into `bundles/`, and other `write_file` allows whose
+pattern contains `*` (which reaches `bundles/` through `../`). See
+[Manage Permissions](../how-to/permissions.md#check-your-workspace)
+for exactly what it checks.
 
 ---
 

@@ -575,54 +575,121 @@ _WRITE_ACCESS = "Agent write access — advisory, exit code unchanged:"
 _FLOOR_LINE = (
     "agent file tools can never write: platform.yaml, .kolsch/, .env, .platform/"
 )
-_BASH_LINE = "agents can run shell commands without asking"
-_BUNDLES_LINE = "agents can change bundle code and permission YAML without asking"
+_ALL_CLEAR = (
+    "✓ no rule allows `bash`, and no rule allows `write_file` under "
+    "`bundles/` or with a `*` pattern, without asking"
+)
+_BASH_LINE = "allow `bash` without asking: agents can run shell commands"
+_BUNDLES_LINE = "allow `write_file` under `bundles/` without asking"
+_WILDCARD_LINE = "allow `write_file` on a `*` pattern without asking"
+
+
+def _rid(rule: dict[str, Any]) -> str:
+    from providers.authz import derive_rule_id
+
+    return derive_rule_id(
+        ".*", f"{rule['what']}|{rule.get('pattern', '*')}", rule["effect"]
+    )
+
+
+async def _doctor_with(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, extra: list[dict[str, Any]]
+) -> str:
+    await _run_install(tmp_path, monkeypatch)
+    _edit_rules(tmp_path, lambda rules: [*extra, *rules])
+    hash_before = _dir_hash(tmp_path)
+    out = io.StringIO()
+    rc = await cmd_doctor(argparse.Namespace(), out=out, root=tmp_path)
+    text = out.getvalue()
+    assert rc == 0, text  # advisory: never changes the exit code
+    assert _dir_hash(tmp_path) == hash_before  # read-only
+    assert _WRITE_ACCESS in text
+    assert _FLOOR_LINE in text
+    return text
+
+
+def _wf(pattern: str) -> dict[str, Any]:
+    return {"what": "kolsch/tools/write_file", "pattern": pattern, "effect": "allow"}
 
 
 async def test_agent_write_access_setup_defaults_have_no_findings(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    await _run_install(tmp_path, monkeypatch)
-    out = io.StringIO()
-    rc = await cmd_doctor(argparse.Namespace(), out=out, root=tmp_path)
-    text = out.getvalue()
-    assert rc == 0, text
-    assert _WRITE_ACCESS in text
-    assert _FLOOR_LINE in text
-    assert "no rule lets agents write bundles/ or run bash without asking" in text
+    text = await _doctor_with(tmp_path, monkeypatch, [])
+    assert _ALL_CLEAR in text
     assert "--auto-approve" in text
-    assert _BASH_LINE not in text
-    assert _BUNDLES_LINE not in text
+    assert "  ! " not in text
 
 
-async def test_agent_write_access_owner_shaped_rules_flag_both_write_allows(
+async def test_agent_write_access_owner_shaped_rules_are_grouped(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The owner's workspace: absolute-root `*` and `bundles/*` allows."""
-    await _run_install(tmp_path, monkeypatch)
-    owner_rules = [
-        {
-            "what": "kolsch/tools/write_file",
-            "pattern": f"{tmp_path}/*",
-            "effect": "allow",
-        },
-        {"what": "kolsch/tools/write_file", "pattern": "bundles/*", "effect": "allow"},
+    """The owner's workspace shape: absolute-root `*`, `bundles/*`,
+    `bundles/<name>/*`, and an absolute allow outside the workspace."""
+    owner = [
+        _wf(f"{tmp_path}/*"),
+        _wf("bundles/*"),
+        _wf("bundles/andre/*"),
+        _wf(f"{tmp_path.parent}/Resumes/*"),
     ]
-    _edit_rules(tmp_path, lambda rules: [*owner_rules, *rules])
-    hash_before = _dir_hash(tmp_path)
+    text = await _doctor_with(tmp_path, monkeypatch, owner)
+    bundles = [line for line in text.splitlines() if _BUNDLES_LINE in line]
+    assert bundles == [
+        f"  ! rules 1 ({_rid(owner[0])}), 2 ({_rid(owner[1])}), "
+        f"3 ({_rid(owner[2])}) allow `write_file` under `bundles/` without "
+        "asking: agents can change bundle code and permission YAML "
+        "(equivalent to running code)."
+    ]
+    wildcard = [line for line in text.splitlines() if _WILDCARD_LINE in line]
+    assert len(wildcard) == 1
+    assert wildcard[0].startswith(f"  ! rule 4 ({_rid(owner[3])}) allow")
+    assert "`*` also matches `../`" in wildcard[0]
+    assert "kolsch permissions list" in text
+    assert _ALL_CLEAR not in text
 
-    out = io.StringIO()
-    rc = await cmd_doctor(argparse.Namespace(), out=out, root=tmp_path)
-    text = out.getvalue()
-    assert rc == 0, text
-    flagged = [line for line in text.splitlines() if _BUNDLES_LINE in line]
-    assert len(flagged) == 2, text
-    assert flagged[0].startswith("  ! rule 1, ")
-    assert f"`pattern: {tmp_path}/*`" in flagged[0]
-    assert flagged[1].startswith("  ! rule 2, ")
-    assert "`pattern: bundles/*`" in flagged[1]
-    assert _BASH_LINE not in text
-    assert _dir_hash(tmp_path) == hash_before
+
+@pytest.mark.parametrize(
+    "pattern",
+    [
+        "bundles/*",
+        "bundles/mine/*",
+        "bundles/mine/nodes/n.py",
+        "./bundles/mine/*",
+        "data/../bundles/x/nodes/n.py",
+        "Bundles/mine/*",
+        "bundles",
+        "{root}/bundles/mine/*",
+        "*",
+    ],
+)
+async def test_agent_write_access_bundles_reach_is_flagged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pattern: str
+) -> None:
+    text = await _doctor_with(
+        tmp_path, monkeypatch, [_wf(pattern.replace("{root}", str(tmp_path)))]
+    )
+    assert _BUNDLES_LINE in text, text
+    assert _WILDCARD_LINE not in text
+    assert _ALL_CLEAR not in text
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    ["data/*", "logs/*.txt", "/elsewhere/Resumes/*", "data/../logs/*"],
+)
+async def test_agent_write_access_star_pattern_is_flagged_as_dotdot_reach(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pattern: str
+) -> None:
+    """A `*` in a write_file pattern matches `../` (raw-path matching), so
+    `data/*` also allows `data/../bundles/x/nodes/n.py` (spec F1)."""
+    from fnmatch import fnmatchcase
+
+    if pattern == "data/*":
+        assert fnmatchcase("data/../bundles/x/nodes/n.py", pattern)
+    text = await _doctor_with(tmp_path, monkeypatch, [_wf(pattern)])
+    assert _WILDCARD_LINE in text, text
+    assert _BUNDLES_LINE not in text
+    assert _ALL_CLEAR not in text
 
 
 @pytest.mark.parametrize(
@@ -637,21 +704,23 @@ async def test_agent_write_access_owner_shaped_rules_flag_both_write_allows(
 async def test_agent_write_access_bash_allow_is_flagged(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rule: dict[str, Any]
 ) -> None:
-    await _run_install(tmp_path, monkeypatch)
-    _edit_rules(tmp_path, lambda rules: [rule, *rules])
-    out = io.StringIO()
-    rc = await cmd_doctor(argparse.Namespace(), out=out, root=tmp_path)
-    text = out.getvalue()
-    assert rc == 0, text
-    assert _BASH_LINE in text
+    text = await _doctor_with(tmp_path, monkeypatch, [rule])
+    assert _BASH_LINE in text, text
     assert "bypasses every file protection, including this one" in text
+    assert "also matches `; <any command>`" in text
+    assert _ALL_CLEAR not in text
 
 
 @pytest.mark.parametrize(
     "rule",
     [
-        {"what": "kolsch/tools/write_file", "pattern": "data/*", "effect": "allow"},
         {"what": "kolsch/tools/write_file", "pattern": "bundles/*", "effect": "prompt"},
+        {
+            "what": "kolsch/tools/write_file",
+            "pattern": "data/notes.md",
+            "effect": "allow",
+        },
+        {"what": "kolsch/tools/write_file", "pattern": "data/?", "effect": "allow"},
         {"what": "kolsch/tools/bash", "pattern": "*", "effect": "deny"},
         {"what": "kolsch/tools/read_file", "pattern": "bundles/*", "effect": "allow"},
         {"who": ".*", "what": "[unclosed", "effect": "allow"},
@@ -660,33 +729,41 @@ async def test_agent_write_access_bash_allow_is_flagged(
 async def test_agent_write_access_non_findings(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rule: dict[str, Any]
 ) -> None:
-    await _run_install(tmp_path, monkeypatch)
-    _edit_rules(tmp_path, lambda rules: [rule, *rules])
-    out = io.StringIO()
-    rc = await cmd_doctor(argparse.Namespace(), out=out, root=tmp_path)
-    text = out.getvalue()
-    assert rc == 0, text
-    assert _BASH_LINE not in text
-    assert _BUNDLES_LINE not in text
+    text = await _doctor_with(tmp_path, monkeypatch, [rule])
+    assert _ALL_CLEAR in text, text
+    assert "  ! " not in text
 
 
-async def test_agent_write_access_catch_all_allow_flags_both(
+async def test_agent_write_access_catch_all_allow_flags_bash_and_bundles(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    await _run_install(tmp_path, monkeypatch)
-    _edit_rules(
+    text = await _doctor_with(
         tmp_path,
-        lambda rules: [
-            {"id": "rl_wide", "what": "*", "pattern": "*", "effect": "allow"},
-            *rules,
-        ],
+        monkeypatch,
+        [{"id": "rl_wide", "what": "*", "pattern": "*", "effect": "allow"}],
     )
-    out = io.StringIO()
-    rc = await cmd_doctor(argparse.Namespace(), out=out, root=tmp_path)
-    text = out.getvalue()
-    assert rc == 0, text
-    assert f"rule 1 (rl_wide), `what: *`, `pattern: *`, allow: {_BASH_LINE}" in text
+    assert "  ! rule 1 (rl_wide) allow `bash` without asking" in text
+    assert "  ! rule 1 (rl_wide) allow `write_file` under `bundles/`" in text
+
+
+async def test_agent_write_access_legacy_write_allow_counts_as_bundles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    text = await _doctor_with(
+        tmp_path,
+        monkeypatch,
+        [{"who": ".*", "what": "tool\\.write_file", "effect": "allow"}],
+    )
     assert _BUNDLES_LINE in text
+
+
+async def test_agent_write_access_rule_numbers_skip_non_mapping_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Numbers are positions in the raw list, so a stray non-mapping
+    entry doesn't shift them."""
+    text = await _doctor_with(tmp_path, monkeypatch, ["junk", _wf("bundles/*")])  # type: ignore[list-item]
+    assert f"  ! rule 2 ({_rid(_wf('bundles/*'))}) allow `write_file`" in text
 
 
 async def test_agent_write_access_does_not_change_drift_rc(
@@ -736,3 +813,4 @@ async def test_agent_write_access_unreadable_says_couldnt_check(
     assert rc == 0, text
     assert _FLOOR_LINE in text
     assert f"couldn't check agent write access: {reason}." in text
+    assert _ALL_CLEAR not in text
