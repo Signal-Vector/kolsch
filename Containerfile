@@ -75,16 +75,16 @@ COPY tests ./tests
 COPY AGENTS.md ./AGENTS.md
 COPY docs ./docs
 
-# bundles/ is the tracked `kolsch` agent bundle (bundle.yaml +
-# tools/*.py + *.yaml). It is NOT under src/ and is NOT installed as
-# package data — the test suite loads it straight from the committed
-# tree via repo-root-relative paths (e.g.
-# `Path(__file__).resolve().parents[4] / "bundles"` in
-# tests/bundles/**, plus bundle-referencing tests under
-# tests/component, tests/integration, tests/unit). Without this COPY
-# those tests fail in the gate with `ToolSetupFailed: tool file does
-# not exist: /workspace/bundles/...`.
-COPY bundles ./bundles
+# examples/ holds the feat-009 tutorial example bundle
+# (examples/bundles/card_examples/: bundle.yaml + tools/*.py + *.yaml).
+# It is NOT under src/, NOT package data and NOT shipped — the
+# platform's own tools live only in src/cli/_starter_bundle/kolsch/
+# (bug-153). The tutorial-tool tests load it straight from the
+# committed tree via tests/fixtures/bundle_paths.py
+# (CARD_EXAMPLES_TOOLS_DIR, used by tests/bundles/kolsch/tools/
+# conftest.py). Without this COPY those tests fail in the gate with
+# `ToolSetupFailed: tool file does not exist: /workspace/examples/...`.
+COPY examples ./examples
 
 # Install the project package itself (editable in-tree).
 # id=uv-cache-v3: same cache as the dependency layer above — see that

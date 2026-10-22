@@ -17,6 +17,7 @@ mocks, in the style of ``test_run_workflow_error_message_shape.py``.
 
 from __future__ import annotations
 
+import sys
 from typing import Any
 from uuid import uuid4
 
@@ -33,13 +34,7 @@ _TOOLS_DIR = STARTER_TOOLS_DIR
 _RUN_ID = f"wrk_{uuid4()}"
 _ON_DISK_RUN_ID = f"wrk_{uuid4()}"
 
-_MAX_STATUS_POLLS = 10
-"""Upper bound on ``status`` polls before the mock fails the test.
-
-A 1-second platform default at the tool's 0.5s poll interval is two
-polls. A tool that ignores the platform default and falls back to 300s
-would poll 600 times, so the mock raises instead of letting it block.
-"""
+_PLATFORM_DEFAULT_TIMEOUT_SECONDS = 1
 
 
 class _MockCard:
@@ -62,8 +57,9 @@ class _NeverTerminalWorkflows:
     when ``platform.yaml:workflows.default_timeout_seconds`` is set.
     """
 
-    def __init__(self, *, default_timeout_seconds: int) -> None:
+    def __init__(self, *, default_timeout_seconds: int, max_polls: int) -> None:
         self._default_timeout_seconds = default_timeout_seconds
+        self._max_polls = max_polls
         self.status_polls = 0
 
     @property
@@ -82,7 +78,7 @@ class _NeverTerminalWorkflows:
 
     def status(self, run_id: Any) -> WorkflowRunStatusView:
         self.status_polls += 1
-        if self.status_polls > _MAX_STATUS_POLLS:
+        if self.status_polls > self._max_polls:
             msg = (
                 f"run_workflow polled status {self.status_polls} times; "
                 f"it ignored default_timeout_seconds="
@@ -119,7 +115,16 @@ def _mk_ctx(*, cards: Any = None, workflows: Any = None) -> ToolContext:
 async def test_run_workflow_uses_platform_default_timeout() -> None:
     """Omitting ``timeout_seconds`` blocks for the platform default, not 300s."""
     run_workflow = load_bundle_tool(_TOOLS_DIR, "run_workflow.py", "run_workflow")
-    workflows = _NeverTerminalWorkflows(default_timeout_seconds=1)
+    # Derive the expected poll count from the tool's own interval so the
+    # test doesn't pin it. A tool that ignores the platform default and
+    # falls back to 300s polls far more often, so the mock fails past a
+    # small margin instead of letting it block.
+    poll_interval = sys.modules[run_workflow.__module__]._POLL_INTERVAL_SECONDS
+    expected_polls = max(1, int(_PLATFORM_DEFAULT_TIMEOUT_SECONDS / poll_interval))
+    workflows = _NeverTerminalWorkflows(
+        default_timeout_seconds=_PLATFORM_DEFAULT_TIMEOUT_SECONDS,
+        max_polls=expected_polls + 5,
+    )
     ctx = _mk_ctx(cards=_MockCards(), workflows=workflows)
 
     defn = get_tool_definition(run_workflow)
@@ -129,7 +134,7 @@ async def test_run_workflow_uses_platform_default_timeout() -> None:
     assert result["phase"] == "running"
     assert result["run_id"] == _RUN_ID
     assert result["note"].startswith("Workflow still running after 1 seconds;")
-    assert workflows.status_polls == 2
+    assert workflows.status_polls == expected_polls
 
 
 @pytest.mark.asyncio

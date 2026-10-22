@@ -1,8 +1,9 @@
 # Keep the container build context lean. The Containerfile copies
-# pyproject.toml, uv.lock, README.md, src/, tests/, docs/, and
-# AGENTS.md (the last two are force-included by hatchling as package
-# data); everything else is noise that slows builds and confuses
-# caching.
+# pyproject.toml, uv.lock, README.md, src/, tests/, docs/, AGENTS.md
+# (docs/ and AGENTS.md are force-included by hatchling as package
+# data), examples/ (the tutorial example bundle the tests load) and
+# scripts/ (commit-gate helpers); everything else is noise that slows
+# builds and confuses caching.
 
 .git/
 .github/

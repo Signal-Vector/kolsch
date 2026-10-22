@@ -9,12 +9,14 @@ exist in the repo and they must never overlap:
   [`STARTER_BUNDLE_DIR`][] is derived from
   ``cli._setup._STARTER_BUNDLE_TEMPLATE_DIR`` so tests load the exact
   directory ``kolsch setup`` copies.
-- **The card-examples bundle** — the feat-009 tutorial tools
-  (``hello_card``, ``download_with_progress``,
-  ``confirm_dangerous_action``). Never shipped.
+- **The card-examples bundle** — ``examples/bundles/card_examples/``,
+  the feat-009 tutorial tools (``hello_card``,
+  ``download_with_progress``, ``confirm_dangerous_action``). Never
+  shipped.
 
-Tests must not build their own repo-root ``bundles/`` path: a
+There is no repo-root ``bundles/`` tree. Tests must not build one: a
 repo-root copy of a shipped tool is a fork users never run.
+``tests/unit/test_bundle_single_source.py`` enforces both rules.
 
 Bundle tools are not on the Python import path, so
 [`load_bundle_tool`][] loads them through
@@ -34,7 +36,7 @@ from tools.discovery import discover_tools_in_file
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-_REPO_ROOT_DIR = Path(__file__).resolve().parents[2]
+_EXAMPLES_DIR = Path(__file__).resolve().parents[2] / "examples"
 
 STARTER_BUNDLE_DIR: Path = _STARTER_BUNDLE_TEMPLATE_DIR
 """The starter ``kolsch`` bundle — the directory ``kolsch setup`` copies."""
@@ -42,7 +44,7 @@ STARTER_BUNDLE_DIR: Path = _STARTER_BUNDLE_TEMPLATE_DIR
 STARTER_TOOLS_DIR: Path = STARTER_BUNDLE_DIR / "tools"
 """The shipped platform tools (``run_workflow.py``, ``bash.py``, …)."""
 
-CARD_EXAMPLES_TOOLS_DIR: Path = _REPO_ROOT_DIR / "bundles" / "kolsch" / "tools"
+CARD_EXAMPLES_TOOLS_DIR: Path = _EXAMPLES_DIR / "bundles" / "card_examples" / "tools"
 """The feat-009 tutorial example tools (not shipped)."""
 
 

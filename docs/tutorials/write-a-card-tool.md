@@ -7,10 +7,12 @@ tool.
 
 ## Prerequisites
 
-- Your bundle lives under `bundles/<your-name>/tools/` with a
-  `bundle.yaml` at the bundle root (see
-  [`bundles/kolsch/bundle.yaml`](https://github.com/Signal-Vector/kolsch/blob/main/bundles/kolsch/bundle.yaml)
-  for the shape).
+- Your bundle lives under your workspace's `bundles/<your-name>/tools/`
+  with a `bundle.yaml` at the bundle root (see the tutorial example
+  bundle's
+  [`examples/bundles/card_examples/bundle.yaml`](https://github.com/Signal-Vector/kolsch/blob/main/examples/bundles/card_examples/bundle.yaml)
+  for the shape). To run the examples below as-is, copy
+  `examples/bundles/card_examples/` into your workspace's `bundles/`.
 - You've read [Write a tool](../how-to/write-a-tool.md) — the
   `@tool` decorator basics.
 - You know the four v1 card kinds:
@@ -140,13 +142,13 @@ correlate the request back to the parent `tool.called` event.
 
 ## 4. Where to look next
 
-Runnable examples in this repo:
+Runnable examples in this repo (the `card_examples` tutorial bundle — not shipped with kolsch):
 
-- [`bundles/kolsch/tools/hello_card.py`](https://github.com/Signal-Vector/kolsch/blob/main/bundles/kolsch/tools/hello_card.py)
+- [`examples/bundles/card_examples/tools/hello_card.py`](https://github.com/Signal-Vector/kolsch/blob/main/examples/bundles/card_examples/tools/hello_card.py)
   — simplest example, streaming markdown.
-- [`bundles/kolsch/tools/download_with_progress.py`](https://github.com/Signal-Vector/kolsch/blob/main/bundles/kolsch/tools/download_with_progress.py)
+- [`examples/bundles/card_examples/tools/download_with_progress.py`](https://github.com/Signal-Vector/kolsch/blob/main/examples/bundles/card_examples/tools/download_with_progress.py)
   — progress bar in a loop.
-- [`bundles/kolsch/tools/confirm_dangerous_action.py`](https://github.com/Signal-Vector/kolsch/blob/main/bundles/kolsch/tools/confirm_dangerous_action.py)
+- [`examples/bundles/card_examples/tools/confirm_dangerous_action.py`](https://github.com/Signal-Vector/kolsch/blob/main/examples/bundles/card_examples/tools/confirm_dangerous_action.py)
   — direct `Prompts.choice` with `PromptBusy` catch-and-retry.
 
 Reference:
