@@ -32,6 +32,11 @@ sessions/
 content/
 logs/
 .tool-outputs/
+# bug-153: repo-root bundles/ is a workspace artefact only (e.g.
+# `kolsch setup` in the dev container, where KOLSCH_WORKSPACE is the
+# repo root). Shipped tools live in src/cli/_starter_bundle/kolsch/;
+# tutorial examples in examples/bundles/. Never commit a repo-root copy.
+/bundles/
 *.db
 *.db-journal
 
