@@ -104,6 +104,8 @@ class ListFilesRunner:
             raise WorkflowFileAccessDenied(
                 path=rendered_path,
                 node=node_name,
+                reason=exc.detail.get("reason"),
+                matched_rule=exc.detail.get("matched_rule"),
             ) from exc
         # The tool returns a list of metadata dicts; the workflow
         # contract narrows to LEAF names only. Full paths drop —

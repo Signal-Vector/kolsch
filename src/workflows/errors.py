@@ -1581,18 +1581,38 @@ class WorkflowFileAccessDenied(WorkflowRuntimeError):
     )
     identifying_names_keys: ClassVar[tuple[str, ...]] = ("path", "node")
 
-    def __init__(self, *, path: str, node: str) -> None:
+    def __init__(
+        self,
+        *,
+        path: str,
+        node: str,
+        reason: str | None = None,
+        matched_rule: dict[str, Any] | None = None,
+    ) -> None:
+        """Build the remap of a tool's `FileAccessDenied`.
+
+        Args:
+            path: The rendered path the node tried to touch.
+            node: The node name.
+            reason: The underlying `FileAccessDenied` reason, if known.
+            matched_rule: The underlying `matched_rule`, if any. When a
+                named rule fired (a `denied_paths` entry, or bug-161's
+                `protected_write_floor`), the message carries `reason`
+                so the run event states the real cause; a default-deny
+                (`None`) keeps the "outside the allowed paths" wording.
+        """
         self.path = path
         self.node = node
-        super().__init__(
-            _runtime_str(
-                self,
-                problem=(
-                    f"node {node!r} tried to access {path!r} which is "
-                    "outside the allowed paths"
-                ),
+        self.reason = reason
+        self.matched_rule = matched_rule
+        if reason is not None and matched_rule is not None:
+            problem = f"node {node!r} was refused access to {path!r}: {reason}"
+        else:
+            problem = (
+                f"node {node!r} tried to access {path!r} which is "
+                "outside the allowed paths"
             )
-        )
+        super().__init__(_runtime_str(self, problem=problem))
 
 
 class WorkflowBindUndefined(WorkflowRuntimeError):

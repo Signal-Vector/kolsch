@@ -479,6 +479,12 @@ async def test_workflow_write_file_node_refuses_platform_yaml(
     failed = [e for e in events if e["kind"] == "workflow.node.failed"]
     assert len(failed) == 1
     assert failed[0]["payload"]["error_class"] == "WorkflowFileAccessDenied"
+    # The run event states the real cause (QA N2): the path IS allowed
+    # by `file_access`; the floor refused it.
+    message = failed[0]["payload"]["message"]
+    assert "platform.yaml is protected" in message
+    assert "kolsch permissions" in message
+    assert "outside the allowed paths" not in message
     assert events[-1]["kind"] == "workflow.run.failed"
     _assert_untouched(root)
 
@@ -525,3 +531,29 @@ def test_dotenv_case_bypass_is_real_on_this_host(root: Path) -> None:
         pytest.skip("case-sensitive filesystem: .ENV is a different file here")
     assert (root / ".ENV").read_bytes() == _DOTENV
     assert (root / "PLATFORM.YAML").read_bytes() == _PLATFORM_YAML
+
+
+def test_workflow_file_access_denied_remap_carries_reason() -> None:
+    """A named rule's reason reaches the message; default-deny keeps the
+    legacy wording (and the `file-access-denied` golden)."""
+    from workflows.errors import WorkflowFileAccessDenied
+
+    floor = WorkflowFileAccessDenied(
+        path="platform.yaml",
+        node="w",
+        reason="platform.yaml is protected: agents cannot change kolsch configuration or state.",
+        matched_rule={"pattern": "platform.yaml", "type": "protected_write_floor"},
+    )
+    assert "was refused access to 'platform.yaml': platform.yaml is protected" in str(
+        floor
+    )
+    assert floor.matched_rule == {
+        "pattern": "platform.yaml",
+        "type": "protected_write_floor",
+    }
+
+    default = WorkflowFileAccessDenied(
+        path="/etc/passwd", node="r", reason="default deny", matched_rule=None
+    )
+    assert "outside the allowed paths" in str(default)
+    assert default.reason == "default deny"
