@@ -114,8 +114,10 @@ obvious. If it isn't, flag it.
 Read AGENTS.md before posting findings — the project pins specific
 hard rules there. The current set includes:
 
-- Tools shipped by the platform live in bundles/kolsch/tools/ as
-  plain Python files. Not in the engine binary.
+- Tools shipped by the platform live in the starter bundle,
+  src/cli/_starter_bundle/kolsch/tools/, as plain Python files (the
+  only copy; `kolsch setup` copies it to the workspace). Not in the
+  engine binary.
 - The production authorization rule set must end with a default-deny
   tail.
 - Agent prompts are Jinja2 templates; typo'd variables raise at

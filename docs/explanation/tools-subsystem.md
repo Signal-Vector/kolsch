@@ -281,10 +281,11 @@ path (Option B asset references). The format is
 `<package>/tools/<tool-name>`. Conventional packages:
 - `local` — tools defined in the user's own (un-packaged) `tools/`
   directory.
-- `kolsch` — platform-shipped tools. The four builtin tools (`read_file`,
-  `write_file`, `list_files`, `bash`) are registered by the Tools subsystem at
-  startup and are not bundle files; bundle-resident platform tools
-  would live under `bundles/kolsch/tools/`. No bundle-name
+- `kolsch` — platform-shipped tools. The builtin tools (`read_file`,
+  `write_file`, `list_files`, `bash`, and the rest of the shipping set
+  in §4.5) are plain bundle files: their source is the starter bundle
+  `src/cli/_starter_bundle/kolsch/tools/`, which `kolsch setup` copies
+  to `<workspace>/bundles/kolsch/tools/`. No bundle-name
   reservation enforces this — `kolsch` participates in the standard
   uniqueness rule like any other bundle.
 
@@ -606,6 +607,10 @@ bundles/kolsch/
     ├── browse_url.py       # headless Chromium (kolsch[browse] extra)
     └── jev_decide.py       # typed Jev decisions (§4.5.7)
 ```
+
+The layout is workspace-relative. Its source is the starter bundle
+`src/cli/_starter_bundle/kolsch/` in the repo — the only copy (bug-153)
+— which `kolsch setup` copies into the workspace.
 
 `bundles/kolsch/` is the canonical bundle name from Phase 2.0 onward.
 Phase 1.2 originally scaffolded `bundles/starter/`; Phase 2.3's drift
