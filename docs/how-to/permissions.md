@@ -515,7 +515,8 @@ never taken from model output, tool arguments, or the MCP wire.
 
 A child run resumed or forked on its own (`kolsch workflows resume` /
 `fork`) is rebuilt with its parent frames from the run's stored
-parent pointers, so it keeps `(C, P)`. The chain a denial was judged
+parent pointers, so it keeps `(C, P)` — or is refused if one of those
+runs is gone (see below). The chain a denial was judged
 against is recorded in the session log as
 `tool.unauthorized` → `detail.caller_chain`, and in a workflow run's
 JSONL as `policy.decision.made` → `payload.caller_chain`.
@@ -527,8 +528,12 @@ JSONL as `policy.decision.made` → `payload.caller_chain`.
   `W`'s nodes see `(W,)`, not `(W, A)`. To stop an agent launching
   workflows, scope the launch itself:
   `{what: kolsch/tools/run_workflow, pattern: "*", from: kolsch/agents/A, effect: deny}`.
-- **A child run whose parent run was deleted** loses the frames above
-  the missing run (the rebuild stops there and logs a warning).
+- **A child run whose parent run was deleted can't be resumed or
+  forked.** The parent frames can't be proven, so `kolsch workflows
+  resume|fork` (and the chat equivalents) refuse it with
+  `WorkflowLineageMissing`, naming the child and the missing run,
+  before anything runs. Keep parent runs while their children may
+  still be resumed.
 - **Claude Code's own tools are outside kolsch.** A `claude_code`
   agent's calls to *kolsch* tools go through the MCP bridge and are
   authorized here, with the agent's chain. Claude Code's built-in
@@ -537,7 +542,10 @@ JSONL as `policy.decision.made` → `payload.caller_chain`.
   these rules.
 - **Two agents can't share an `agent_id`.** The chain's agent frame is
   resolved from the agent's id, so building a second agent with an id
-  already in use raises `config.duplicate_agent_id`.
+  already in use raises `config.duplicate_agent_id`. This includes an
+  `extends:` child that inherits its parent's explicit `agent_id:` —
+  give the child its own `agent_id:` (or drop the parent's to use
+  derived ids).
 
 ### Where scoped rules come from
 

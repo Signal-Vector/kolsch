@@ -149,7 +149,9 @@ class ConfigDuplicateAgentId(PlatformError):
         super().__init__(
             message=(
                 f"agent_id {agent_id!r} is declared by two agents: "
-                f"{refs[0]!r} and {refs[1]!r}; give each agent its own agent_id"
+                f"{refs[0]!r} and {refs[1]!r}; give each agent its own "
+                "agent_id (an `extends:` child inherits its parent's "
+                "agent_id unless it sets its own)"
             ),
             where=where,
             detail={"agent_id": agent_id, "refs": list(refs)},

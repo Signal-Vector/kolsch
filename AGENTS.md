@@ -273,9 +273,14 @@ These are non-negotiable. Violating them blocks merges.
   `files.assert_writable_destination` (`files.PROTECTED_WRITE_PATHS`)
   after authz, so no rule or `--auto-approve` reaches them. Every
   write-capable file tool MUST call it; there is no switch to turn it
-  off. kolsch's own writers are Python (`cli.permissions._write_back`,
+  off. kolsch's own writers are Python (`cli.permissions.mutate_platform_rules`,
   setup, connect) and don't go through it. `bundles/**` and `bash` are
   outside the floor: treat write access to either as code execution.
+- **Claude Code's native tools are outside kolsch governance.** A
+  `claude_code` agent's calls to kolsch tools go through the MCP bridge
+  and kolsch authz (with the agent's caller chain); Claude Code's own
+  built-in tools never reach kolsch and follow the user's
+  `~/.claude/settings.json`.
 - **Every new CLI command or subcommand requires a smoke test
   in `tests/component/test_cli_smoke.py`.** No exceptions. The
   smoke test invokes the CLI in a fresh subprocess

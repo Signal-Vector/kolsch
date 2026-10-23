@@ -465,7 +465,9 @@ tool arguments, or MCP wire frames:
   tool nodes pass it as their chain; the agent runner passes it as
   the spawned agent's callers, so the agent sees `(A, W, …)`. A run
   rebuilt outside its parent's process (resume / fork) recovers its
-  parent frames from the persisted run pointers.
+  parent frames from the persisted run pointers, and is refused
+  (`WorkflowLineageMissing`, before anything runs) when an ancestor
+  run is gone — the chain is never silently shortened.
 - **Agent identity is unique.** `build_resolved_config` refuses a
   second agent ref resolving to an already-mapped `agent_id`
   (`config.duplicate_agent_id`), so the agent frame can't be

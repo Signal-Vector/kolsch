@@ -322,6 +322,10 @@ class IterativeExecutor:
             self._call_chain = _call_chain
         else:
             self._call_chain = (run.workflow_ref,)
+        # bug-158: `resume` / `start_from_fork` rebuild the chain from
+        # the run's persisted lineage unless a caller (the sub-workflow
+        # runner) passed it explicitly — see `_restore_call_chain`.
+        self._call_chain_explicit = bool(_call_chain)
         self._workflow = workflow
         self._run = run
         self._store = store
@@ -746,6 +750,35 @@ class IterativeExecutor:
                 "could not discard rejected workflow run %s", run_id, exc_info=True
             )
 
+    def _restore_call_chain(self) -> None:
+        """Rebuild this run's call chain from its persisted lineage.
+
+        bug-158: a run continued outside its parent's process (resume /
+        fork) is constructed with only its own ref. Restore
+        `(root, …, parent, this run)` from the `parent` / `forked_from`
+        pointers so its nodes keep the frames `from:`-scoped authz
+        rules match, and so the nesting depth is right. A no-op when
+        the chain was passed explicitly (an in-process child).
+
+        Raises:
+            WorkflowLineageMissing: An ancestor run is gone from disk.
+            WorkflowExtendsDepthExceeded: The rebuilt chain is deeper
+                than the nesting cap.
+        """
+        if self._call_chain_explicit:
+            return
+        chain = self._store.call_chain_for(self._run)
+        depth = len(chain) - 1
+        if depth > 16:
+            raise WorkflowExtendsDepthExceeded(
+                file=self._run.workflow_ref,
+                line=0,
+                depth=depth,
+                limit=16,
+            )
+        self._call_chain = chain
+        self._call_depth = depth
+
     async def resume(self, *, response: dict[str, Any]) -> WorkflowRunStatus:
         """Resume a paused run with the user's response.
 
@@ -777,6 +810,8 @@ class IterativeExecutor:
                 pause sidecar is missing / inconsistent.
             WorkflowInputInvalid: The response shape doesn't match
                 the paused node's contract.
+            WorkflowLineageMissing: An ancestor run of this (child)
+                run is gone, so its caller chain can't be rebuilt.
         """
         from workflows.module_isolation import (  # noqa: PLC0415
             cleanup_bundle_imports,
@@ -813,6 +848,10 @@ class IterativeExecutor:
         validate_workflow_or_raise(
             self._workflow, self._catalog, file=self._run.workflow_ref
         )
+
+        # bug-158: restore the parent frames before any side effect; a
+        # broken lineage refuses the resume and leaves the run paused.
+        self._restore_call_chain()
 
         # Read the open-invocation sidecar before any further side
         # effects so a missing / unreadable sidecar surfaces as
@@ -1118,7 +1157,8 @@ class IterativeExecutor:
 
         Raises:
             WorkflowRunNotFound: The parent run's meta or events log
-                is missing.
+                is missing (`WorkflowLineageMissing` when a further
+                ancestor of a forked child run is missing).
             WorkflowRuntimeError: The fork event id isn't in the
                 parent's events log, or the overrides target an
                 unsupported event kind.
@@ -1184,6 +1224,10 @@ class IterativeExecutor:
             raise WorkflowRunNotFound(run_id=str(parent_id)) from exc
         if not parent_dir.events_path.exists():
             raise WorkflowRunNotFound(run_id=str(parent_id))
+
+        # bug-158: a fork of a child run keeps the child's parent
+        # frames; a broken lineage refuses the fork before anything runs.
+        self._restore_call_chain()
 
         # Read parent's events; locate the fork point. The slice is
         # inclusive — replay_into walks the fork event itself so a

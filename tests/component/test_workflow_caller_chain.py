@@ -27,19 +27,19 @@ import sys
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+import pytest
 import yaml
 
 from cli._workflow_runtime import build_workflow_executor
 from engine import ExecutionContext, LLMRequest, LLMResponse
 from platform_runtime import bootstrap_runtime
 from schemas import EventType
+from schemas.identifiers import EventId
 from workflows.parser import Workflow
 from workflows.run_store import WorkflowRunStore
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-    import pytest
 
     from platform_runtime import PlatformRuntime
 
@@ -385,7 +385,6 @@ async def test_forked_child_keeps_parent_frame(
     """A fork of a child run (whose meta carries only `forked_from`, no
     `parent`) authorizes as `(C, P)` too."""
     from schemas.entities import ForkedFrom
-    from schemas.identifiers import EventId
 
     parent, child = "wf/workflows/parent_fk", "wf/workflows/child_fk"
     _setup_workspace(tmp_path, rules=[_ALLOW_ALL])
@@ -429,7 +428,6 @@ async def test_forked_child_keeps_parent_frame(
 async def test_root_run_chain_is_unchanged(tmp_path: Path) -> None:
     """Root runs, and forks of root runs, rebuild to just `(W,)`."""
     from schemas.entities import ForkedFrom
-    from schemas.identifiers import EventId
 
     store = WorkflowRunStore(tmp_path)
     root_run = store.create(workflow_ref=_SOLO)
@@ -450,12 +448,13 @@ async def test_root_run_chain_is_unchanged(tmp_path: Path) -> None:
     assert store.call_chain_for(fork_of_fork) == (_SOLO,)
 
 
-async def test_lineage_walk_stops_at_a_deleted_parent(tmp_path: Path) -> None:
-    """A child whose parent run directory is gone keeps only the frames
-    that can still be proven (its own)."""
+async def test_lineage_walk_refuses_a_deleted_ancestor(tmp_path: Path) -> None:
+    """A child (or a fork of it) whose parent run directory is gone has
+    an unprovable chain: the walk raises instead of dropping the frame."""
     import shutil
 
-    from schemas.entities import ParentRunPointer
+    from schemas.entities import ForkedFrom, ParentRunPointer
+    from workflows.errors import WorkflowLineageMissing
     from workflows.ids import InvocationId
 
     store = WorkflowRunStore(tmp_path)
@@ -467,6 +466,150 @@ async def test_lineage_walk_stops_at_a_deleted_parent(tmp_path: Path) -> None:
             invocation_id=InvocationId("inv_00000000-0000-0000-0000-000000000001"),
         ),
     )
+    fork = store.create(
+        workflow_ref=_CHILD,
+        forked_from=ForkedFrom(
+            run_id=child_run.run_id, fork_event_id=EventId(f"ev_{uuid4()}")
+        ),
+    )
     assert store.call_chain_for(child_run) == (_PARENT, _CHILD)
     shutil.rmtree(store.directory(parent_run.run_id).root)
-    assert store.call_chain_for(child_run) == (_CHILD,)
+
+    for run in (child_run, fork):
+        with pytest.raises(WorkflowLineageMissing) as excinfo:
+            store.call_chain_for(run)
+        assert excinfo.value.run_id == str(parent_run.run_id)
+        assert excinfo.value.child_run_id == str(run.run_id)
+        assert str(parent_run.run_id) in str(excinfo.value)
+        assert str(run.run_id) in str(excinfo.value)
+
+
+async def test_resume_refused_when_parent_run_is_gone(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fail closed: resuming a child whose parent run was deleted is
+    refused before anything runs — no authz call, no new event, and the
+    run stays paused."""
+    import shutil
+
+    from workflows.errors import WorkflowLineageMissing
+    from workflows.run import WorkflowRunStatus
+
+    parent = "wf/workflows/parent_ui"
+    _setup_workspace(tmp_path, rules=[_ALLOW_ALL])
+    runtime = await _boot(tmp_path)
+    status, _ = await _run_workflow(runtime, tmp_path, parent)
+    assert status == "waiting_for_input"
+    store = WorkflowRunStore(tmp_path)
+    child_id = _child_run_id(tmp_path)
+    child = store.read(child_id)
+    assert child.parent is not None
+    shutil.rmtree(store.directory(child.parent.workflow_run_id).root)
+    events_before = store.directory(child_id).events_path.read_text(encoding="utf-8")
+
+    calls = _record_allow(runtime, monkeypatch)
+    executor = _executor_for(runtime, tmp_path, child_id)
+    with pytest.raises(WorkflowLineageMissing):
+        await executor.resume(response={"response": "yes"})
+
+    assert calls == []
+    assert (
+        store.directory(child_id).events_path.read_text(encoding="utf-8")
+        == events_before
+    )
+    assert store.read(child_id).status == WorkflowRunStatus.WAITING_FOR_INPUT
+
+
+async def test_fork_refused_when_ancestor_run_is_gone(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A fork of a child whose parent run was deleted is refused before
+    any node runs."""
+    import shutil
+
+    from schemas.entities import ForkedFrom
+    from workflows.errors import WorkflowLineageMissing
+
+    parent = "wf/workflows/parent_fk"
+    _setup_workspace(tmp_path, rules=[_ALLOW_ALL])
+    runtime = await _boot(tmp_path)
+    status, _ = await _run_workflow(runtime, tmp_path, parent)
+    assert status == "succeeded"
+    store = WorkflowRunStore(tmp_path)
+    child_run = store.read(_child_run_id(tmp_path))
+    first_completed = next(
+        event["event_id"]
+        for event in map(
+            json.loads,
+            store.directory(child_run.run_id)
+            .events_path.read_text(encoding="utf-8")
+            .splitlines(),
+        )
+        if event["kind"] == "workflow.node.completed" and event["node_name"] == "first"
+    )
+    assert child_run.parent is not None
+    shutil.rmtree(store.directory(child_run.parent.workflow_run_id).root)
+    forked = store.create(
+        workflow_ref=child_run.workflow_ref,
+        trace_id=child_run.trace_id,
+        forked_from=ForkedFrom(
+            run_id=child_run.run_id, fork_event_id=EventId(first_completed)
+        ),
+    )
+
+    calls = _record_allow(runtime, monkeypatch)
+    executor = _executor_for(runtime, tmp_path, forked.run_id)
+    with pytest.raises(WorkflowLineageMissing):
+        await executor.start_from_fork(fork_event_id=first_completed)
+
+    assert calls == []
+    events_path = store.directory(forked.run_id).events_path
+    assert not events_path.exists() or events_path.read_text(encoding="utf-8") == ""
+
+
+def test_cli_resume_renders_lineage_refusal(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`kolsch workflows resume <child>` with a deleted parent run exits
+    non-zero with the refusal envelope (no traceback) and names both
+    runs."""
+    import asyncio
+    import shutil
+
+    from cli.main import main
+
+    parent = "wf/workflows/parent_ui"
+    _setup_workspace(tmp_path, rules=[_ALLOW_ALL])
+
+    async def _pause() -> None:
+        runtime = await _boot(tmp_path)
+        status, _ = await _run_workflow(runtime, tmp_path, parent)
+        assert status == "waiting_for_input"
+
+    asyncio.run(_pause())
+    store = WorkflowRunStore(tmp_path)
+    child_id = _child_run_id(tmp_path)
+    parent_id = store.read(child_id).parent.workflow_run_id
+    shutil.rmtree(store.directory(parent_id).root)
+
+    capsys.readouterr()
+    rc = main(
+        [
+            "--root",
+            str(tmp_path),
+            "workflows",
+            "resume",
+            str(child_id),
+            "--input",
+            "response=yes",
+        ]
+    )
+    captured = capsys.readouterr()
+    output = captured.out + captured.err
+    assert rc != 0
+    assert "Traceback" not in output
+    assert str(parent_id) in output
+    assert str(child_id) in output

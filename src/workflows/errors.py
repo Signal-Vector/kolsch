@@ -68,6 +68,7 @@ __all__ = [
     "WorkflowJevInvalidRouteOn",
     "WorkflowJinjaRefUnknown",
     "WorkflowJinjaSecurityError",
+    "WorkflowLineageMissing",
     "WorkflowMapperWorkerMissingField",
     "WorkflowMapperWorkerNotAddressable",
     "WorkflowNoStartNode",
@@ -1880,6 +1881,46 @@ class WorkflowRunNotFound(WorkflowRuntimeError):
                     "has been deleted"
                 ),
             )
+        )
+
+
+class WorkflowLineageMissing(WorkflowRunNotFound):
+    """Raised when a resumed / forked run's parent lineage can't be rebuilt.
+
+    A child run continued outside its parent's process (`kolsch
+    workflows resume|fork`, chat resume, `/fork`) rebuilds its workflow
+    call chain from the persisted `parent` / `forked_from` pointers —
+    the frames `from:`-scoped authz rules match. When one of those
+    ancestor runs is gone from disk the chain can't be proven, so the
+    resume / fork is refused before anything runs (fail closed) rather
+    than continuing with the ancestor frames silently dropped.
+
+    `run_id` is the missing ancestor run; `child_run_id` the run being
+    continued. Subclasses
+    [`WorkflowRunNotFound`][workflows.errors.WorkflowRunNotFound] so
+    existing handlers render it.
+    """
+
+    caller_message: ClassVar[str] = (
+        "This workflow run can't continue: a workflow run it was started "
+        "from is no longer available, so its permissions can't be checked. "
+        "Share the run ID with your engineer."
+    )
+    identifying_names_keys: ClassVar[tuple[str, ...]] = ("child_run_id", "run_id")
+
+    def __init__(self, *, child_run_id: str, run_id: str) -> None:
+        self.child_run_id = child_run_id
+        self.run_id = run_id
+        WorkflowRuntimeError.__init__(
+            self,
+            _runtime_str(
+                self,
+                problem=(
+                    f"workflow run {child_run_id!r} cannot be continued: its "
+                    f"ancestor run {run_id!r} is missing, so its caller chain "
+                    "cannot be rebuilt"
+                ),
+            ),
         )
 
 

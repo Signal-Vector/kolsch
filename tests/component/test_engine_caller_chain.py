@@ -392,6 +392,7 @@ async def test_duplicate_agent_id_across_two_agents_is_refused(tmp_path: Path) -
     assert "'ag_cc'" in str(excinfo.value)
     assert _AGENT_REF in str(excinfo.value)
     assert "cc/agents/impostor" in str(excinfo.value)
+    assert "give each agent its own agent_id" in str(excinfo.value)
     # The original mapping is untouched.
     assert runtime.asset_management.get_ref_for_agent_id("ag_cc") == _AGENT_REF
 
