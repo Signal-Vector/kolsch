@@ -26,6 +26,7 @@ through `tools/` would force the engine to depend on tools.
 
 from files.authz_target import (
     PathTarget,
+    comparable,
     is_case_insensitive_fs,
     normalise_path_target,
     path_pattern_forms,
@@ -47,6 +48,7 @@ __all__ = [
     "PathTarget",
     "assert_writable_destination",
     "check_path_allowed",
+    "comparable",
     "is_case_insensitive_fs",
     "is_path_allowed",
     "load_policy",

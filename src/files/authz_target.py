@@ -34,8 +34,10 @@ from __future__ import annotations
 
 import fnmatch
 import functools
+import glob
 import os
 import posixpath
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -66,8 +68,11 @@ class PathTarget:
         loose_forms: The forms `deny` / `prompt` rules match against:
             `strict_forms` plus the lexical forms (`..` and `.`
             collapsed against the root as given, symlinks not
-            followed), relative and absolute. Never includes `raw`
-            unless `raw` is already canonical.
+            followed), relative and absolute. Every in-workspace
+            absolute form also appears in the other root spelling, and
+            every form appears both with and without a trailing `/`
+            (the file tools drop it, so `x/` and `x` are one file).
+            Never includes `raw` unless `raw` is already canonical.
         case_insensitive: Whether the workspace filesystem folds case.
             When `True`, `allow` rules also match case-insensitively;
             `deny` / `prompt` rules always do.
@@ -101,6 +106,40 @@ class PathTarget:
         rules fold only on a case-insensitive workspace filesystem.
         """
         return restrictive or self.case_insensitive
+
+    def comparable_forms(self, *, restrictive: bool) -> tuple[str, ...]:
+        """Return the forms for a rule kind, folded ready for comparison.
+
+        Applies [`comparable`][files.authz_target.comparable] with this
+        target's case rule; compare against patterns folded the same
+        way.
+        """
+        return tuple(
+            comparable(
+                form,
+                fold_case=self.folds_case(restrictive=restrictive),
+                restrictive=restrictive,
+            )
+            for form in self.forms_for(restrictive=restrictive)
+        )
+
+
+def comparable(text: str, *, fold_case: bool, restrictive: bool) -> str:
+    """Fold a target form or pattern form for comparison.
+
+    Case is folded when `fold_case` is set. Restrictive (`deny` /
+    `prompt`) comparisons are also Unicode-NFC-normalised, because
+    macOS's APFS treats NFC and NFD spellings as one file; `allow`
+    comparisons stay byte-exact, since an allow that under-matches
+    only prompts.
+    """
+    if restrictive:
+        text = unicodedata.normalize("NFC", text)
+    if fold_case:
+        text = text.casefold()
+        if restrictive:
+            text = unicodedata.normalize("NFC", text)
+    return text
 
 
 def normalise_path_target(
@@ -153,7 +192,7 @@ def normalise_path_target(
             raw=raw,
             display=forms[0],
             strict_forms=forms,
-            loose_forms=forms,
+            loose_forms=_expand_loose(forms, roots=()),
             case_insensitive=False if case_insensitive is None else case_insensitive,
             root_given=None,
             root_resolved=None,
@@ -182,7 +221,9 @@ def normalise_path_target(
         raw=raw,
         display=strict[0],
         strict_forms=strict,
-        loose_forms=_dedupe(strict + lexical_forms),
+        loose_forms=_expand_loose(
+            strict + lexical_forms, roots=_dedupe((root_given, root_r))
+        ),
         case_insensitive=case_insensitive,
         root_given=root_given,
         root_resolved=root_r,
@@ -221,6 +262,9 @@ def path_pattern_forms(
        spelling, so `/tmp/ws/data/*` matches when the root resolves to
        `/private/tmp/ws`.
 
+    Root text spliced in by steps 3 and 4 is `glob.escape`d, so a
+    workspace directory named `w?s` or `w*s` matches only itself.
+
     Args:
         pattern: The rule's `pattern:` glob, verbatim.
         root_given: The root as configured (`PathTarget.root_given`).
@@ -238,13 +282,13 @@ def path_pattern_forms(
     if not cleaned.startswith("/"):
         if cleaned != ".." and not cleaned.startswith("../"):
             return (cleaned,)
-        return _dedupe(tuple(_clean_pattern(f"{r}/{cleaned}") for r in roots))
+        return _dedupe(tuple(_anchor_dotdot(cleaned, r) for r in roots))
     forms = [cleaned]
     for this in roots:
         rest = _strip_root(cleaned, this)
         if rest is None:
             continue
-        forms.extend(other + rest for other in roots if other != this)
+        forms.extend(glob.escape(other) + rest for other in roots if other != this)
     return _dedupe(tuple(forms))
 
 
@@ -264,6 +308,8 @@ def path_pattern_matches(
     `prompt` rule (`restrictive=True`) sees the loose forms. Case is
     folded on both sides for restrictive rules always, and for `allow`
     rules only when the workspace filesystem is case-insensitive.
+    Restrictive comparisons are also NFC-normalised on both sides
+    (see [`comparable`][files.authz_target.comparable]).
 
     Args:
         pattern: The rule's `pattern:` glob, verbatim.
@@ -275,10 +321,12 @@ def path_pattern_matches(
         root_given=target.root_given,
         root_resolved=target.root_resolved,
     )
-    target_forms = target.forms_for(restrictive=restrictive)
-    if target.folds_case(restrictive=restrictive):
-        pattern_forms = tuple(p.casefold() for p in pattern_forms)
-        target_forms = tuple(t.casefold() for t in target_forms)
+    fold_case = target.folds_case(restrictive=restrictive)
+    pattern_forms = tuple(
+        comparable(p, fold_case=fold_case, restrictive=restrictive)
+        for p in pattern_forms
+    )
+    target_forms = target.comparable_forms(restrictive=restrictive)
     return any(
         fnmatch.fnmatchcase(form, p) for p in pattern_forms for form in target_forms
     )
@@ -365,6 +413,62 @@ def _root_relative_forms(
             _with_trailing(absolute, trailing=trailing),
         )
     return (_with_trailing(absolute, trailing=trailing),)
+
+
+def _toggle_trailing(form: str) -> str:
+    """Return `form` with its trailing `/` added or removed.
+
+    `.` and `/` have no other spelling and come back unchanged.
+    """
+    if form in (".", "/"):
+        return form
+    if form.endswith("/"):
+        return form.rstrip("/") or "/"
+    return form + "/"
+
+
+def _expand_loose(forms: tuple[str, ...], *, roots: tuple[str, ...]) -> tuple[str, ...]:
+    """Widen loose forms with root-spelling twins and trailing-`/` variants.
+
+    Every absolute form under one spelling of the root is also emitted
+    under the other, so a restrictive pattern with a glob inside the
+    root's own segment matches whichever spelling the caller used.
+    Every form is then emitted with and without a trailing `/`,
+    because the file tools treat `x/` and `x` as the same file.
+    """
+    twinned: list[str] = []
+    for form in forms:
+        twinned.append(form)
+        for this in roots:
+            rest = _strip_root(form, this)
+            if rest is None:
+                continue
+            twinned.extend(other + rest for other in roots if other != this)
+    expanded: list[str] = []
+    for form in twinned:
+        expanded.extend((form, _toggle_trailing(form)))
+    return _dedupe(tuple(expanded))
+
+
+def _anchor_dotdot(cleaned: str, root: str) -> str:
+    """Anchor a cleaned relative pattern with leading `..` to `root`.
+
+    The leading `..` segments are resolved against the literal root
+    first, and the surviving root prefix is `glob.escape`d so glob
+    characters in the root's own name match only themselves.
+    """
+    segments = cleaned.split("/")
+    ups = 0
+    while ups < len(segments) and segments[ups] == "..":
+        ups += 1
+    base = root
+    for _ in range(ups):
+        base = posixpath.dirname(base)
+    rest = "/".join(segments[ups:])
+    prefix = glob.escape(base)
+    if not rest:
+        return _with_trailing(prefix, trailing=cleaned.endswith("/"))
+    return prefix.rstrip("/") + "/" + rest
 
 
 def _clean_pattern(pattern: str) -> str:
