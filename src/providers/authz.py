@@ -127,6 +127,71 @@ class AuthzEffect(StrEnum):
 _THREE_SEG_PARTS = 3
 _TWO_SEG_PARTS = 2
 
+# Legacy `what:` regex shapes the `kolsch setup` migrator
+# (`cli._migrations.authz_rules`) knows how to convert; it imports these
+# so the grammar lives in one place.
+# `tool\.<name>` (with optional anchors) — the pre-3-seg tool action pin.
+LEGACY_TOOL_ACTION_RE = re.compile(r"^\^?tool\\\.([a-z0-9][a-z0-9_-]*)\$?$")
+# `^<cmd> .*$` — bash-suggest output from `_modal.suggest_pattern`.
+LEGACY_BASH_SUGGEST_RE = re.compile(r"^\^([a-zA-Z0-9_\-./]+) \.\*\$$")
+# `agent\.execute\..*` — the engine pre-flight allow.
+LEGACY_AGENT_EXECUTE_RE = re.compile(r"^\^?agent\\\.execute\\\.\.\*\$?$")
+# `.*` — the catch-all.
+LEGACY_CATCHALL_RE = re.compile(r"^\^?\.\*\$?$")
+_LEGACY_MIGRATABLE_WHATS = (
+    LEGACY_CATCHALL_RE,
+    LEGACY_AGENT_EXECUTE_RE,
+    LEGACY_TOOL_ACTION_RE,
+    LEGACY_BASH_SUGGEST_RE,
+)
+
+
+def _entry_from_value(index: int, entry: dict[str, Any]) -> Any:  # noqa: ANN401 — raw YAML value
+    """Return a raw rule entry's `from` value, reading both spellings.
+
+    YAML uses `from`; programmatic dicts may use the Python name
+    `from_`. Either non-null key scopes the rule (a present-but-null
+    `from` must not hide a `from_`). Both set to different values is
+    ambiguous and refused.
+    """
+    from_value = entry.get("from")
+    alt_value = entry.get("from_")
+    if from_value is None:
+        return alt_value
+    if alt_value is not None and alt_value != from_value:
+        raise AuthzMalformedRule(
+            rule_index=index,
+            error=(
+                f"rule sets both `from: {from_value!r}` and "
+                f"`from_: {alt_value!r}`; keep one (`from`)"
+            ),
+        )
+    return from_value
+
+
+def _setup_can_migrate_legacy(entry: dict[str, Any], from_value: object) -> bool:
+    """Return True when `kolsch setup` would convert this scoped legacy rule.
+
+    Mirrors the migrator's acceptance: `who: ".*"`, no non-`*`
+    `pattern`, a `from` of shape `<bundle>/<agents|workflows>/<name>`,
+    and a `what` one of its heuristics recognises. (Catalog checks —
+    tool home bundle, `from` existence — are left to setup, which warns
+    when they fail.)
+    """
+    if entry.get("who") != ".*" or entry.get("pattern", "*") != "*":
+        return False
+    if not isinstance(from_value, str):
+        return False
+    parts = from_value.split("/")
+    if len(parts) != _THREE_SEG_PARTS or not all(parts):
+        return False
+    if parts[1] not in ("agents", "workflows"):
+        return False
+    what = entry.get("what")
+    return isinstance(what, str) and any(
+        regex.match(what) for regex in _LEGACY_MIGRATABLE_WHATS
+    )
+
 
 def _build_action_to_tool_ref(catalog: AssetCatalog) -> dict[str, str]:
     """Build the action-to-ref bridge map used by the new-shape matcher.
@@ -846,9 +911,11 @@ class RuleBasedAuthorizationProvider:
         refused with `AuthzMalformedRule` rather than compiled into a
         rule that applies to every caller and target.
         """
+        from_value = _entry_from_value(index, entry)
         reason = legacy_rule_scope_violation(
-            from_value=entry.get("from", entry.get("from_")),
+            from_value=from_value,
             pattern=entry.get("pattern", "*"),
+            setup_can_migrate=_setup_can_migrate_legacy(entry, from_value),
         )
         if reason is not None:
             raise AuthzMalformedRule(rule_index=index, error=reason)
@@ -957,7 +1024,7 @@ class RuleBasedAuthorizationProvider:
         # catalog-existence misses. Accept both the "from" YAML alias
         # and the Python "from_" name so programmatic Rule(...)
         # construction works without alias-by.
-        from_value = entry.get("from", entry.get("from_"))
+        from_value = _entry_from_value(index, entry)
         self._validate_from(index=index, from_value=from_value)
         # Derive a stable id so the live-edit API + default-deny tail
         # detection still work for new-shape rules. The catch-all

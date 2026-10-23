@@ -92,6 +92,49 @@ def test_from_underscore_key_is_carried_as_from() -> None:
     assert result.rules == [{"what": "*", "pattern": "*", "from": A, "effect": "allow"}]
 
 
+def test_null_from_does_not_hide_from_underscore() -> None:
+    result = migrate_authz_rules([_legacy(".*", **{"from": None, "from_": A})])
+    assert result.rules == [{"what": "*", "pattern": "*", "from": A, "effect": "allow"}]
+
+
+def test_conflicting_from_keys_keep_rule_legacy() -> None:
+    raw = _legacy(".*", **{"from": A, "from_": "kolsch/agents/b"})
+    result = migrate_authz_rules([raw])
+    assert result.rules == [raw]
+    assert "both" in result.deprecated[0].reason
+
+
+def test_deprecation_warning_points_at_hand_conversion() -> None:
+    """QA: the old suffix pointed at `/perm`, but chat can't start with the rule."""
+    from errors import ConfigDeprecatedRegexRule
+
+    text = str(ConfigDeprecatedRegexRule(rule_index=0, what=".*", reason="r"))
+    assert "/perm" not in text
+    assert "by hand" in text
+
+
+def test_rule_to_dict_refuses_bypassed_scoped_legacy_rule() -> None:
+    """QA: the legacy branch must not silently drop `from_` / `pattern`."""
+    for fields in ({"from_": A}, {"pattern": "safe*"}):
+        bypassed = Rule.model_construct(
+            **(
+                {
+                    "who": ".*",
+                    "what": r"tool\.bash",
+                    "pattern": "*",
+                    "effect": "allow",
+                    "from_": None,
+                    "id": "rl_x",
+                    "source_file": None,
+                    "source_line": None,
+                }
+                | fields
+            )
+        )
+        with pytest.raises(AuthzMalformedRule):
+            _rule_to_dict(bypassed)
+
+
 @pytest.mark.parametrize("ref", ["kolsch/agents/*", "kolsch/workflows/w"])
 def test_glob_and_workflow_from_pass_with_catalog(ref: str) -> None:
     result = migrate_authz_rules(

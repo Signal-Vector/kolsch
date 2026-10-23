@@ -53,6 +53,13 @@ import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from providers.authz import (
+    LEGACY_AGENT_EXECUTE_RE,
+    LEGACY_BASH_SUGGEST_RE,
+    LEGACY_CATCHALL_RE,
+    LEGACY_TOOL_ACTION_RE,
+)
+
 if TYPE_CHECKING:
     from assets.catalog import AssetCatalog
 
@@ -239,14 +246,12 @@ def migrate_authz_rules(
 # ---------------------------------------------------------------------------
 
 
-# `what: tool\.<name>` (with optional anchors)
-_TOOL_ACTION_RE = re.compile(r"^\^?tool\\\.([a-z0-9][a-z0-9_-]*)\$?$")
-# `what: ^<cmd> .*$` (bash-suggest output from _modal.suggest_pattern)
-_BASH_SUGGEST_RE = re.compile(r"^\^([a-zA-Z0-9_\-./]+) \.\*\$$")
-# `what: agent\.execute\..*` (engine pre-flight allow)
-_AGENT_EXECUTE_RE = re.compile(r"^\^?agent\\\.execute\\\.\.\*\$?$")
-# `what: .*` (catch-all)
-_CATCHALL_RE = re.compile(r"^\^?\.\*\$?$")
+# The legacy `what:` grammar lives in `providers.authz` (its loader
+# uses it to say when `kolsch setup` can convert a scoped legacy rule).
+_TOOL_ACTION_RE = LEGACY_TOOL_ACTION_RE
+_BASH_SUGGEST_RE = LEGACY_BASH_SUGGEST_RE
+_AGENT_EXECUTE_RE = LEGACY_AGENT_EXECUTE_RE
+_CATCHALL_RE = LEGACY_CATCHALL_RE
 
 
 def _try_migrate(
@@ -483,8 +488,13 @@ _FROM_ASSET_SEGMENTS = {"agents": "agent", "workflows": "workflow"}
 
 
 def _legacy_from(raw: dict[str, Any]) -> object:
-    """Return a legacy entry's `from` (YAML key) or `from_` value, else `None`."""
-    return raw.get("from", raw.get("from_"))
+    """Return a legacy entry's `from` (YAML key) or, failing that, `from_` value.
+
+    Either non-null key scopes the rule — a present-but-null `from`
+    must not hide a `from_`.
+    """
+    from_value = raw.get("from")
+    return raw.get("from_") if from_value is None else from_value
 
 
 def _diagnose_legacy_scope(
@@ -509,6 +519,13 @@ def _diagnose_legacy_scope(
     from_value = _legacy_from(raw)
     if from_value is None:
         return None
+    alt_value = raw.get("from_")
+    if alt_value is not None and alt_value != from_value:
+        return (
+            f"legacy rule sets both `from: {from_value!r}` and "
+            f"`from_: {alt_value!r}`; keep one and convert the rule by hand — "
+            "it will fail to load until then"
+        )
     parts = from_value.split("/") if isinstance(from_value, str) else []
     if len(parts) != _FROM_REF_PARTS or not all(parts):
         return (

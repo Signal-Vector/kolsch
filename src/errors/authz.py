@@ -388,8 +388,8 @@ class ConfigDeprecatedRegexRule(PlatformError):
         super().__init__(
             message=(
                 f"Rule at index {rule_index} kept in legacy regex form "
-                f"(what={what!r}): {reason}. Convert manually or via "
-                f"`/perm` slash commands."
+                f"(what={what!r}): {reason}. Convert it to the canonical "
+                "`{what, pattern, from?, effect}` shape by hand."
             ),
             where=where,
             detail={

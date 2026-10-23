@@ -127,7 +127,12 @@ class ContextFileSpec(BaseModel):
         return value
 
 
-def legacy_rule_scope_violation(*, from_value: object, pattern: object) -> str | None:
+def legacy_rule_scope_violation(
+    *,
+    from_value: object,
+    pattern: object,
+    setup_can_migrate: bool = False,
+) -> str | None:
     """Return why a legacy-shape rule's `from` / `pattern` is refused, or `None`.
 
     The legacy `{id, who, what, effect}` regex shape has no caller-chain
@@ -138,14 +143,25 @@ def legacy_rule_scope_violation(*, from_value: object, pattern: object) -> str |
     and `providers.authz.Rule` all refuse such a rule with this text.
 
     `pattern: "*"` is the canonical default and a harmless no-op, so it
-    is accepted; `from: null` is accepted for the same reason.
+    is accepted; a `None` `from_value` (absent or `from: null`) is
+    accepted for the same reason. Callers reading a raw mapping pass a
+    non-`None` `from_value` when EITHER the `from` or `from_` key holds
+    a value.
+
+    The fix the text gives is converting the rule by hand. Only the
+    `kolsch setup` migrator can do it automatically, and only for a
+    `platform.yaml` rule with `who: ".*"`, a recognised `what`, a valid
+    `from:` ref and no `pattern:`; the provider's platform-rule loader
+    passes `setup_can_migrate=True` for exactly that case.
 
     Lives here (not in `providers.authz`) because the schemas layer must
     not depend on the providers layer; the provider imports it.
 
     Args:
-        from_value: The rule's `from` value (`None` when absent).
+        from_value: The rule's effective `from` value (`None` when absent).
         pattern: The rule's `pattern` value (`"*"` when absent).
+        setup_can_migrate: Also point at `kolsch setup`, which converts
+            this rule on re-run.
 
     Returns:
         The error text naming the offending field(s) and the fix, or
@@ -158,13 +174,17 @@ def legacy_rule_scope_violation(*, from_value: object, pattern: object) -> str |
         fields.append(f"`pattern: {pattern!r}`")
     if not fields:
         return None
+    fix = (
+        "Convert it by hand to the canonical shape `{what: <bundle>/tools/<name> "
+        "| agent.execute.* | *, pattern: <glob>, from: <bundle>/agents/<name>, "
+        "effect: ...}` (drop `who`)"
+    )
+    if setup_can_migrate:
+        fix += "; for this `platform.yaml` rule, re-running `kolsch setup` does it"
     return (
         f"legacy `{{who, what}}` rule cannot carry {' or '.join(fields)} — the "
         "legacy regex shape has no caller or target filter, so the rule would "
-        "apply to every caller and every target. Convert it to the canonical "
-        "shape `{what: <bundle>/tools/<name> | agent.execute.* | *, "
-        "pattern: <glob>, from: <bundle>/agents/<name>, effect: ...}` "
-        "(drop `who`), or re-run `kolsch setup` to migrate it"
+        f"apply to every caller and every target. {fix}"
     )
 
 

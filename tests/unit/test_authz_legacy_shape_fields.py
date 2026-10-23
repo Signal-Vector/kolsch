@@ -69,12 +69,13 @@ async def _effects(
     ]
 
 
-def _assert_hint(text: str, field: str) -> None:
+def _assert_hint(text: str, field: str, *, setup: bool = False) -> None:
+    """The refusal names the field and the fix; `kolsch setup` only when it works."""
     assert field in text
     assert "legacy" in text
-    assert "canonical" in text
+    assert "by hand to the canonical shape" in text
     assert "from: <bundle>/agents/<name>" in text
-    assert "kolsch setup" in text
+    assert ("kolsch setup" in text) is setup
 
 
 # ---------------------------------------------------------------------------
@@ -90,7 +91,66 @@ def test_platform_load_rejects_legacy_from(from_key: str, from_value: str) -> No
     with pytest.raises(AuthzMalformedRule) as excinfo:
         _provider([rule, _TAIL])
     assert excinfo.value.detail["rule_index"] == 0
-    _assert_hint(excinfo.value.detail["error"], "`from:`")
+    # The migrator converts a valid `from:` ref; a garbage one it refuses.
+    _assert_hint(excinfo.value.detail["error"], "`from:`", setup=from_value == A)
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        {"who": "^user$", "what": ".*", "from": A, "effect": "allow"},
+        {"who": ".*", "what": "^[a-z]+$", "from": A, "effect": "allow"},
+        {"who": ".*", "what": ".*", "from": "kolsch/tools/x", "effect": "allow"},
+        {"who": ".*", "what": ".*", "from": A, "pattern": "a*", "effect": "allow"},
+    ],
+    ids=["non_star_who", "unrecognised_what", "bad_from_type", "with_pattern"],
+)
+def test_platform_load_hint_omits_setup_when_migrator_refuses(
+    rule: dict[str, str],
+) -> None:
+    with pytest.raises(AuthzMalformedRule) as excinfo:
+        _provider([rule, _TAIL])
+    assert "kolsch setup" not in excinfo.value.detail["error"]
+    assert "by hand" in excinfo.value.detail["error"]
+
+
+async def test_null_from_does_not_hide_from_underscore_on_legacy() -> None:
+    """QA: `from: null` + `from_: <ref>` used to load unscoped."""
+    rule = {"who": ".*", "what": r"tool\.bash", "from": None, "from_": A}
+    rule["effect"] = "allow"
+    with pytest.raises(AuthzMalformedRule):
+        _provider([rule, _TAIL])
+
+
+async def test_null_from_does_not_hide_from_underscore_on_canonical() -> None:
+    provider = _provider(
+        [
+            {
+                "what": "agent.execute.*",
+                "from": None,
+                "from_": A,
+                "effect": "allow",
+            },
+            _TAIL,
+        ]
+    )
+    assert (await provider.list_rules())[0].from_ == A
+    assert await _effects(provider, "agent.execute.ag_x") == [
+        AuthzEffect.ALLOW,
+        AuthzEffect.DENY,
+        AuthzEffect.DENY,
+    ]
+
+
+@pytest.mark.parametrize("who", [None, ".*"], ids=["canonical", "legacy"])
+def test_conflicting_from_and_from_underscore_refused(who: str | None) -> None:
+    rule: dict[str, Any] = {"what": "*", "from": A, "from_": "kolsch/agents/b"}
+    rule["effect"] = "allow"
+    if who is not None:
+        rule["who"] = who
+    with pytest.raises(AuthzMalformedRule) as excinfo:
+        _provider([rule, _TAIL])
+    assert "both" in excinfo.value.detail["error"]
 
 
 def test_platform_load_rejects_legacy_non_star_pattern() -> None:
