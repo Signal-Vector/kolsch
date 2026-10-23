@@ -552,6 +552,11 @@ policy evaluation. Implementations MUST NOT allow symlink-based
 bypass — a symlink pointing into a denied location MUST be treated as
 the denied location, not the symlink path.
 
+Authorization rule patterns for file tools use the same resolution:
+dispatch matches a file tool's `path` against its canonical form, not
+the raw string (see the authz contract's
+[§3.2.7 Path targets](secrets-sandbox-authz-contract.md#327-path-targets)).
+
 ### Fh-I5 — Tools never write to `content/`
 
 The builtin tools MUST NOT write to `<platform-root>/content/`. Only

@@ -264,8 +264,12 @@ class Rule(BaseModel):
       OR a system action namespace (`agent.execute.*`) OR the
       catch-all `*`.
     - `pattern` is a glob matched against the target string (the
-      path / command / url the tool receives). Defaults to `*` for
-      rules that don't care about the target.
+      command / url the tool receives; for a file tool's `path`, the
+      canonical forms from
+      [`files.authz_target`][files.authz_target] — strict for
+      `allow`, loose for `deny` / `prompt`). Stored and hashed into
+      the id verbatim. Defaults to `*` for rules that don't care
+      about the target.
     - `effect` is `allow` / `deny` / `prompt`.
 
     The legacy shape `{id, who, what, effect}` (with `what` as a
@@ -735,7 +739,8 @@ if TYPE_CHECKING:
         """The hook chat surfaces inject to resolve `prompt` effects.
 
         Receives the matched rule's id, the action, the optional
-        target (resolved path / command string), and the caller_chain
+        target (a file tool's canonical display path / the command
+        string), and the caller_chain
         (proximate-first tuple of caller frames — the modal defaults
         newly-persisted rules' `from:` to `caller_chain[0]` so
         approved rules scope to the current agent by default).
@@ -804,8 +809,10 @@ class AuthorizationProvider(Protocol):
     """The two-method contract every authz variant honours.
 
     `allow` accepts optional `target` and `callback` parameters.
-    `target` is matched against the rule's `pattern` (for file tools
-    the resolved path; for `bash` the command string). `callback` is
+    `target` is matched against the rule's `pattern` (for `bash` the
+    command string; for file tools the canonical display path, with
+    `path_target` carrying the forms the pattern is matched against).
+    `callback` is
     the chat-surface prompt resolver — when omitted, `prompt`
     collapses to `deny` so unattended callers never hang.
     """
@@ -860,10 +867,13 @@ class _CompiledRule:
 
     - **Legacy** rules carry `who_re` and `what_re` (compiled regex
       patterns matched via `re.fullmatch`). `what_re` matches against
-      the target (preferred) or action.
+      the target (preferred) or action; a path target is matched
+      through its canonical forms, picked by effect.
     - **New-shape** rules carry `what` (glob) and `pattern` (glob),
       both matched via `fnmatch.fnmatchcase`. `what` matches the
-      action OR the tool ref; `pattern` matches the target.
+      action OR the tool ref; `pattern` matches the target (a path
+      target through its canonical forms; the pattern itself is
+      normalised lexically at match time, never stored rewritten).
 
     `is_legacy` records which path the matcher should follow. The
     public surface is [`Rule`][providers.authz.Rule] — the raw,
