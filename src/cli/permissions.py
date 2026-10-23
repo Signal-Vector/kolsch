@@ -383,6 +383,8 @@ def _rule_to_dict(rule: Rule) -> dict[str, str]:
             out["from"] = rule.from_
         out["effect"] = rule.effect
         return out
+    # No `from` / `pattern` to carry: the provider and `Rule` refuse a
+    # legacy rule holding either (bug-159), so nothing is dropped here.
     return {
         "id": rule.id,
         "who": rule.who,

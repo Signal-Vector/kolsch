@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from schemas.identifiers import AgentId
 
@@ -127,6 +127,47 @@ class ContextFileSpec(BaseModel):
         return value
 
 
+def legacy_rule_scope_violation(*, from_value: object, pattern: object) -> str | None:
+    """Return why a legacy-shape rule's `from` / `pattern` is refused, or `None`.
+
+    The legacy `{id, who, what, effect}` regex shape has no caller-chain
+    or target filter: its compile path never reads `from` or `pattern`.
+    A legacy rule carrying either would therefore load as a rule that
+    applies to every caller and every target — wider than it reads. The
+    authz provider, [`PermissionRule`][schemas.config.PermissionRule]
+    and `providers.authz.Rule` all refuse such a rule with this text.
+
+    `pattern: "*"` is the canonical default and a harmless no-op, so it
+    is accepted; `from: null` is accepted for the same reason.
+
+    Lives here (not in `providers.authz`) because the schemas layer must
+    not depend on the providers layer; the provider imports it.
+
+    Args:
+        from_value: The rule's `from` value (`None` when absent).
+        pattern: The rule's `pattern` value (`"*"` when absent).
+
+    Returns:
+        The error text naming the offending field(s) and the fix, or
+        `None` when the rule is acceptable.
+    """
+    fields: list[str] = []
+    if from_value is not None:
+        fields.append("`from:`")
+    if pattern != "*":
+        fields.append(f"`pattern: {pattern!r}`")
+    if not fields:
+        return None
+    return (
+        f"legacy `{{who, what}}` rule cannot carry {' or '.join(fields)} — the "
+        "legacy regex shape has no caller or target filter, so the rule would "
+        "apply to every caller and every target. Convert it to the canonical "
+        "shape `{what: <bundle>/tools/<name> | agent.execute.* | *, "
+        "pattern: <glob>, from: <bundle>/agents/<name>, effect: ...}` "
+        "(drop `who`), or re-run `kolsch setup` to migrate it"
+    )
+
+
 class PermissionRule(BaseModel):
     """One entry in the agent config's `permissions:` block.
 
@@ -146,7 +187,11 @@ class PermissionRule(BaseModel):
     The legacy shape `{id, who, what, effect}` is still accepted
     during the migration window — `who` is optional and, when
     present, flags the rule as legacy-regex (the authz provider's
-    compile step keys off this).
+    compile step keys off this). A legacy rule cannot carry `from`
+    or a non-`*` `pattern` (see
+    [`legacy_rule_scope_violation`][schemas.config.legacy_rule_scope_violation]);
+    validation rejects the combination rather than let the field be
+    silently ignored.
 
     Defined here (rather than imported from `providers.authz`)
     because the schemas layer must not depend on the providers layer.
@@ -163,6 +208,16 @@ class PermissionRule(BaseModel):
     # regex vs. glob matching.
     id: str = ""
     who: str | None = None
+
+    @model_validator(mode="after")
+    def _reject_scoped_legacy(self) -> PermissionRule:
+        if self.who is not None:
+            reason = legacy_rule_scope_violation(
+                from_value=self.from_, pattern=self.pattern
+            )
+            if reason is not None:
+                raise ValueError(reason)
+        return self
 
 
 # Ceiling for `HookRule.timeout_seconds` — matches the bash tool's

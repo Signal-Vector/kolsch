@@ -42,7 +42,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from assets.refs import build_ref, is_three_segment, parse_three_segment
 from errors import (
@@ -54,6 +54,7 @@ from errors import (
     ConfigInvalid,
 )
 from errors.assets import AssetsAmbiguousShorthand
+from schemas.config import legacy_rule_scope_violation
 from workflows.errors import (
     WorkflowFromAssetTypeError,
     WorkflowFromNotFound,
@@ -199,6 +200,13 @@ class Rule(BaseModel):
     the provider's compile step treats as new-shape glob-matched; when
     `who` is supplied (typically `".*"`) the rule compiles as legacy
     regex. `id` is auto-derived from `who+what+effect` when absent.
+    A legacy rule cannot carry `from_` or a non-`*` `pattern`: the
+    regex matcher has no caller or target filter, so either field
+    would be silently ignored and the rule would apply more widely
+    than it reads. Construction raises (Pydantic `ValidationError`)
+    with the
+    [`legacy_rule_scope_violation`][schemas.config.legacy_rule_scope_violation]
+    text instead.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
@@ -236,6 +244,16 @@ class Rule(BaseModel):
         carries `who` and no new-shape YAML rule has one.
         """
         return self.who is not None
+
+    @model_validator(mode="after")
+    def _reject_scoped_legacy(self) -> Rule:
+        if self.who is not None:
+            reason = legacy_rule_scope_violation(
+                from_value=self.from_, pattern=self.pattern
+            )
+            if reason is not None:
+                raise ValueError(reason)
+        return self
 
 
 def derive_rule_id(who: str, what: str, effect: str) -> str:
@@ -821,6 +839,19 @@ class RuleBasedAuthorizationProvider:
         *,
         source: tuple[str, int] | None = None,
     ) -> _CompiledRule:
+        """Compile a legacy `{id, who, what, effect}` regex-shape entry.
+
+        The legacy shape has no caller-chain or target filter, so an
+        entry carrying `from` (or `from_`) or a non-`*` `pattern` is
+        refused with `AuthzMalformedRule` rather than compiled into a
+        rule that applies to every caller and target.
+        """
+        reason = legacy_rule_scope_violation(
+            from_value=entry.get("from", entry.get("from_")),
+            pattern=entry.get("pattern", "*"),
+        )
+        if reason is not None:
+            raise AuthzMalformedRule(rule_index=index, error=reason)
         for required in ("who", "what", "effect"):
             if required not in entry:
                 raise AuthzMalformedRule(
@@ -1803,10 +1834,21 @@ class RuleBasedAuthorizationProvider:
         Dispatches the same way `_compile` does — legacy rules (`who`
         set) use regex; new-shape rules (`who` absent) use glob. Used
         by `add_rule` / `_resolve_prompt` where the caller already
-        constructed a `Rule`.
+        constructed a `Rule`, and per call for agent / bundle /
+        workflow layer rules. A legacy rule carrying `from_` or a
+        non-`*` `pattern` raises `AuthzMalformedRule` (`rule_index=-1`)
+        before any caller mutates its rule list.
         """
         if rule.is_legacy:
             assert rule.who is not None
+            # `Rule`'s validator already refuses this; re-check for
+            # `model_construct` / `model_copy` bypasses so no legacy
+            # rule with an ignored `from_` / `pattern` ever compiles.
+            reason = legacy_rule_scope_violation(
+                from_value=rule.from_, pattern=rule.pattern
+            )
+            if reason is not None:
+                raise AuthzMalformedRule(rule_index=-1, error=reason)
             try:
                 who_re = re.compile(rule.who)
             except re.error as exc:

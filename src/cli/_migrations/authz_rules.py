@@ -29,6 +29,17 @@ Migration heuristics (in priority order; first match wins):
    Only fires on new-shape rules (`pattern` field present); legacy
    rules go through heuristic 1.
 
+Caller-chain scoping (`from:`) is carried through, never dropped. A
+legacy rule cannot express `from:` (the provider refuses one that
+carries it), so a legacy rule with a `from:` that passes the
+provider's shape check (3 segments, asset type `agents` /
+`workflows`, catalog existence for a non-glob name when a catalog is
+supplied) converts to the canonical dict with the same `from:`. A
+legacy rule whose `from:` fails that check, or that carries a
+non-`*` `pattern:`, stays in legacy form and is recorded as
+deprecated — the provider then refuses it at load, loudly, instead
+of the migrator writing a rule wider than its input.
+
 Unconvertible rules — anything containing character classes,
 lookahead, or other regex constructs the heuristic doesn't
 recognise, or 2-seg refs that don't resolve in the catalog — stay
@@ -188,19 +199,37 @@ def migrate_authz_rules(
                     ),
                 )
             continue
-        # Legacy shape. Try each heuristic in priority order.
-        migrated = _try_migrate(raw, catalog=catalog)
+        # Legacy shape. A `from:` / non-`*` `pattern:` the legacy
+        # shape can't express must survive conversion or block it —
+        # never be dropped (dropping widens the rule).
+        scope_reason = _diagnose_legacy_scope(raw, catalog=catalog)
+        migrated = None if scope_reason else _try_migrate(raw, catalog=catalog)
         if migrated is None:
+            reason = scope_reason or _diagnose_legacy(raw, catalog=catalog)
+            if scope_reason is None and _legacy_from(raw) is not None:
+                reason += (
+                    "; the rule also carries `from:`, which the legacy "
+                    "shape cannot express — it will fail to load until "
+                    "converted to the canonical shape by hand"
+                )
             deprecated.append(
                 DeprecatedRegexRule(
                     rule_index=index,
                     what=str(raw.get("what", "")),
-                    reason=_diagnose_legacy(raw, catalog=catalog),
+                    reason=reason,
                     kind="regex",
                 ),
             )
             converted.append(raw)  # keep legacy form
             continue
+        from_value = _legacy_from(raw)
+        if from_value is not None:
+            migrated = {
+                "what": migrated["what"],
+                "pattern": migrated["pattern"],
+                "from": from_value,
+                "effect": migrated["effect"],
+            }
         converted.append(migrated)
     return MigrationResult(rules=converted, deprecated=deprecated)
 
@@ -446,6 +475,67 @@ def _try_reattribute_orphaned_3seg(
     rewritten = dict(raw)
     rewritten["what"] = f"{real_bundle}/tools/{name}"
     return rewritten, True
+
+
+# `from:` caller refs: `<bundle>/<agents|workflows>/<name>`.
+_FROM_REF_PARTS = 3
+_FROM_ASSET_SEGMENTS = {"agents": "agent", "workflows": "workflow"}
+
+
+def _legacy_from(raw: dict[str, Any]) -> object:
+    """Return a legacy entry's `from` (YAML key) or `from_` value, else `None`."""
+    return raw.get("from", raw.get("from_"))
+
+
+def _diagnose_legacy_scope(
+    raw: dict[str, Any],
+    *,
+    catalog: AssetCatalog | None,
+) -> str | None:
+    """Return why a legacy rule's `pattern` / `from` blocks conversion, or `None`.
+
+    Mirrors the provider's `_validate_from` shape check (3 segments,
+    asset type `agents` / `workflows`, catalog existence for a
+    non-glob name when a catalog is supplied) so a `from:` that
+    passes here also loads once converted.
+    """
+    pattern = raw.get("pattern", "*")
+    if pattern != "*":
+        return (
+            f"legacy rule carries `pattern: {pattern!r}`, which the legacy "
+            "shape ignores; convert it to the canonical shape by hand — "
+            "the rule will fail to load until then"
+        )
+    from_value = _legacy_from(raw)
+    if from_value is None:
+        return None
+    parts = from_value.split("/") if isinstance(from_value, str) else []
+    if len(parts) != _FROM_REF_PARTS or not all(parts):
+        return (
+            f"`from: {from_value!r}` is not a 3-segment "
+            "`<bundle>/agents/<name>` or `<bundle>/workflows/<name>` ref; "
+            "fix it and convert the rule by hand — it will fail to load "
+            "until then"
+        )
+    _bundle, segment, name = parts
+    expected_type = _FROM_ASSET_SEGMENTS.get(segment)
+    if expected_type is None:
+        return (
+            f"`from: {from_value!r}` names asset type {segment!r}; only "
+            "`agents` and `workflows` can be callers — fix it and convert "
+            "the rule by hand; it will fail to load until then"
+        )
+    if (
+        catalog is not None
+        and "*" not in name
+        and "?" not in name
+        and catalog.lookup(str(from_value), expected_type=expected_type) is None
+    ):
+        return (
+            f"`from: {from_value!r}` is not in the catalog; fix it and "
+            "convert the rule by hand — it will fail to load until then"
+        )
+    return None
 
 
 def _diagnose_legacy(
