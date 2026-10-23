@@ -814,9 +814,11 @@ re-running `kolsch setup` converts it and keeps the `from:`:
 - { what: kolsch/tools/bash, pattern: "*", from: kolsch/agents/triage, effect: allow }
 ```
 
-Anything else (a bad `from:` ref, a non-`*` `pattern:`, or a rule
-outside `platform.yaml`) setup leaves alone with a warning;
-rewrite it in the canonical shape by hand.
+A `platform.yaml` rule setup can't convert (a bad `from:` ref or a
+non-`*` `pattern:`) is left alone with a warning. Setup never reads
+agent or bundle `permissions:` or workflow `policy:`, so a rule there
+is not touched at all. Rewrite either kind in the canonical shape by
+hand.
 
 **Legacy `tool\.<name>` rules never match.** Tool actions are
 3-segment refs (`kolsch/tools/bash`), so a legacy

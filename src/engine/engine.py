@@ -108,7 +108,10 @@ _log = logging.getLogger("engine")
 
 # `(agent_id, layer)` pairs whose dead legacy `tool\.<name>` rules were
 # already reported this process — tools register once per exchange, so
-# without this a chat would repeat the warning every turn.
+# without this a chat would repeat the warning every turn. The key is
+# per (agent_id, layer), not per rule: a dead rule added via `/reload`
+# to an agent that already warned stays silent until restart, and a
+# bundle's dead rule warns once for each agent of that bundle.
 _DEAD_LEGACY_RULES_WARNED: set[tuple[str, str]] = set()
 
 # Sentinel pushed to the stream queue when the runner finishes.
