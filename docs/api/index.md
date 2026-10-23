@@ -449,6 +449,10 @@ resolved agent config) belong in the
     options:
       heading_level: 3
 
+::: files.authz_target
+    options:
+      heading_level: 3
+
 ---
 
 ## Kernel
