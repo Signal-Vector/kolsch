@@ -19,17 +19,21 @@ or without tool-path chain wiring.
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any
 
 import pytest
 from pydantic import ValidationError
 
+from assets.catalog import AssetCatalog
 from errors import AuthzMalformedRule
 from providers.authz import (
     AuthzEffect,
     PermissionLayer,
     Rule,
     RuleBasedAuthorizationProvider,
+    dead_legacy_rule_reason,
+    warn_dead_legacy_rules,
 )
 from schemas.config import PermissionRule
 from workflows.errors import WorkflowValidationError
@@ -439,3 +443,99 @@ async def test_unscoped_legacy_rules_load_and_match_as_before() -> None:
     )
     assert await _effects(provider, "tool.bash", target="ls") == [AuthzEffect.ALLOW] * 3
     assert await _effects(provider, "agent.execute.ag_other") == [AuthzEffect.DENY] * 3
+
+
+# ---------------------------------------------------------------------------
+# D4 / AC 16 — dead legacy `tool\.<name>` rules warn (never raise)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("what", "dead"),
+    [
+        (r"tool\.bash", True),
+        (r"^tool\.bash$", True),
+        (r"tool\.read_file", True),
+        (".*", False),
+        (r"agent\.execute\..*", False),
+        (r"^agent\.execute\.ag_butler$", False),
+    ],
+)
+def test_dead_legacy_rule_reason(what: str, *, dead: bool) -> None:
+    reason = dead_legacy_rule_reason(Rule(who=".*", what=what, effect="prompt"))
+    assert (reason is not None) is dead
+    if reason is not None:
+        assert "never matches" in reason
+        assert "<bundle>/tools/" in reason
+        assert "effect: prompt" in reason
+
+
+def test_dead_legacy_rule_reason_ignores_canonical() -> None:
+    assert dead_legacy_rule_reason(Rule(what="tool.bash", effect="allow")) is None
+
+
+_DEAD_RULES: list[dict[str, str]] = [
+    {"who": ".*", "what": r"tool\.bash", "effect": "prompt"},
+    {"who": ".*", "what": r"agent\.execute\..*", "effect": "allow"},
+    {"who": ".*", "what": r"^tool\.read_file$", "effect": "allow"},
+    {"who": ".*", "what": ".*", "effect": "deny"},
+]
+
+
+def _dead_warnings(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    return [
+        r
+        for r in caplog.records
+        if r.levelno == logging.WARNING and "never matches" in r.getMessage()
+    ]
+
+
+async def test_dead_legacy_rule_warns_once_per_rule_with_catalog(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    catalog = AssetCatalog(bundles={}, assets={})
+    with caplog.at_level(logging.WARNING, logger="providers.authz"):
+        provider = RuleBasedAuthorizationProvider(
+            config={"rules": _DEAD_RULES}, catalog=catalog
+        )
+    warnings = _dead_warnings(caplog)
+    assert len(warnings) == 2
+    assert "index 0" in warnings[0].getMessage()
+    assert "index 2" in warnings[1].getMessage()
+    assert "authz.rule_based.load" in warnings[0].getMessage()
+    # Decisions are unchanged: the dead rule still doesn't match the
+    # real action, and still matches the literal `tool.bash` string.
+    real = await provider.allow("user.local", "kolsch/tools/bash", target="ls")
+    assert real.effect is AuthzEffect.DENY
+    literal = await provider.allow("user.local", "tool.bash")
+    assert literal.effect is AuthzEffect.PROMPT
+
+
+def test_dead_legacy_rule_quiet_without_catalog(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.WARNING):
+        RuleBasedAuthorizationProvider(config={"rules": _DEAD_RULES})
+    assert _dead_warnings(caplog) == []
+
+
+def test_warn_dead_legacy_rules_names_source(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    rules = [
+        Rule(
+            who=".*",
+            what=r"tool\.bash",
+            effect="prompt",
+            source_file="/ws/agents/helper.yaml",
+            source_line=30,
+        ),
+        Rule(what="kolsch/tools/bash", effect="prompt"),
+    ]
+    with caplog.at_level(logging.WARNING, logger="providers.authz"):
+        count = warn_dead_legacy_rules(rules, where="agent ag_x agent permissions")
+    assert count == 1
+    message = _dead_warnings(caplog)[0].getMessage()
+    assert message.startswith(
+        "agent ag_x agent permissions (/ws/agents/helper.yaml:30)"
+    )

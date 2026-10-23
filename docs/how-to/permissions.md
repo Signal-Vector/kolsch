@@ -818,6 +818,19 @@ Anything else (a bad `from:` ref, a non-`*` `pattern:`, or a rule
 outside `platform.yaml`) setup leaves alone with a warning;
 rewrite it in the canonical shape by hand.
 
+**Legacy `tool\.<name>` rules never match.** Tool actions are
+3-segment refs (`kolsch/tools/bash`), so a legacy
+`what: "tool\\.bash"` regex can't match a real tool call — its
+effect is silently not applied. Setup converts these in
+`platform.yaml`, but not in agent or bundle `permissions:` (a
+workspace created before this release may still carry one in
+`bundles/kolsch/agents/*.yaml`). kolsch logs a
+`config.deprecated_regex_rule` warning for each such rule — at
+workspace load for `platform.yaml`, and once per agent for agent /
+bundle rules — naming the canonical replacement
+(`{what: <bundle>/tools/<name>, pattern: "*", effect: …}`).
+The warning never changes a decision; replace the rule by hand.
+
 The heuristic covers every pattern the pre-QoL `_modal.py`
 `suggest_pattern` produced, plus the canonical post-Phase-2.0
 default rule set. Anything else falls into the "please convert"

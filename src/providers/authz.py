@@ -51,6 +51,7 @@ from errors import (
     AuthzPatternInvalid,
     AuthzRegexInvalid,
     AuthzToolRefUnknown,
+    ConfigDeprecatedRegexRule,
     ConfigInvalid,
 )
 from errors.assets import AssetsAmbiguousShorthand
@@ -66,6 +67,9 @@ if TYPE_CHECKING:
 
     from assets.catalog import AssetCatalog
     from engine.context import ExecutionContext
+
+
+_log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -465,11 +469,10 @@ def inspect_default_deny_tail(rules: Sequence[object]) -> DefaultDenyTailStatus:
     parsed from `platform.yaml`'s `authorization.config.rules`
     (mappings; any non-mapping entry is skipped but keeps its index).
 
-    The tail is detected by **shape**, never by id. Ids are an
-    unreliable signal: [`derive_rule_id`][providers.authz.derive_rule_id]
-    ignores `from`, so a scoped catch-all deny is also assigned
-    [`DEFAULT_DENY_RULE_ID`][providers.authz.DEFAULT_DENY_RULE_ID], and a
-    legacy rule may carry any caller-supplied `id`. A tail is an
+    The tail is detected by **shape**, never by id: a legacy rule may
+    carry any caller-supplied `id`, so
+    [`DEFAULT_DENY_RULE_ID`][providers.authz.DEFAULT_DENY_RULE_ID] alone
+    is not proof of a tail. A tail is an
     unscoped catch-all deny in either schema:
 
     - canonical: `{what: "*", pattern: "*" (or absent), effect: deny}`
@@ -574,6 +577,68 @@ def describe_default_deny_tail_problem(status: DefaultDenyTailStatus) -> str | N
         "`kolsch chat --auto-approve`, and be denied everywhere else. Fix: run "
         f"`{_DEFAULT_DENY_FIX_COMMAND}`, then `kolsch doctor` to re-check."
     )
+
+
+def dead_legacy_rule_reason(rule: Rule) -> str | None:
+    r"""Return why a legacy rule can never match, or `None`.
+
+    Covers the one precisely decidable case: a legacy `what:` that pins
+    the pre-3-segment tool action `tool\.<name>` (the
+    `LEGACY_TOOL_ACTION_RE`
+    grammar the setup migrator converts). Engine-registered tools act as
+    `<bundle>/tools/<name>`, so such a rule is dead — its effect is
+    never applied. Pure; callers decide whether to warn. Never consulted
+    by `allow()`, so it can't change a decision.
+    """
+    if not rule.is_legacy:
+        return None
+    match = LEGACY_TOOL_ACTION_RE.match(rule.what)
+    if match is None:
+        return None
+    name = match.group(1)
+    return (
+        f"`what: {rule.what!r}` pins the action `tool.{name}`, which no "
+        "engine-registered tool uses (tool actions are "
+        "`<bundle>/tools/<name>`), so this rule never matches; replace it "
+        f'with `{{what: <bundle>/tools/{name}, pattern: "*", '
+        f"effect: {rule.effect}}}`"
+    )
+
+
+def warn_dead_legacy_rules(rules: Sequence[Rule], *, where: str) -> int:
+    """Log one WARNING per dead legacy rule in `rules`.
+
+    A rule is dead when
+    [`dead_legacy_rule_reason`][providers.authz.dead_legacy_rule_reason]
+    returns a reason. The text is
+    [`ConfigDeprecatedRegexRule`][errors.ConfigDeprecatedRegexRule]'s
+    (`config.deprecated_regex_rule`), prefixed with `where` and the
+    rule's source location when known. Never raises.
+
+    Args:
+        rules: The rules to check, indexed as listed.
+        where: Who loaded them (e.g. `"authz.rule_based.load"`,
+            `"agent ag_x permissions"`).
+
+    Returns:
+        The number of warnings logged.
+    """
+    warned = 0
+    for index, rule in enumerate(rules):
+        reason = dead_legacy_rule_reason(rule)
+        if reason is None:
+            continue
+        location = (
+            f" ({rule.source_file}:{rule.source_line})"
+            if rule.source_file is not None
+            else ""
+        )
+        warning = ConfigDeprecatedRegexRule(
+            rule_index=index, what=rule.what, reason=reason, where=where
+        )
+        _log.warning("%s%s: %s", where, location, warning)
+        warned += 1
+    return warned
 
 
 class AuthorizationResult(BaseModel):
@@ -886,6 +951,14 @@ class RuleBasedAuthorizationProvider:
         self._rules: list[_CompiledRule] = [
             self._compile(index, entry) for index, entry in enumerate(raw_rules)
         ]
+        # A legacy `tool\.<name>` rule loads but can never match a real
+        # tool; say so (warning only). Catalog-less providers are test
+        # / non-workspace callers — stay quiet there.
+        if catalog is not None:
+            warn_dead_legacy_rules(
+                [compiled.raw for compiled in self._rules],
+                where="authz.rule_based.load",
+            )
         # Chat-injected callback resolved by `_resolve_prompt` when
         # `allow(callback=)` is omitted. The chat lifecycle registers
         # on startup and clears on exit so subsequent in-process

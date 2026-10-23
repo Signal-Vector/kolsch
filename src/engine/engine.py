@@ -106,6 +106,11 @@ if TYPE_CHECKING:
 
 _log = logging.getLogger("engine")
 
+# `(agent_id, layer)` pairs whose dead legacy `tool\.<name>` rules were
+# already reported this process — tools register once per exchange, so
+# without this a chat would repeat the warning every turn.
+_DEAD_LEGACY_RULES_WARNED: set[tuple[str, str]] = set()
+
 # Sentinel pushed to the stream queue when the runner finishes.
 _QUEUE_END: Any = object()
 
@@ -2424,7 +2429,7 @@ class _Exchange:
         from pathlib import Path as _Path  # noqa: PLC0415
 
         from assets.manifest import permissions_source_map  # noqa: PLC0415
-        from providers.authz import Rule  # noqa: PLC0415
+        from providers.authz import Rule, warn_dead_legacy_rules  # noqa: PLC0415
 
         # feat-041 — source-line metadata is threaded via a sidecar
         # because `PermissionRule` (schemas.config) is `extra="forbid"`
@@ -2470,6 +2475,14 @@ class _Exchange:
                     )
                     for i, r in enumerate(manifest.permissions)
                 ]
+        # Warning only: a legacy `tool\.<name>` layer rule never matches a
+        # registered tool, so its effect is silently not applied.
+        for layer, layer_rules in (("agent", agent_rules), ("bundle", bundle_rules)):
+            key = (str(self.agent_id), layer)
+            if key not in _DEAD_LEGACY_RULES_WARNED and warn_dead_legacy_rules(
+                layer_rules, where=f"agent {self.agent_id} {layer} permissions"
+            ):
+                _DEAD_LEGACY_RULES_WARNED.add(key)
 
         # feat-054 Phase 2: auto-register `reference_lookup` when
         # compaction is active for this exchange. The engine's
