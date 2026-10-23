@@ -44,8 +44,8 @@ see `tests/cli/chat/test_approval_hooks.py` for that) confirming:
    observer double, instead of near-instantly). This test reproduces
    that exact stress-test shape — a hanging-observer double driven
    through a real `PromptsImpl.choice()` call — and asserts
-   `bus.publish` is observed well before the hook-observe timeout
-   could possibly have elapsed.
+   `bus.publish` is observed while the observer is still blocked
+   (an ordering assertion, not a latency bound — qol-164).
 """
 
 from __future__ import annotations
@@ -131,20 +131,45 @@ class _HangingDispatcher:
         await asyncio.sleep(3600)
 
 
-class _TimestampingBus:
-    """Records the monotonic time of every `publish()` call.
+class _BlockingDispatcher:
+    """`observe()` blocks until the test sets `release`.
 
-    Used by the ordering-regression test below to confirm
-    `bus.publish` fires promptly — well before a hanging hook
-    observer's timeout could possibly have elapsed — rather than being
-    gated behind it."""
+    `entered` is set once `observe()` starts; `exited` once it returns
+    or is cancelled (e.g. by `_HOOK_OBSERVE_TIMEOUT_SECONDS`). The
+    ordering-regression test reads these to know, without any clock,
+    whether the observer had already finished when `bus.publish` ran.
+    """
 
     def __init__(self) -> None:
-        self.publish_times: list[float] = []
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+        self.exited = asyncio.Event()
+
+    async def observe(self, event: Event) -> None:
+        del event
+        self.entered.set()
+        try:
+            await self.release.wait()
+        finally:
+            self.exited.set()
+
+
+class _OrderingBus:
+    """Snapshots the observer's state at every `publish()` call.
+
+    Used by the ordering-regression test below to confirm `bus.publish`
+    fires while the hook observer is still blocked, rather than being
+    gated behind it."""
+
+    def __init__(self, dispatcher: _BlockingDispatcher) -> None:
+        self._dispatcher = dispatcher
+        self.published = asyncio.Event()
+        self.observer_exited_at_publish: list[bool] = []
 
     async def publish(self, event: Event) -> None:
         del event
-        self.publish_times.append(asyncio.get_running_loop().time())
+        self.observer_exited_at_publish.append(self._dispatcher.exited.is_set())
+        self.published.set()
 
 
 @dataclass
@@ -350,63 +375,50 @@ async def test_choice_round_trip_observes_requested(store: SessionStore) -> None
 async def test_bus_publish_not_delayed_by_hanging_hook_observer(
     store: SessionStore,
 ) -> None:
-    """Reviewer B's exact stress-test shape: a hanging-observer double,
+    """Reviewer B's exact stress-test shape: a blocking-observer double,
     driven through a real `PromptsImpl.choice()` call, with a spy bus
-    recording publish timestamps.
+    recording the observer's state at publish time.
 
     Before the ordering fix, `bus.publish()` — which drives
     `EventAdapter.handle`'s `ApprovalBlock` mount, the user-visible
     "a prompt is happening" signal — was awaited AFTER the hook-observe
     call, so a hanging observer delayed it by the full
     `_HOOK_OBSERVE_TIMEOUT_SECONDS` (measured: 3.002s). After the fix,
-    `bus.publish` must fire promptly — well before the hook-observe
-    timeout could possibly have elapsed — regardless of how slow or
-    hung the configured hook observer is.
+    `bus.publish` must fire while the observer is still blocked —
+    regardless of how slow or hung the configured hook observer is.
+    Asserted as ordering, never as elapsed time: the observer only
+    unblocks when this test releases it.
     """
-    bus = _TimestampingBus()
+    dispatcher = _BlockingDispatcher()
+    bus = _OrderingBus(dispatcher)
     impl = await _mk_impl(
         store,
         bus=bus,  # structural EventBus double (Protocol, not nominal)
-        runtime=_FakeRuntime(hook_dispatcher=_HangingDispatcher()),
+        runtime=_FakeRuntime(hook_dispatcher=dispatcher),
     )
     source: PromptSource = {"kind": "tool", "id": "tc_3"}
 
-    loop = asyncio.get_running_loop()
-    start = loop.time()
     task = asyncio.create_task(impl.choice("Q?", ["y", "n"], source=source))
 
-    # Poll for the bus publish to land — must happen almost
-    # immediately, nowhere near the hook-observer's timeout.
-    deadline = start + 1.0
-    while loop.time() < deadline:
-        if bus.publish_times:
-            break
-        await asyncio.sleep(0.01)
-    else:
-        msg = "bus.publish was never observed within 1.0s"
-        raise AssertionError(msg)
+    # Hang guards only (not the assertion): the publish and the
+    # observer call both happen on the first few loop passes.
+    await asyncio.wait_for(bus.published.wait(), timeout=5.0)
+    await asyncio.wait_for(dispatcher.entered.wait(), timeout=5.0)
 
-    publish_elapsed = bus.publish_times[0] - start
-    assert publish_elapsed < 1.0, (
-        f"bus.publish() took {publish_elapsed:.3f}s — expected near-"
-        "instant delivery, decoupled from the hanging hook observer's "
-        f"{_HOOK_OBSERVE_TIMEOUT_SECONDS}s timeout"
+    assert bus.observer_exited_at_publish == [False], (
+        "bus.publish() ran only after the hook observer had finished — "
+        "the widget-mount signal is gated behind the observer "
+        f"(snapshots: {bus.observer_exited_at_publish!r})"
     )
+    # The observer really is still blocked: nothing has released it
+    # and it has not timed out.
+    assert not dispatcher.release.is_set()
+    assert not dispatcher.exited.is_set()
 
-    # Clean up: resolve the prompt so the task doesn't leak. The
-    # `choice()` call itself is still in-flight awaiting the hanging
-    # observer's timeout internally (bounded by
-    # `_HOOK_OBSERVE_TIMEOUT_SECONDS`) — that's expected and asserted
-    # elsewhere (`test_hanging_observer_is_bounded_by_timeout`); this
-    # test only cares about the publish ordering, so give the pending
-    # prompt a moment to appear, then resolve and let the timeout run
-    # its course in the background wait below.
-    for _ in range(200):
-        await asyncio.sleep(0.01)
-        if impl.pending_prompt_id is not None:
-            break
-    else:
-        msg = "no pending prompt observed within the polling budget"
-        raise AssertionError(msg)
+    # Clean up: unblock the observer, then resolve the prompt so the
+    # task doesn't leak. `pending_prompt_id` is set before the
+    # `.requested` event is appended, so it is already visible here.
+    dispatcher.release.set()
+    assert impl.pending_prompt_id is not None
     impl.resolve_pending(str(impl.pending_prompt_id), "y")
     await asyncio.wait_for(task, timeout=_HOOK_OBSERVE_TIMEOUT_SECONDS + 5.0)
