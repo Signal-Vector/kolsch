@@ -516,6 +516,12 @@ class AssetManagement:
             raise ConfigDuplicateAgentId(
                 agent_id=agent_id,
                 refs=[known_ref, agent_entry.ref],
+                # The leaf YAML set no `agent_id:` of its own, so the id
+                # came down an `extends:` chain.
+                inherited_via_extends=(
+                    len(agent_partials_chain) > 1
+                    and "agent_id" not in agent_partials_chain[0]
+                ),
             )
         self._agent_id_to_bundle[agent_id] = bundle
         self._agent_id_to_ref[agent_id] = agent_entry.ref

@@ -144,17 +144,26 @@ class ConfigDuplicateAgentId(PlatformError):
         agent_id: str,
         refs: list[str],
         *,
+        inherited_via_extends: bool = False,
         where: str = "assets.asset_manager.build_resolved_config",
     ) -> None:
+        fix = (
+            f"set `agent_id:` on {refs[1]!r} — an `extends:` child inherits "
+            "its parent's explicit id"
+            if inherited_via_extends
+            else "give each agent its own agent_id"
+        )
         super().__init__(
             message=(
                 f"agent_id {agent_id!r} is declared by two agents: "
-                f"{refs[0]!r} and {refs[1]!r}; give each agent its own "
-                "agent_id (an `extends:` child inherits its parent's "
-                "agent_id unless it sets its own)"
+                f"{refs[0]!r} and {refs[1]!r}; {fix}"
             ),
             where=where,
-            detail={"agent_id": agent_id, "refs": list(refs)},
+            detail={
+                "agent_id": agent_id,
+                "refs": list(refs),
+                "inherited_via_extends": inherited_via_extends,
+            },
         )
 
 

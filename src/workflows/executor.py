@@ -46,6 +46,7 @@ from workflows.errors import (
     WorkflowBindUndefined,
     WorkflowExtendsDepthExceeded,
     WorkflowInputInvalid,
+    WorkflowLineageUnavailable,
     WorkflowNodeFailed,
     WorkflowPausedForInput,
     WorkflowResumeRejected,
@@ -761,7 +762,7 @@ class IterativeExecutor:
         the chain was passed explicitly (an in-process child).
 
         Raises:
-            WorkflowLineageMissing: An ancestor run is gone from disk.
+            WorkflowLineageUnavailable: An ancestor run is gone from disk.
             WorkflowExtendsDepthExceeded: The rebuilt chain is deeper
                 than the nesting cap.
         """
@@ -810,7 +811,7 @@ class IterativeExecutor:
                 pause sidecar is missing / inconsistent.
             WorkflowInputInvalid: The response shape doesn't match
                 the paused node's contract.
-            WorkflowLineageMissing: An ancestor run of this (child)
+            WorkflowLineageUnavailable: An ancestor run of this (child)
                 run is gone, so its caller chain can't be rebuilt.
         """
         from workflows.module_isolation import (  # noqa: PLC0415
@@ -1157,7 +1158,7 @@ class IterativeExecutor:
 
         Raises:
             WorkflowRunNotFound: The parent run's meta or events log
-                is missing (`WorkflowLineageMissing` when a further
+                is missing (`WorkflowLineageUnavailable` when a further
                 ancestor of a forked child run is missing).
             WorkflowRuntimeError: The fork event id isn't in the
                 parent's events log, or the overrides target an
@@ -1226,8 +1227,14 @@ class IterativeExecutor:
             raise WorkflowRunNotFound(run_id=str(parent_id))
 
         # bug-158: a fork of a child run keeps the child's parent
-        # frames; a broken lineage refuses the fork before anything runs.
-        self._restore_call_chain()
+        # frames. A broken lineage refuses the fork before its first
+        # event and discards the minted run (bug-142's discipline), so
+        # no phantom `pending` run is left behind.
+        try:
+            self._restore_call_chain()
+        except WorkflowLineageUnavailable:
+            self._discard_rejected_run(run_id)
+            raise
 
         # Read parent's events; locate the fork point. The slice is
         # inclusive — replay_into walks the fork event itself so a

@@ -887,7 +887,7 @@ per-agent permissions API for tool authors.
 | `config.agent_inheritance_cycle` | Fatal | `{cycle: [path1, path2, ...]}` | engine pre-flight (5.6.5) — `extends:` chain contains a cycle |
 | `config.parent_agent_not_found` | Fatal | `{path, resolved}` | engine pre-flight (5.6.5) — `extends:` points at a missing file |
 | `config.extends_template_without_inheritance` | Fatal | `{agent_path}` | engine pre-flight (5.6.6) — child prompt uses `{% extends parent %}` but its YAML has no `extends:` field |
-| `config.duplicate_agent_id` | Fatal | `{agent_id, refs: [first_ref, second_ref]}` | agent-load (`AssetManagement.build_resolved_config`) — a second agent resolves to an `agent_id` already mapped to a different ref (two YAMLs declare the same explicit `agent_id:`, or an `extends:` child inherits its parent's — give the child its own `agent_id:`). The id heads the exchange's caller chain, so a shared id would let one agent be authorized as the other under `from:`-scoped rules |
+| `config.duplicate_agent_id` | Fatal | `{agent_id, refs: [first_ref, second_ref], inherited_via_extends}` | agent-load (`AssetManagement.build_resolved_config`) — a second agent resolves to an `agent_id` already mapped to a different ref (two YAMLs declare the same explicit `agent_id:`, or an `extends:` child inherits its parent's — give the child its own `agent_id:`). The id heads the exchange's caller chain, so a shared id would let one agent be authorized as the other under `from:`-scoped rules |
 | `agent.template_warning` | Recoverable (Warning) | `{reference, reason, hint}` | engine pre-flight (5.6.6) — template-config consistency walker (Phase 2.2 §9) flags an empty-data variable access |
 | `authz.denied` | Recoverable | `{tool, target, rule_id}` | engine pre-dispatch OR tool's `permissions.require` call when the composed rules resolve to `DENY` / `PROMPT`-without-callback |
 | `tool.permissions_no_context` | Fatal | `{tool, caller}` | tool's `permissions.check` / `.require` called outside the engine's dispatch ContextVar (e.g. a unit test that imported the tool directly) |
@@ -905,6 +905,23 @@ developer mistake (a tool calling the API outside the engine's
 dispatch path); the fix is in the test harness, not the
 runtime.
 
+
+### 4.19 Workflow lineage (bug-158)
+
+| Code | Level | Detail | Where (typical) |
+|---|---|---|---|
+| `workflow.lineage_unavailable` | Fatal | `{child_run_id, missing_run_id}` | `workflows.run_store.call_chain_for` — a child run is being resumed or forked outside its parent's process, and an ancestor run it was spawned or forked from is gone from disk |
+
+**Why Fatal.** A run continued outside its parent's process rebuilds
+its authz caller chain (`(C, P, …)`) from the persisted `parent` /
+`forked_from` pointers. Without the ancestor run the chain can't be
+proven, and continuing with the frame dropped would let a
+`from: <parent>` deny silently stop applying — so the resume / fork is
+refused before the run gets any event (a refused fork's minted run is
+discarded). Raised as `WorkflowLineageUnavailable`, which also
+subclasses the workflow error `WorkflowRunNotFound`, so `kolsch
+workflows resume|fork`, chat resume and `/fork` render it as a
+one-line refusal.
 ---
 
 ## Part 5 — How Errors Appear in Events

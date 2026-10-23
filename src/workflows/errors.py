@@ -34,6 +34,9 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
+from errors.base import PlatformError
+from errors.level import Level
+
 __all__ = [
     "BashNonZeroExit",
     "ChildWorkflowFailed",
@@ -68,7 +71,7 @@ __all__ = [
     "WorkflowJevInvalidRouteOn",
     "WorkflowJinjaRefUnknown",
     "WorkflowJinjaSecurityError",
-    "WorkflowLineageMissing",
+    "WorkflowLineageUnavailable",
     "WorkflowMapperWorkerMissingField",
     "WorkflowMapperWorkerNotAddressable",
     "WorkflowNoStartNode",
@@ -1884,7 +1887,7 @@ class WorkflowRunNotFound(WorkflowRuntimeError):
         )
 
 
-class WorkflowLineageMissing(WorkflowRunNotFound):
+class WorkflowLineageUnavailable(WorkflowRunNotFound, PlatformError):
     """Raised when a resumed / forked run's parent lineage can't be rebuilt.
 
     A child run continued outside its parent's process (`kolsch
@@ -1892,15 +1895,19 @@ class WorkflowLineageMissing(WorkflowRunNotFound):
     call chain from the persisted `parent` / `forked_from` pointers —
     the frames `from:`-scoped authz rules match. When one of those
     ancestor runs is gone from disk the chain can't be proven, so the
-    resume / fork is refused before anything runs (fail closed) rather
-    than continuing with the ancestor frames silently dropped.
+    resume / fork is refused before the run gets any event (fail
+    closed) rather than continuing with the ancestor frames silently
+    dropped.
 
-    `run_id` is the missing ancestor run; `child_run_id` the run being
-    continued. Subclasses
-    [`WorkflowRunNotFound`][workflows.errors.WorkflowRunNotFound] so
-    existing handlers render it.
+    A catalogued Fatal `PlatformError` (`workflow.lineage_unavailable`)
+    that also subclasses
+    [`WorkflowRunNotFound`][workflows.errors.WorkflowRunNotFound] so the
+    existing workflow CLI / chat handlers render it. `run_id` is the
+    missing ancestor run; `child_run_id` the run being continued.
     """
 
+    code: ClassVar[str] = "workflow.lineage_unavailable"
+    level: ClassVar[Level] = Level.FATAL
     caller_message: ClassVar[str] = (
         "This workflow run can't continue: a workflow run it was started "
         "from is no longer available, so its permissions can't be checked. "
@@ -1908,10 +1915,16 @@ class WorkflowLineageMissing(WorkflowRunNotFound):
     )
     identifying_names_keys: ClassVar[tuple[str, ...]] = ("child_run_id", "run_id")
 
-    def __init__(self, *, child_run_id: str, run_id: str) -> None:
+    def __init__(
+        self,
+        *,
+        child_run_id: str,
+        run_id: str,
+        where: str = "workflows.run_store.call_chain_for",
+    ) -> None:
         self.child_run_id = child_run_id
         self.run_id = run_id
-        WorkflowRuntimeError.__init__(
+        PlatformError.__init__(
             self,
             _runtime_str(
                 self,
@@ -1921,6 +1934,8 @@ class WorkflowLineageMissing(WorkflowRunNotFound):
                     "cannot be rebuilt"
                 ),
             ),
+            where=where,
+            detail={"child_run_id": child_run_id, "missing_run_id": run_id},
         )
 
 

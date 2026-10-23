@@ -35,7 +35,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from schemas.entities import ForkedFrom, ParentRunPointer
-from workflows.errors import WorkflowLineageMissing
+from workflows.errors import WorkflowLineageUnavailable
 from workflows.ids import TraceId, WorkflowRunId
 from workflows.run import RunDirectory, WorkflowRun, WorkflowRunStatus
 
@@ -202,7 +202,7 @@ class WorkflowRunStore:
         `(run.workflow_ref,)`.
 
         Raises:
-            WorkflowLineageMissing: An ancestor run (a `parent` or
+            WorkflowLineageUnavailable: An ancestor run (a `parent` or
                 `forked_from` target) is gone from disk, so the chain
                 can't be proven. Callers refuse to continue the run
                 rather than drop the missing frames.
@@ -236,7 +236,7 @@ class WorkflowRunStore:
         try:
             return self.read(run_id)
         except FileNotFoundError as exc:
-            raise WorkflowLineageMissing(
+            raise WorkflowLineageUnavailable(
                 child_run_id=str(child.run_id), run_id=str(run_id)
             ) from exc
 

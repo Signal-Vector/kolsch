@@ -454,7 +454,7 @@ async def test_lineage_walk_refuses_a_deleted_ancestor(tmp_path: Path) -> None:
     import shutil
 
     from schemas.entities import ForkedFrom, ParentRunPointer
-    from workflows.errors import WorkflowLineageMissing
+    from workflows.errors import WorkflowLineageUnavailable
     from workflows.ids import InvocationId
 
     store = WorkflowRunStore(tmp_path)
@@ -476,12 +476,39 @@ async def test_lineage_walk_refuses_a_deleted_ancestor(tmp_path: Path) -> None:
     shutil.rmtree(store.directory(parent_run.run_id).root)
 
     for run in (child_run, fork):
-        with pytest.raises(WorkflowLineageMissing) as excinfo:
+        with pytest.raises(WorkflowLineageUnavailable) as excinfo:
             store.call_chain_for(run)
         assert excinfo.value.run_id == str(parent_run.run_id)
         assert excinfo.value.child_run_id == str(run.run_id)
         assert str(parent_run.run_id) in str(excinfo.value)
         assert str(run.run_id) in str(excinfo.value)
+        assert excinfo.value.to_dict()["type"] == "workflow.lineage_unavailable"
+
+
+async def test_lineage_walk_refuses_a_missing_forked_from_origin(
+    tmp_path: Path,
+) -> None:
+    """A fork whose `forked_from` origin run is gone can't prove its
+    lineage either."""
+    import shutil
+
+    from schemas.entities import ForkedFrom
+    from workflows.errors import WorkflowLineageUnavailable
+
+    store = WorkflowRunStore(tmp_path)
+    origin = store.create(workflow_ref=_CHILD)
+    fork = store.create(
+        workflow_ref=_CHILD,
+        forked_from=ForkedFrom(
+            run_id=origin.run_id, fork_event_id=EventId(f"ev_{uuid4()}")
+        ),
+    )
+    shutil.rmtree(store.directory(origin.run_id).root)
+
+    with pytest.raises(WorkflowLineageUnavailable) as excinfo:
+        store.call_chain_for(fork)
+    assert excinfo.value.run_id == str(origin.run_id)
+    assert excinfo.value.child_run_id == str(fork.run_id)
 
 
 async def test_resume_refused_when_parent_run_is_gone(
@@ -493,7 +520,7 @@ async def test_resume_refused_when_parent_run_is_gone(
     run stays paused."""
     import shutil
 
-    from workflows.errors import WorkflowLineageMissing
+    from workflows.errors import WorkflowLineageUnavailable
     from workflows.run import WorkflowRunStatus
 
     parent = "wf/workflows/parent_ui"
@@ -510,7 +537,7 @@ async def test_resume_refused_when_parent_run_is_gone(
 
     calls = _record_allow(runtime, monkeypatch)
     executor = _executor_for(runtime, tmp_path, child_id)
-    with pytest.raises(WorkflowLineageMissing):
+    with pytest.raises(WorkflowLineageUnavailable):
         await executor.resume(response={"response": "yes"})
 
     assert calls == []
@@ -530,7 +557,7 @@ async def test_fork_refused_when_ancestor_run_is_gone(
     import shutil
 
     from schemas.entities import ForkedFrom
-    from workflows.errors import WorkflowLineageMissing
+    from workflows.errors import WorkflowLineageUnavailable
 
     parent = "wf/workflows/parent_fk"
     _setup_workspace(tmp_path, rules=[_ALLOW_ALL])
@@ -561,12 +588,13 @@ async def test_fork_refused_when_ancestor_run_is_gone(
 
     calls = _record_allow(runtime, monkeypatch)
     executor = _executor_for(runtime, tmp_path, forked.run_id)
-    with pytest.raises(WorkflowLineageMissing):
+    with pytest.raises(WorkflowLineageUnavailable):
         await executor.start_from_fork(fork_event_id=first_completed)
 
     assert calls == []
-    events_path = store.directory(forked.run_id).events_path
-    assert not events_path.exists() or events_path.read_text(encoding="utf-8") == ""
+    # Refused before its first event, and the minted run is discarded
+    # (no phantom `pending` run left behind).
+    assert not store.directory(forked.run_id).root.exists()
 
 
 def test_cli_resume_renders_lineage_refusal(
@@ -613,3 +641,112 @@ def test_cli_resume_renders_lineage_refusal(
     assert "Traceback" not in output
     assert str(parent_id) in output
     assert str(child_id) in output
+
+
+def _paused_child_with_deleted_parent(root: Path) -> tuple[str, str]:
+    """Run `parent_ui` until its child pauses, then delete the parent
+    run. Returns `(child_run_id, deleted_parent_run_id)`."""
+    import asyncio
+    import shutil
+
+    _setup_workspace(root, rules=[_ALLOW_ALL])
+
+    async def _pause() -> None:
+        runtime = await _boot(root)
+        status, _ = await _run_workflow(runtime, root, "wf/workflows/parent_ui")
+        assert status == "waiting_for_input"
+
+    asyncio.run(_pause())
+    store = WorkflowRunStore(root)
+    child_id = _child_run_id(root)
+    pointer = store.read(child_id).parent
+    assert pointer is not None
+    shutil.rmtree(store.directory(pointer.workflow_run_id).root)
+    return str(child_id), str(pointer.workflow_run_id)
+
+
+async def _chat_state(root: Path, pending: str) -> Any:
+    from cli._slash import ChatSessionState
+
+    runtime = await bootstrap_runtime(root=root)
+    config = await runtime.build_resolved_config(_AGENT)
+    session = await runtime.store.create_session(str(config.agent_id), name="chat")
+    threads = await runtime.store.list_threads(session.session_id)
+    state = ChatSessionState(
+        runtime=runtime,
+        config=config,
+        session_id=session.session_id,
+        thread_id=threads[0].thread_id,
+    )
+    state.pending_workflow_run_id = pending
+    state.expecting_user_input_response = True
+    return state
+
+
+def test_chat_resume_surfaces_lineage_refusal(tmp_path: Path) -> None:
+    """Chat resume of the child prints a one-line refusal naming the
+    missing run, stops expecting a reply, and leaves the run paused."""
+    import asyncio
+    import io
+
+    from cli.chat.session import _resume_pending_workflow
+
+    child_id, parent_id = _paused_child_with_deleted_parent(tmp_path)
+
+    async def _go() -> tuple[str, Any]:
+        state = await _chat_state(tmp_path, child_id)
+        out = io.StringIO()
+        await _resume_pending_workflow(state, stdout=out, response_text="yes")
+        return out.getvalue(), state
+
+    rendered, state = asyncio.run(_go())
+    assert "resume failed:" in rendered
+    assert parent_id in rendered
+    assert "Traceback" not in rendered
+    assert state.expecting_user_input_response is False
+    assert WorkflowRunStore(tmp_path).read(child_id).status.value == (
+        "waiting_for_input"
+    )
+
+
+def test_chat_fork_surfaces_lineage_refusal(tmp_path: Path) -> None:
+    """`/fork` of the child prints a one-line refusal naming the missing
+    run, discards the minted fork, and restores `pending`."""
+    import asyncio
+    import io
+
+    from cli._slash import SlashContext, dispatch_slash
+
+    child_id, parent_id = _paused_child_with_deleted_parent(tmp_path)
+    store = WorkflowRunStore(tmp_path)
+    fork_at = next(
+        event["event_id"]
+        for event in map(
+            json.loads,
+            store.directory(child_id)
+            .events_path.read_text(encoding="utf-8")
+            .splitlines(),
+        )
+        if event["kind"] == "workflow.run.started"
+    )
+    runs_before = {p.name for p in store.runs_root.iterdir()}
+
+    async def _go() -> tuple[str, Any]:
+        state = await _chat_state(tmp_path, child_id)
+        out = io.StringIO()
+        ctx = SlashContext(
+            stdout=out,
+            agent_config=state.config,
+            authz=state.runtime.authz,
+            agent_name=state.config.name,
+            state=state,
+        )
+        await dispatch_slash(f"/fork {fork_at}", ctx)
+        return out.getvalue(), state
+
+    rendered, state = asyncio.run(_go())
+    assert "/fork:" in rendered
+    assert parent_id in rendered
+    assert "Traceback" not in rendered
+    assert state.pending_workflow_run_id == child_id
+    assert {p.name for p in store.runs_root.iterdir()} == runs_before

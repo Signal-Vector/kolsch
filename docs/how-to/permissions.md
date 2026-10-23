@@ -531,21 +531,26 @@ JSONL as `policy.decision.made` → `payload.caller_chain`.
 - **A child run whose parent run was deleted can't be resumed or
   forked.** The parent frames can't be proven, so `kolsch workflows
   resume|fork` (and the chat equivalents) refuse it with
-  `WorkflowLineageMissing`, naming the child and the missing run,
-  before anything runs. Keep parent runs while their children may
+  `workflow.lineage_unavailable` (`WorkflowLineageUnavailable`), naming
+  the child and the missing run, before the run gets any event (a
+  refused fork's new run is discarded). Keep parent runs while their children may
   still be resumed.
 - **Claude Code's own tools are outside kolsch.** A `claude_code`
   agent's calls to *kolsch* tools go through the MCP bridge and are
   authorized here, with the agent's chain. Claude Code's built-in
-  tools (its own Bash, Read, Edit, …) never reach kolsch: they follow
-  the user's Claude Code permissions (`~/.claude/settings.json`), not
-  these rules.
+  tools (its own Bash, Read, Edit, …) never reach kolsch. kolsch
+  launches `claude` with `--permission-mode dontAsk`,
+  `--setting-sources user` and `--allowedTools <kolsch MCP wire
+  names>` (`--disallowedTools=*` for text-only agents), so those
+  native tools are **refused** unless you pre-allowed them in your
+  Claude Code user settings (`~/.claude/settings.json`) — and a native
+  tool you pre-allowed there runs without these rules applying.
 - **Two agents can't share an `agent_id`.** The chain's agent frame is
   resolved from the agent's id, so building a second agent with an id
   already in use raises `config.duplicate_agent_id`. This includes an
   `extends:` child that inherits its parent's explicit `agent_id:` —
-  give the child its own `agent_id:` (or drop the parent's to use
-  derived ids).
+  the error says so; set `agent_id:` on the child (or drop the
+  parent's to use derived ids).
 
 ### Where scoped rules come from
 

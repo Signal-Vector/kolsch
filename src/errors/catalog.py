@@ -211,6 +211,11 @@ CATALOG: dict[str, Level] = {
     # file.too_large, which is no longer raised by read_file under the
     # line-based shape.
     "file.line_too_long": Level.RECOVERABLE,
+    # ----- Workflows ---------------------------------------------------
+    # bug-158: a resumed / forked child run whose parent (or
+    # forked_from) ancestor run is gone — its authz caller chain can't
+    # be rebuilt, so the resume / fork is refused (fail closed).
+    "workflow.lineage_unavailable": Level.FATAL,
 }
 
 

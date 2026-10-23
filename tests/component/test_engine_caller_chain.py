@@ -388,6 +388,7 @@ async def test_duplicate_agent_id_across_two_agents_is_refused(tmp_path: Path) -
     assert excinfo.value.detail == {
         "agent_id": "ag_cc",
         "refs": [_AGENT_REF, "cc/agents/impostor"],
+        "inherited_via_extends": False,
     }
     assert "'ag_cc'" in str(excinfo.value)
     assert _AGENT_REF in str(excinfo.value)
@@ -408,3 +409,32 @@ async def test_distinct_agent_ids_build_side_by_side(tmp_path: Path) -> None:
     assets = runtime.asset_management
     assert assets.get_ref_for_agent_id("ag_cc") == _AGENT_REF
     assert assets.get_ref_for_agent_id(str(other.agent_id)) == "cc/agents/other"
+
+
+async def test_duplicate_agent_id_inherited_via_extends_names_the_cause(
+    tmp_path: Path,
+) -> None:
+    """An `extends:` child with no `agent_id:` of its own inherits the
+    parent's explicit id; the error tells the author to set one on the
+    child."""
+    _write_workspace(tmp_path, rules=[_ALLOW_ALL])
+    (tmp_path / "bundles" / "cc" / "agents" / "child.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": "0.1",
+                "assembly_version": "1",
+                "name": "child",
+                "description": "inherits agent.yaml",
+                "extends": "workspace:bundles/cc/agents/agent.yaml",
+            }
+        ),
+        encoding="utf-8",
+    )
+    runtime = await bootstrap_runtime(root=tmp_path)
+    await runtime.build_resolved_config(_AGENT_REF)
+
+    with pytest.raises(ConfigDuplicateAgentId) as excinfo:
+        await runtime.build_resolved_config("cc/agents/child")
+    assert excinfo.value.detail["inherited_via_extends"] is True
+    assert "set `agent_id:` on 'cc/agents/child'" in str(excinfo.value)
+    assert "an `extends:` child inherits its parent's explicit id" in str(excinfo.value)

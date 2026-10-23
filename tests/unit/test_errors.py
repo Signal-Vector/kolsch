@@ -136,6 +136,7 @@ from errors import (
     list_catalog_codes,
 )
 from schemas import CallerChain
+from workflows.errors import WorkflowLineageUnavailable
 
 # ---------------------------------------------------------------------------
 # Construction map — minimal valid args for every concrete subclass.
@@ -162,6 +163,10 @@ CONSTRUCTOR_ARGS: dict[type[PlatformError], dict[str, Any]] = {
     ConfigDuplicateAgentId: {
         "agent_id": "ag_helper",
         "refs": ["kolsch/agents/helper", "kolsch/agents/helper_b"],
+    },
+    WorkflowLineageUnavailable: {
+        "child_run_id": "wrk_child",
+        "run_id": "wrk_parent",
     },
     ConfigParentAgentNotFound: {
         "path": "kolsch:agents/missing.yaml",
@@ -610,13 +615,18 @@ def test_catalog_has_no_orphan_codes() -> None:
     in spirit (E-I2).
 
     Restrict the comparison to subclasses defined inside the ``errors.*``
-    namespace so ad-hoc test-local subclasses (which auto-register via
-    ``__init_subclass__``) don't satisfy the reverse direction by
-    accident.
+    namespace — plus ``workflows.errors``, whose
+    ``WorkflowLineageUnavailable`` (bug-158) is a catalogued
+    ``PlatformError`` that must also subclass the workflow error family
+    the workflow CLI / chat handlers render — so ad-hoc test-local
+    subclasses (which auto-register via ``__init_subclass__``) don't
+    satisfy the reverse direction by accident.
     """
     catalog_codes = list_catalog_codes()
     class_codes = {
-        cls.code for cls in iter_error_classes() if cls.__module__.startswith("errors.")
+        cls.code
+        for cls in iter_error_classes()
+        if cls.__module__.startswith("errors.") or cls.__module__ == "workflows.errors"
     }
     orphans = catalog_codes - class_codes
     assert not orphans, (

@@ -218,9 +218,11 @@ async def _resume_pending_workflow(
             resume_response={"response": response_text},
         )
     except WorkflowRunNotFound as exc:
-        # bug-158: `WorkflowLineageMissing` — an ancestor run of this
+        # bug-158: `WorkflowLineageUnavailable` — an ancestor run of this
         # child is gone, so the resume is refused before anything runs.
-        stdout.write(f"resume failed: {exc.caller_message}\n")
+        stdout.write(
+            f"resume failed: {exc.caller_message} (missing run {exc.run_id})\n"
+        )
         state.expecting_user_input_response = False
         return
     except (WorkflowValidationError, ExceptionGroup) as exc:
