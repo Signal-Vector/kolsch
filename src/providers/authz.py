@@ -79,10 +79,12 @@ DEFAULT_DENY_RULE_ID = "rl_default_deny"
 Set at parse time when a rule with the matching shape is detected;
 [`RuleBasedAuthorizationProvider.remove_rule`][providers.authz.RuleBasedAuthorizationProvider.remove_rule]
 refuses to remove this id (even when no rule carries it). The shapes
-that earn this id are legacy `who=".*"` AND `what=".*"` AND
-`effect="deny"`, and canonical `what="*"` AND `pattern="*"` AND
-`effect="deny"`. The id ignores `from:`, so it is not a reliable
-tail signal — use
+that earn this id are the **unscoped** catch-all denies: legacy
+`who=".*"` AND `what=".*"` AND `effect="deny"`, or canonical `what="*"`
+AND `pattern="*"` AND `effect="deny"` with no `from`. A `from`-scoped
+catch-all deny gets an ordinary `rl_…` id (see
+[`derive_rule_id`][providers.authz.derive_rule_id]). To check whether a
+rule set actually ends with the tail, use
 [`inspect_default_deny_tail`][providers.authz.inspect_default_deny_tail]."""
 
 
@@ -264,7 +266,14 @@ class Rule(BaseModel):
     during the in-flight migration — `who` defaults to `None`, which
     the provider's compile step treats as new-shape glob-matched; when
     `who` is supplied (typically `".*"`) the rule compiles as legacy
-    regex. `id` is auto-derived from `who+what+effect` when absent.
+    regex.
+
+    `id` is derived by
+    [`derive_rule_id`][providers.authz.derive_rule_id]: canonical rules
+    from `what|pattern|effect` plus `from` when scoped (any supplied
+    `id` in YAML is ignored); legacy rules from `who|what|effect` when no `id`
+    is supplied. Only the unscoped catch-all deny earns
+    [`DEFAULT_DENY_RULE_ID`][providers.authz.DEFAULT_DENY_RULE_ID].
     A legacy rule cannot carry `from_` or a non-`*` `pattern`: the
     regex matcher has no caller or target filter, so either field
     would be silently ignored and the rule would apply more widely
@@ -321,26 +330,44 @@ class Rule(BaseModel):
         return self
 
 
-def derive_rule_id(who: str, what: str, effect: str) -> str:
-    """Return a deterministic id of form `rl_<sha256(who+what+effect)[:8]>`.
+def derive_rule_id(
+    who: str,
+    what: str,
+    effect: str,
+    *,
+    from_: str | None = None,
+) -> str:
+    """Return a deterministic id of form `rl_<sha256(...)[:8]>`.
 
     Stable across reorders and reloads — two rules with identical
-    content always produce the same id. The default-deny shape
-    (legacy: `who=".*"`, `what=".*"`, `effect="deny"`; new-shape:
-    `what="*"`, `pattern="*"`, `effect="deny"`, passed in as
-    `what="*|*"` by `_ensure_id`) returns the reserved
+    content always produce the same id. The hash input is
+    `who|what|effect`; canonical rules pass `who=".*"` and
+    `what="<what>|<pattern>"` (see `_ensure_id`). A `from_`-scoped
+    rule appends `|from=<from_>`, so a scoped rule and its unscoped
+    twin never share an id; with `from_=None` the id is byte-identical
+    to the pre-`from_` derivation, so unscoped ids never change.
+
+    The **unscoped** default-deny shape (legacy: `who=".*"`,
+    `what=".*"`, `effect="deny"`; canonical: `what="*"`, `pattern="*"`,
+    `effect="deny"`, passed in as `what="*|*"`) returns the reserved
     [`DEFAULT_DENY_RULE_ID`][providers.authz.DEFAULT_DENY_RULE_ID]
     instead so the tail is referenced by a fixed name across both
-    schema shapes.
+    schema shapes. A scoped catch-all deny never gets that id.
+
+    Legacy rules cannot carry `from` (the provider refuses one that
+    does), so only canonical rules pass `from_`.
     """
-    if who == ".*" and what == ".*" and effect == "deny":
-        return DEFAULT_DENY_RULE_ID
-    # New-shape catch-all collapses to
-    # `{what: "*", pattern: "*", effect: "deny"}`; `_ensure_id`
-    # encodes that as `what="*|*"` here.
-    if who == ".*" and what == "*|*" and effect == "deny":
-        return DEFAULT_DENY_RULE_ID
-    payload = f"{who}|{what}|{effect}"
+    if from_ is None:
+        if who == ".*" and what == ".*" and effect == "deny":
+            return DEFAULT_DENY_RULE_ID
+        # Canonical catch-all collapses to
+        # `{what: "*", pattern: "*", effect: "deny"}`; `_ensure_id`
+        # encodes that as `what="*|*"` here.
+        if who == ".*" and what == "*|*" and effect == "deny":
+            return DEFAULT_DENY_RULE_ID
+        payload = f"{who}|{what}|{effect}"
+    else:
+        payload = f"{who}|{what}|{effect}|from={from_}"
     digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:8]
     return f"rl_{digest}"
 
@@ -1027,13 +1054,14 @@ class RuleBasedAuthorizationProvider:
         from_value = _entry_from_value(index, entry)
         self._validate_from(index=index, from_value=from_value)
         # Derive a stable id so the live-edit API + default-deny tail
-        # detection still work for new-shape rules. The catch-all
-        # (`what="*"`, `pattern="*"`, `effect="deny"`) collapses to
-        # `DEFAULT_DENY_RULE_ID`; everything else gets a deterministic
-        # hash. `who=".*"` is the canonical placeholder fed into
-        # `derive_rule_id` so legacy and new-shape catch-alls coalesce
-        # to the same id.
-        rule_id = derive_rule_id(".*", f"{what}|{pattern}", effect)
+        # detection still work for new-shape rules. The unscoped
+        # catch-all (`what="*"`, `pattern="*"`, `effect="deny"`)
+        # collapses to `DEFAULT_DENY_RULE_ID`; everything else —
+        # including a `from`-scoped catch-all — gets a deterministic
+        # hash that includes `from`. `who=".*"` is the canonical
+        # placeholder fed into `derive_rule_id` so legacy and
+        # new-shape catch-alls coalesce to the same id.
+        rule_id = derive_rule_id(".*", f"{what}|{pattern}", effect, from_=from_value)
         source_file, source_line = (source[0], source[1]) if source else (None, None)
         return _CompiledRule(
             effect=effect,
@@ -1876,12 +1904,14 @@ class RuleBasedAuthorizationProvider:
         New-shape rules carry their own identifier shape (the
         matched-rule object itself, surfaced via the denied capsule's
         `what`/`pattern`) but the internal anchor still uses a
-        derived id. We synthesise one from `what+pattern+effect`.
+        derived id. We synthesise one from `what+pattern+effect`, plus
+        `from` when the rule is scoped.
         """
         if rule.id:
             return rule
         if rule.is_legacy:
             assert rule.who is not None
+            # No `from_`: a legacy rule can't carry one (bug-159).
             derived = derive_rule_id(rule.who, rule.what, rule.effect)
         else:
             # New-shape: derive from (what, pattern, effect). The
@@ -1892,6 +1922,7 @@ class RuleBasedAuthorizationProvider:
                 ".*",
                 f"{rule.what}|{rule.pattern}",
                 rule.effect,
+                from_=rule.from_,
             )
         return rule.model_copy(update={"id": derived})
 

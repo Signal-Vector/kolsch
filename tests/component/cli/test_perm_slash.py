@@ -382,6 +382,64 @@ async def test_perm_missing_args_emits_usage(tmp_path: Path) -> None:
 
 
 # ===========================================================================
+# bug-159 — scoped and unscoped twins have distinct ids, so `/perm`
+# acts on (and reports) the rule the user named
+# ===========================================================================
+
+_SCOPE = "kolsch/agents/*"
+
+
+async def _runtime_with_rules(
+    root: Path, rules: list[dict[str, str]]
+) -> PlatformRuntime:
+    _seed_workspace(root)
+    payload = _platform_seed()
+    payload["authorization"]["config"]["rules"] = rules
+    (root / "platform.yaml").write_text(yaml.safe_dump(payload), encoding="utf-8")
+    return await bootstrap_runtime(root=root)
+
+
+def _disk_rules(root: Path) -> list[dict[str, str]]:
+    rules: list[dict[str, str]] = yaml.safe_load(
+        (root / "platform.yaml").read_text(encoding="utf-8"),
+    )["authorization"]["config"]["rules"]
+    return rules
+
+
+async def test_perm_remove_scoped_rule_keeps_unscoped_twin(tmp_path: Path) -> None:
+    """Pre-fix: the scoped twin shared the unscoped rule's id and
+    `remove_rule(id)` deleted the unscoped (broad) deny instead."""
+    unscoped = {"what": "kolsch/tools/bash", "pattern": "*", "effect": "deny"}
+    scoped = unscoped | {"from": _SCOPE}
+    tail = {"what": "*", "pattern": "*", "effect": "deny"}
+    runtime = await _runtime_with_rules(tmp_path, [unscoped, scoped, tail])
+    stdout = _io.StringIO()
+    await dispatch_slash(
+        f"/perm remove kolsch/tools/bash * from:{_SCOPE}", _ctx(runtime, stdout)
+    )
+    assert "dropped rule at position 1" in stdout.getvalue()
+    assert _disk_rules(tmp_path) == [unscoped, tail]
+    remaining = await runtime.authz.list_rules()
+    assert [(r.what, r.from_) for r in remaining] == [
+        ("kolsch/tools/bash", None),
+        ("*", None),
+    ]
+
+
+async def test_perm_allow_scoped_reports_its_own_position(tmp_path: Path) -> None:
+    """Pre-fix: `_position_of` found the unscoped twin and reported 0."""
+    unscoped = {"what": "kolsch/tools/bash", "pattern": "ls *", "effect": "allow"}
+    tail = {"what": "*", "pattern": "*", "effect": "deny"}
+    runtime = await _runtime_with_rules(tmp_path, [unscoped, tail])
+    stdout = _io.StringIO()
+    await dispatch_slash(
+        f'/perm allow kolsch/tools/bash "ls *" from:{_SCOPE}', _ctx(runtime, stdout)
+    )
+    assert "position 1)" in stdout.getvalue()
+    assert _disk_rules(tmp_path) == [unscoped, unscoped | {"from": _SCOPE}, tail]
+
+
+# ===========================================================================
 # Group 3 — denied capsule renders with /perm hint
 #
 # Removed in the Cleanup phase of spec-textual-chat-ui: the three

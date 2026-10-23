@@ -429,6 +429,17 @@ rule set loads with a warning (see
 comment block at the very end of the file is preserved; comments
 anywhere else are lost.
 
+**Rule ids.** Ids are derived, never written to `platform.yaml`:
+a canonical rule's id hashes `what|pattern|effect`, plus `from`
+when the rule is scoped, so a scoped rule and its unscoped twin
+have different ids and `remove` / `show` / `--before` / `--after`
+act on the one you name. The protected `rl_default_deny` is the
+**unscoped** catch-all deny only — a `from:`-scoped catch-all deny
+gets an ordinary id and can be removed. Ids of **scoped** rules
+changed once in this release (bug-159); unscoped ids did not. If
+you noted or scripted a scoped rule's id, re-read it with
+`kolsch permissions list`.
+
 ---
 
 ## Scoping rules to a specific agent or workflow
@@ -786,6 +797,26 @@ that stayed in legacy form with
 — migration is one-shot; an unconvertible rule doesn't brick the
 workspace — but you should convert by hand or via `/perm` when
 convenient.
+
+**Legacy rules cannot carry `from:` or `pattern:`.** The legacy
+shape has no caller or target filter, so a legacy rule with a
+`from:` (or a `pattern:` other than `*`) would apply to every
+caller and target. Such a rule fails to load with
+`authz.malformed_rule` — in `platform.yaml`, agent or bundle
+`permissions:`, and workflow `policy:` alike. For a
+`platform.yaml` rule with `who: ".*"` and a valid `from:` ref,
+re-running `kolsch setup` converts it and keeps the `from:`:
+
+```yaml
+# legacy — refused at load
+- { who: ".*", what: "tool\\.bash", from: kolsch/agents/triage, effect: allow }
+# what `kolsch setup` writes
+- { what: kolsch/tools/bash, pattern: "*", from: kolsch/agents/triage, effect: allow }
+```
+
+Anything else (a bad `from:` ref, a non-`*` `pattern:`, or a rule
+outside `platform.yaml`) setup leaves alone with a warning;
+rewrite it in the canonical shape by hand.
 
 The heuristic covers every pattern the pre-QoL `_modal.py`
 `suggest_pattern` produced, plus the canonical post-Phase-2.0
