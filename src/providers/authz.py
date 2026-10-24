@@ -826,9 +826,10 @@ class PermissionLayer:
     prevention with no new rule field required).
 
     `name` is the layer's display tag (`"workflow"` / `"agent"` /
-    `"bundle"` / `"platform"`); it surfaces in the
-    `AuthorizationResult.reason` and in the `policy.decision.made`
-    event payload's `layer` field.
+    `"bundle"`); it surfaces in the `AuthorizationResult.reason` as
+    `(who_chain=<name>)`. The `policy.decision.made` payload carries
+    no layer field; the provider's own stages tag their reasons
+    `locked` and `platform`.
     """
 
     name: str

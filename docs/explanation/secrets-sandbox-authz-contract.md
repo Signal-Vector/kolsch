@@ -1008,22 +1008,37 @@ same first-match-wins discipline.
 
 ### 3.8.1 Composition order
 
-When the engine evaluates `allow(...)` for a tool call, the rule
-lists are walked in this order — first match returns its effect:
+When the provider evaluates `allow(...)`, the rule lists are walked
+in this order — the first match at any stage returns its effect:
 
-1. **Agent's `permissions:`** in declaration order (loaded from
+0. **Locked platform rules** — `authorization.config.locked_rules`,
+   in declaration order (§3.8.4). Deny-only; when one matches, no
+   later stage runs.
+1. **Workflow `policy:`** — only when the proximate caller is a
+   workflow builtin node firing the action. Omitted entirely when the
+   proximate caller is an agent embedded in the workflow, so an
+   embedded agent never inherits its workflow's policy.
+2. **Agent's `permissions:`** in declaration order (loaded from
    the agent's resolved config — itself composed via Phase 2.2
    §8.2 from `agent → extends chain → defaults.permissions →
    schema default`).
-2. **Platform's `authorization.config.rules`** in declaration
+3. **Home bundle's `bundle.yaml` `permissions:`** in declaration
    order.
-3. **Platform's default-deny tail** (`rl_default_deny`).
+4. **Platform's `authorization.config.rules`** in declaration
+   order, normally ending with the default-deny tail
+   (`rl_default_deny`).
+5. **No rule matched:** the registered prompt callback (chat) when
+   there is one, else default deny.
 
-Agent rules can widen, narrow, or shift the effect for any
-principal-action-target combination; the platform's default-deny
-tail still catches unhandled cases. When the platform list has no
-tail, step 3 is the provider's implicit no-rule path instead (prompt
-when a callback is registered, deny otherwise) — see §3.2.6.
+Layer rules (stages 1–3) can widen, narrow, or shift the effect for
+any principal-action-target combination. Widening is intended: a
+layer `allow` beats a platform `deny`, including an explicit one, not
+only the tail — the layering is precedence, not enforced narrowing.
+Locked rules (stage 0) are the one operator-absolute exception. The
+platform's default-deny tail still catches unhandled cases. When the
+platform list has no tail, stage 5 is the provider's implicit no-rule
+path (prompt when a callback is registered, deny otherwise) — see
+§3.2.6.
 
 ### 3.8.2 Provider surface change
 
@@ -1069,9 +1084,9 @@ override them. `check` returns the effect; `require` raises
 `PlatformError("authz.denied", ...)` on anything other than
 `ALLOW`.
 
-The composed walk is the same four-level stack as the
-dispatch-boundary check: agent permissions → bundle permissions
-→ platform rules → default-deny (per
+The composed walk is the dispatch-boundary stack without the
+workflow layer: locked platform rules → agent permissions → bundle
+permissions → platform rules → default-deny (per
 qol-tool-permission-discovery-uniform-with-stacking.md +
 qol-tool-permissions-binding-unused.md). A `PROMPT`-effect
 match in the in-body check collapses to deny — the in-tool
@@ -1092,6 +1107,58 @@ Out-of-context calls raise `tool.permissions_no_context`.
 See process/phase2.2-agent-envelope-specs.md §2 +
 process/qol-tool-permissions-binding-unused.md for the full
 behaviour table.
+
+### 3.8.4 Locked platform rules
+
+`authorization.config.locked_rules` is an opt-in list, read only
+from `platform.yaml`, that the rule-based provider compiles at
+construction and evaluates as stage 0 of §3.8.1 — before every caller
+layer and before `rules` — for every caller of `allow()` (tool
+dispatch, workflow builtin nodes, MCP tools, the in-tool `permissions`
+API, and the `agent.execute.*` pre-flight). Matching uses the same
+matcher as every other stage. An absent, `null` or empty list changes
+no decision.
+
+**Shape** (anything else raises at load — `AuthzMalformedRule`, or the
+shared `AuthzPatternInvalid` / `AuthzToolRefUnknown` — with the
+message naming `locked_rules[<i>]` and, when known, the file and line):
+
+- a mapping with only `what`, `pattern` (default `*`) and `effect`;
+  a legacy `who`, an `id` or a non-null `from:` is refused;
+- `effect: deny` only;
+- a `what` containing `/` must be a full three-segment ref;
+- not the catch-all `{what: "*", pattern: "*"}`;
+- no two entries with the same `(what, pattern, effect)`.
+
+**Result.** A locked match returns `allowed=False`, `effect=deny`,
+`matched_rule` = the locked rule, and a reason ending
+`(who_chain=locked)`. It never invokes a prompt callback.
+
+**Ids.** `rl_locked_<8 hex>`, from
+`derive_locked_rule_id(what, pattern, effect)` — distinct from
+`derive_rule_id` and never `rl_default_deny`. The id prefix
+(`LOCKED_RULE_ID_PREFIX`) is how surfaces recognise a locked rule: it
+travels as `rule_id` in `policy.decision.made` and as
+`matched_rule.id` in `tool.failed` (no event schema change).
+
+**Provider API.** `list_locked_rules()` and `add_locked_rule(rule)`
+(same validation, raising `AuthzRuleInvalid`); `get_rule` and
+`remove_rule` accept locked ids, and locked rules are not
+removal-protected. `list_rules()` returns only the platform `rules`
+list, which is what every `/perm` and approval-modal write-back
+persists — so those paths never touch `locked_rules`.
+
+**Non-goals.** No locked `allow` (it would stop layers from
+narrowing), no locked `prompt` (an "always" answer would be persisted
+into the `rules` list the locked stage pre-empts), and no `from:` (the
+tool path passes no caller chain yet, so a scoped lock would never
+fire).
+
+**Boundary.** Locked rules are only as strong as write access to
+`platform.yaml`: anything that can edit it — or run `kolsch permissions
+remove` — can remove a lock. They also cannot govern code that runs
+without an `allow()` call (authored Python nodes and tool bodies), and
+a `pattern` is a glob over the target string, not a sandbox.
 
 ---
 
