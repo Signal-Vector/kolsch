@@ -40,11 +40,19 @@ so it is still "modified" next run. **Never writes outside
 ``bundles/kolsch/**``, ``platform.yaml`` and ``.kolsch/``** — the
 kolsch-owned boundary qol-089 established is a hard invariant here.
 
+Then the default-rule pass (:mod:`cli._rules_upgrade`, bug-146) offers
+the missing ``prompt`` / ``deny`` starter rules. :func:`plan_workspace_upgrade`
+is the read-only count of all of the above that a plain ``kolsch setup``
+re-run prints as its upgrade notice.
+
 Exit contract: sync returns ``0`` when the workspace is fully in
 sync with source at exit (no skips, all rewrites applied). Any
 skipped drift item (locally-modified kept, retired-at-source kept,
-parse failure) triggers a non-zero return — the operator needs to
-see the partial-success signal.
+parse failure, a default rule left out under ``--no``, a rule that
+couldn't be written) returns ``1`` — the partial-success signal; the
+report's last line says how many and how to review them. ``2`` means
+it refused to start (no ``--yes`` / ``--no`` and stdin is not a
+terminal).
 """
 
 from __future__ import annotations
@@ -219,6 +227,134 @@ async def sync_kolsch_bundle(
 
     _render_report(report, out=io.out, dry_run=dry_run)
     return 0 if not report.is_partial() else 1
+
+
+# ---------------------------------------------------------------------------
+# Read-only upgrade plan — `kolsch setup` re-run notice (bug-146)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class UpgradePlan:
+    """What `--sync-bundle` would do here, by count. Read-only.
+
+    Attributes:
+        added: Shipped files missing from the workspace (copied in).
+        outdated: Unedited older shipped files (refreshed from source).
+        removable: Files source no longer ships that the baseline
+            proves are unedited kolsch files (`--yes` deletes them).
+        modified: Shipped files that differ from source and may carry
+            local edits (sync asks; `--yes` keeps them).
+        rule_proposals: Missing `prompt` / `deny` default rules, as
+            `(what, effect, rationale)`.
+    """
+
+    added: int = 0
+    outdated: int = 0
+    removable: int = 0
+    modified: int = 0
+    rule_proposals: tuple[tuple[str, str, str], ...] = ()
+
+    @property
+    def actionable(self) -> bool:
+        """True when a sync would change or ask about anything."""
+        return bool(
+            self.added
+            or self.outdated
+            or self.removable
+            or self.modified
+            or self.rule_proposals
+        )
+
+    def notice_lines(self, version: str) -> list[str]:
+        """The `kolsch setup` re-run notice (at most 3 lines)."""
+        parts = []
+        if self.added:
+            parts.append(f"copy {self.added} new file(s)")
+        if self.outdated:
+            parts.append(f"refresh {self.outdated} outdated file(s)")
+        if self.removable:
+            parts.append(f"remove {self.removable} retired file(s)")
+        if self.modified:
+            parts.append(
+                f"ask about {self.modified} file(s) that differ from this "
+                "version (kept unless you overwrite)"
+            )
+        lines = []
+        if parts:
+            lines.append(
+                f"  ⚠ workspace bundle is behind kolsch {version}: "
+                f"`--sync-bundle` would {', '.join(parts)}."
+            )
+        if len(self.rule_proposals) == 1:
+            what, effect, rationale = self.rule_proposals[0]
+            lines.append(
+                f"    1 missing default permission rule: {what} → {effect} "
+                f"({rationale})"
+            )
+        elif self.rule_proposals:
+            listed = ", ".join(f"{w} → {e}" for w, e, _ in self.rule_proposals)
+            lines.append(
+                f"    {len(self.rule_proposals)} missing default permission "
+                f"rules: {listed}"
+            )
+        if lines and not parts:
+            lines[0] = lines[0].replace("    ", "  ⚠ ", 1)
+        lines.append(
+            "    Run `kolsch setup --sync-bundle` to review and apply "
+            "(`--dry-run` to preview)."
+        )
+        return lines
+
+
+async def plan_workspace_upgrade(root: Path) -> UpgradePlan:
+    """Count what `kolsch setup --sync-bundle` would do at `root`. Read-only.
+
+    Combines [`plan_bundle_files`][cli._bundle_sync.plan_bundle_files]
+    and [`check_default_rules`][cli._rules_upgrade.check_default_rules]
+    (tools the file pass would copy count as installed), the same
+    planners sync and `kolsch doctor` use, so all three agree.
+    """
+    from cli._doctor import _starter_bundle_dir  # noqa: PLC0415 — import cycle
+    from cli._rules_upgrade import check_default_rules  # noqa: PLC0415
+
+    source_dir = _starter_bundle_dir()
+    workspace_bundle = root / "bundles" / "kolsch"
+    if not workspace_bundle.is_dir():
+        return UpgradePlan()
+    baseline = read_baseline(root)
+    recorded = baseline.files if baseline is not None else {}
+    plan = plan_bundle_files(
+        source_dir, workspace_bundle, recorded if baseline is not None else None
+    )
+    outdated = sum(
+        1
+        for rel in plan.unchanged
+        if sha256_file(workspace_bundle / rel) != sha256_file(source_dir / rel)
+    )
+    removable = sum(
+        1
+        for rel in plan.retired
+        if recorded.get(rel) == sha256_file(workspace_bundle / rel)
+    )
+    pending = {
+        f"kolsch/tools/{PurePosixPath(rel).stem}"
+        for rel in plan.added
+        if rel.startswith("tools/") and rel.endswith(".py")
+    }
+    rules = await check_default_rules(root, pending_tool_refs=pending)
+    proposals = (
+        tuple((e.what, e.effect, e.rationale) for e in rules.plan.proposals)
+        if rules.plan is not None
+        else ()
+    )
+    return UpgradePlan(
+        added=len(plan.added),
+        outdated=outdated,
+        removable=removable,
+        modified=len(plan.modified),
+        rule_proposals=proposals,
+    )
 
 
 # ---------------------------------------------------------------------------

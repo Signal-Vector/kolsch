@@ -17,6 +17,7 @@ Invariants:
 
 from __future__ import annotations
 
+import dataclasses
 import sys
 from dataclasses import dataclass
 from getpass import getpass
@@ -103,6 +104,8 @@ class _CommandIO:
     out: Any  # file-like; defaults to sys.stdout in main.py
     prompter: Prompter
     connector_factory: Callable[[str], ProviderConnector]
+    # bug-146 — `error:` lines (e.g. platform.yaml not updated).
+    err: Any = dataclasses.field(default_factory=lambda: sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -160,7 +163,7 @@ def _write_platform_yaml_atomic(
 def _persist_platform_yaml(
     io: _CommandIO, change: Callable[[dict[str, Any]], bool]
 ) -> bool | None:
-    """Write via `_write_platform_yaml_atomic`; report a failure on `io.out`.
+    """Write via `_write_platform_yaml_atomic`; report a failure on `io.err`.
 
     Returns whether the file was written, or `None` after printing an
     `error:` line when it couldn't be (e.g. the rules lock timed out).
@@ -168,7 +171,7 @@ def _persist_platform_yaml(
     try:
         return _write_platform_yaml_atomic(io.root, change)
     except (PlatformError, OSError) as exc:
-        io.out.write(f"error: platform.yaml was not updated: {exc}\n")
+        io.err.write(f"error: platform.yaml was not updated: {exc}\n")
         return None
 
 

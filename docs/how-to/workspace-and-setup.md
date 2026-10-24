@@ -97,6 +97,30 @@ To remove a single provider without touching the rest:
 kolsch disconnect <provider>   # updates platform.yaml + .env
 ```
 
+## Upgrading an existing workspace
+
+A newer kolsch ships new starter files (tools, agents, workflows) and,
+sometimes, new default permission rules. Re-running `kolsch setup` on
+an existing workspace does not install them by itself — it tells you,
+right after `✓ starter agent already at …`:
+
+```text
+  ⚠ workspace bundle is behind kolsch 0.12.0: `--sync-bundle` would copy 24 new file(s), ask about 11 file(s) that differ from this version (kept unless you overwrite).
+    1 missing default permission rule: kolsch/tools/jev_decide → prompt (sends workspace content to a third party (OpenRouter))
+    Run `kolsch setup --sync-bundle` to review and apply (`--dry-run` to preview).
+```
+
+An interactive re-run then asks **Review and apply now?** — yes runs
+the [`--sync-bundle`](#repairing-drift-kolsch-setup-sync-bundle) flow
+right there, before setup's test run, so the test uses the upgraded
+bundle. `--non-interactive` only prints the notice. Nothing is written
+unless you say yes, and the notice disappears once the workspace is in
+sync. (Files that differ from source keep it showing until you resolve
+them with an interactive `--sync-bundle`: `[o]verwrite` or keep them.)
+
+The same counts come from `kolsch doctor` and
+`kolsch setup --sync-bundle --dry-run`; the three always agree.
+
 ## Diagnosing bundle drift — `kolsch doctor`
 
 The starter bundle at `bundles/kolsch/` is shipped by `kolsch setup`
@@ -112,7 +136,7 @@ Writes nothing.
 kolsch doctor
 ```
 
-Prints up to five sections:
+Prints up to six sections:
 
 1. **Missing tool files** — present in current source, absent from
    your workspace.
@@ -135,6 +159,11 @@ Prints up to five sections:
 5. **Retired-tool refs in user-owned YAMLs** — same, but in
    `bundles/<your-bundle>/**`. `kolsch doctor` surfaces them; it
    never rewrites user code.
+6. **Missing default permission rules** — default rules shipped since
+   the workspace was set up. Missing `prompt` / `deny` defaults count
+   as drift (`--sync-bundle` adds them); missing `allow` defaults are
+   informational, with the `kolsch permissions add` command. See
+   [New default rules on an existing workspace](permissions.md#new-default-rules-on-an-existing-workspace).
 
 Plus, only when there's a finding, an advisory **Authorization**
 section: `platform.yaml`'s rule list has no default-deny tail, or has

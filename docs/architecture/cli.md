@@ -32,7 +32,12 @@ back.
 
 `kolsch setup` walks a new user through connecting at least one LLM
 provider and picking a default model. It writes `platform.yaml` and
-seeds the starter bundle (`<workspace>/bundles/kolsch/`).
+seeds the starter bundle (`<workspace>/bundles/kolsch/`). Re-run on an
+existing workspace, it reports what an upgrade would change; `kolsch
+setup --sync-bundle` applies it — new and changed starter files (with a
+per-file baseline in `.kolsch/bundle-baseline.json`) and missing
+`prompt` / `deny` default permission rules (decisions recorded in
+`.kolsch/default-rules.json`; `allow` defaults are never added).
 
 `kolsch chat` starts an interactive chat session. It supports
 multi-line input, mid-session model switches, slash commands for
@@ -67,12 +72,14 @@ useful after moving a workspace or recovering from corruption.
 runs a read-only operator server (list sessions, read events) that an
 external agent can drive over stdio, and `mcp bridge` bridges the
 running session's tools to an in-workflow external-harness agent.
-`kolsch doctor` diagnoses a workspace — provider connectivity, catalog
-integrity, and common misconfigurations, including (advisory) a missing
-or misplaced authorization default-deny tail, and an "Agent write
-access" section that lists the paths agents can never write and flags
-`allow` rules for `bash`, and `write_file` allows that point into
-`bundles/` or use a glob pattern.
+`kolsch doctor` is a read-only workspace check: drift between the
+starter bundle and the packaged source (missing, modified and retired
+files, retired-tool refs), missing default permission rules, and two
+advisory sections — a missing or misplaced authorization default-deny
+tail, and "Agent write access", which lists the paths agents can never
+write and flags `allow` rules for `bash`, and `write_file` allows that
+point into `bundles/` or use a glob pattern. It exits `1` on drift and
+points at `kolsch setup --sync-bundle`.
 
 ## Failure output and logging
 

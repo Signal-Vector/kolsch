@@ -178,7 +178,11 @@ def _llm_io(root: Path) -> tuple[Any, io.StringIO]:
         raise AssertionError(name)
 
     return _CommandIO(
-        root=root, out=buf, prompter=_StubPrompter(), connector_factory=no_connector
+        root=root,
+        out=buf,
+        prompter=_StubPrompter(),
+        connector_factory=no_connector,
+        err=io.StringIO(),
     ), buf
 
 
@@ -244,7 +248,8 @@ async def test_llm_writer_lock_timeout_is_an_error_line(
     _lock_times_out(monkeypatch)
     io_, buf = _llm_io(tmp_path)
     assert await cmd_disconnect(argparse.Namespace(provider="aaa"), io_) == 1
-    text = buf.getvalue()
+    text = io_.err.getvalue()
+    assert buf.getvalue() == ""
     assert text.startswith("error: platform.yaml was not updated:"), text
     assert "lock" in text
     assert yaml_path.read_bytes() == before

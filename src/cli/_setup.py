@@ -638,6 +638,7 @@ async def _step_d_starter_agent(io: _SetupIO, *, non_interactive: bool) -> str:
 
     if agent_path.exists():
         io.out.write(f"✓ starter agent already at {agent_path}\n")
+        await _maybe_offer_workspace_upgrade(io, non_interactive=non_interactive)
         return _SKIPPED
 
     model = _pick_starter_model(io)
@@ -664,6 +665,43 @@ async def _step_d_starter_agent(io: _SetupIO, *, non_interactive: bool) -> str:
     if model_written:
         _announce_picked_model(io, model)
     return _PROCEEDED
+
+
+async def _maybe_offer_workspace_upgrade(
+    io: _SetupIO, *, non_interactive: bool
+) -> None:
+    """Tell a re-run that the workspace is behind; offer to sync (bug-146).
+
+    Read-only by itself: counts what `kolsch setup --sync-bundle` would
+    do (via
+    [`plan_workspace_upgrade`][cli._bundle_sync.plan_workspace_upgrade])
+    and prints a short notice when there is anything — nothing on a
+    synced workspace. Interactive runs then ask "Review and apply now?"
+    and, on yes, run the `--sync-bundle` flow inline (its own per-change
+    prompts) before Step E, so the test run uses the upgraded bundle
+    (owner decision D1). Non-interactive runs only print the notice.
+    Never raises: a failed check is one `⚠ upgrade check skipped` line.
+    """
+    from cli._bundle_baseline import _current_kolsch_version  # noqa: PLC0415
+    from cli._bundle_sync import (  # noqa: PLC0415
+        plan_workspace_upgrade,
+        sync_kolsch_bundle,
+    )
+
+    try:
+        plan = await plan_workspace_upgrade(io.root)
+    except Exception as exc:  # noqa: BLE001 — advisory; never block setup
+        io.out.write(f"  ⚠ upgrade check skipped: {_one_line(str(exc))}\n")
+        return
+    if not plan.actionable:
+        return
+    for line in plan.notice_lines(_current_kolsch_version()):
+        io.out.write(line + "\n")
+    if non_interactive:
+        return
+    if not io.prompter.confirm("  Review and apply now?", default=True):
+        return
+    await sync_kolsch_bundle(io)
 
 
 def _copy_kolsch_bundle(root: Path) -> None:
