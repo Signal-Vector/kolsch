@@ -2467,8 +2467,9 @@ class RuleBasedAuthorizationProvider:
         """
         reserved = reserved_rule_id_violation(rule.id)
         if reserved is not None:
-            # `Rule` refuses such an id at construction; this catches a
-            # `model_construct` / `model_copy` bypass.
+            # `Rule` itself can't refuse the prefix (locked rules are
+            # `Rule`s too), so this is the choke point for layer rules,
+            # `add_rule` and modal inserts, `model_construct` included.
             raise AuthzMalformedRule(rule_index=-1, error=reserved)
         if rule.is_legacy:
             assert rule.who is not None
