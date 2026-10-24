@@ -895,7 +895,7 @@ no decision.
 
 **Shape** (anything else raises at load — `AuthzMalformedRule`, or the
 shared `AuthzPatternInvalid` / `AuthzToolRefUnknown` — with the
-message naming `locked_rules[<i>]` and, when known, the file and line):
+message naming `locked_rules[<i>]` and, when the caller supplies it, the file (with the line where known)):
 
 - a mapping with only `what`, `pattern` (default `*`) and `effect`;
   a legacy `who`, an `id` or a non-null `from:` is refused;
