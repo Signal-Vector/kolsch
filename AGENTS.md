@@ -333,6 +333,14 @@ These are non-negotiable. Violating them blocks merges.
   live in `.env` per Phase 1.1's `dotenv` provider; agent code
   reaches them via `ctx.secrets` after the Secrets provider
   resolves names listed in `@tool(secrets_needed=[...])`.
+- **Never write an in-memory authz rule list back to
+  `platform.yaml`.** Every rule write goes through
+  `cli.permissions.mutate_platform_rules` (insert/remove one rule on
+  the current disk list, under
+  `assets.platform_config.platform_yaml_lock`). A provider's rule
+  list is a session-old snapshot; writing it back silently erases
+  rule edits made on disk since (bug-162). (Setup migrations /
+  connect / refresh still rewrite directly — follow-up F1.)
 - **Multi-spec refactors require a composition invariant and a
   live-runtime gate at each milestone.** Component-scoped specs
   cannot ship a working feature on their own — the seams between

@@ -21,17 +21,21 @@ load time on a malformed rule.
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import logging
+import time
 from typing import TYPE_CHECKING, Any
 
 from pydantic import ValidationError as _PydanticValidationError
 
 from assets.default_rules import fail_closed_default_rules
-from errors import ConfigInvalid
+from errors import AuthzRulesPersistFailed, ConfigInvalid
 from kolsch._yamlio import YAMLError, dump, load, load_with_positions
 from schemas import HookRule
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
     from pathlib import Path
 
 _log = logging.getLogger("assets")
@@ -346,6 +350,87 @@ def parse_hooks_section(raw: Any) -> list[HookRule]:  # noqa: ANN401 — unvalid
 def _write_yaml(path: Path, payload: dict[str, Any], *, header: str = "") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(header + dump(payload), encoding="utf-8")
+
+
+# bug-162 — poll interval for `platform_yaml_lock`'s bounded wait.
+_LOCK_POLL_INTERVAL_S = 0.05
+
+
+def platform_yaml_lock_path(root: Path) -> Path:
+    """Return the sidecar lock path guarding `root/platform.yaml` rule writes.
+
+    Lives under `.platform/` (agent-denied by the default
+    `file_access.denied_paths`) rather than beside `platform.yaml`.
+    """
+    return root / ".platform" / "platform.yaml.lock"
+
+
+@contextlib.contextmanager
+def platform_yaml_lock(root: Path, *, timeout_s: float = 5.0) -> Iterator[None]:
+    """Hold an exclusive `flock` on `root/.platform/platform.yaml.lock`.
+
+    Every writer of `platform.yaml`'s authorization rules
+    (`cli.permissions.mutate_platform_rules`) runs its read → modify
+    → write under this lock, so two kolsch processes (a chat and a
+    `kolsch permissions` in another terminal, or two chats) can never
+    lose each other's rule edits.
+
+    Polls `LOCK_EX | LOCK_NB` every ~50 ms for up to `timeout_s`, then
+    raises. Mirrors the event store's sidecar-lock pattern
+    (`store.jsonl.lock_path`); POSIX-only, as the store already is.
+
+    **Advisory.** Only writers that take this lock are serialized: a
+    hand editor or an agent's `write_file` that replaces the file
+    between a writer's read and its rename can still be lost.
+
+    **Never nest it in one process.** `flock` locks belong to the open
+    file description, so a second acquire from the same process opens
+    a new description and waits on the first — a nested acquire
+    self-deadlocks until `timeout_s` and then raises `lock_timeout`.
+
+    Raises:
+        AuthzRulesPersistFailed: `reason="lock_timeout"` when the lock
+            is still held after `timeout_s`; `reason="write_failed"`
+            when the lock file can't be created or locked.
+    """
+    lock = platform_yaml_lock_path(root)
+    yaml_path = str(root / "platform.yaml")
+    try:
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        handle = lock.open("ab")
+    except OSError as exc:
+        raise AuthzRulesPersistFailed(
+            path=yaml_path,
+            reason="write_failed",
+            detail=f"cannot open rules lock {lock}: {exc}",
+            where="assets.platform_config.platform_yaml_lock",
+        ) from exc
+    # Closing the handle releases the lock.
+    with handle:
+        deadline = time.monotonic() + timeout_s
+        while True:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise AuthzRulesPersistFailed(
+                        path=yaml_path,
+                        reason="lock_timeout",
+                        detail=(
+                            f"another writer held {lock} for more than {timeout_s:g}s"
+                        ),
+                        where="assets.platform_config.platform_yaml_lock",
+                    ) from None
+                time.sleep(_LOCK_POLL_INTERVAL_S)
+            except OSError as exc:
+                raise AuthzRulesPersistFailed(
+                    path=yaml_path,
+                    reason="write_failed",
+                    detail=f"cannot lock {lock}: {exc}",
+                    where="assets.platform_config.platform_yaml_lock",
+                ) from exc
+        yield
 
 
 def is_known_section(name: str) -> bool:

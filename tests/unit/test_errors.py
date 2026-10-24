@@ -31,6 +31,7 @@ from errors import (
     AuthzRegexInvalid,
     AuthzRuleInvalid,
     AuthzRuleNotFound,
+    AuthzRulesPersistFailed,
     AuthzToolRefUnknown,
     BridgeAuthFailed,
     BridgeFrameMalformed,
@@ -437,6 +438,11 @@ CONSTRUCTOR_ARGS: dict[type[PlatformError], dict[str, Any]] = {
     AuthzProtectedRule: {
         "rule_id": "rl_default_deny",
         "reason": "default-deny tail is removal-protected",
+    },
+    AuthzRulesPersistFailed: {
+        "path": "/workspace/platform.yaml",
+        "reason": "lock_timeout",
+        "detail": "another writer held the lock for 5.0s",
     },
     FileTooLarge: {
         "path": "/workspace/big.bin",

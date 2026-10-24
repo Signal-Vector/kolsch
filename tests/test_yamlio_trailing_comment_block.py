@@ -5,8 +5,9 @@ Covers ``kolsch._yamlio.extract_trailing_comment_block`` and
 every ``platform.yaml`` write site that reads the file as a plain
 dict, mutates it, and writes it back (``cli._setup``'s migration
 helpers, ``cli.llm_commands._write_platform_yaml_atomic`` — shared by
-``cmd_connect``/``cmd_disconnect``/``cmd_refresh`` — and
-``cli.permissions._write_back``) so a trailing, purely-decorative
+``cmd_connect``/``cmd_disconnect``/``cmd_refresh``; the rules writer
+``cli.permissions.mutate_platform_rules`` uses full round-trip
+instead since bug-162) so a trailing, purely-decorative
 comment block (e.g. the fresh-install ``hooks:`` scaffold) survives
 every rewrite instead of being silently dropped by plain
 ``dump()``'s lack of comment-preservation.

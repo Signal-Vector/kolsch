@@ -190,6 +190,9 @@ CATALOG: dict[str, Level] = {
     "authz.rule_invalid": Level.FATAL,
     "authz.rule_not_found": Level.FATAL,
     "authz.protected_rule": Level.FATAL,
+    # bug-162: a rule edit could not be saved to platform.yaml (the
+    # file is left untouched; the rule stays live in memory only).
+    "authz.rules_persist_failed": Level.FATAL,
     # Permission-system schema migration: human-readable rule form.
     "authz.bare_tool_ref": Level.FATAL,
     "authz.pattern_invalid": Level.FATAL,

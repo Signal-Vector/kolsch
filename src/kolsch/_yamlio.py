@@ -26,21 +26,30 @@ build.targets.wheel] packages`` sidesteps the force-include entirely.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from dataclasses import dataclass
 from io import StringIO
 from typing import Any
 
 from ruamel.yaml import YAML
-from ruamel.yaml.error import YAMLError
+from ruamel.yaml.comments import CommentedMap
+from ruamel.yaml.error import CommentMark, YAMLError
+from ruamel.yaml.tokens import CommentToken
 
 __all__ = [
+    "RoundTripLayout",
     "YAMLError",
     "dump",
     "dump_preserving_trailing_comment_block",
     "dump_round_trip",
+    "dump_round_trip_with_layout",
     "extract_trailing_comment_block",
     "load",
     "load_round_trip",
+    "load_round_trip_with_layout",
     "load_with_positions",
+    "seq_delete_preserving_comments",
+    "seq_insert_preserving_comments",
 ]
 
 # Module-level singleton — cheap to share and sufficient for our
@@ -112,7 +121,7 @@ def dump(data: Any) -> str:  # noqa: ANN401
 # Several independent call sites across the CLI (``cli._setup``'s
 # migration helpers, ``cli.llm_commands``'s ``_write_platform_yaml_
 # atomic`` — shared by ``cmd_connect``/``cmd_disconnect``/``cmd_
-# refresh`` — and ``cli.permissions``'s ``_write_back``) all follow
+# refresh``) all follow
 # the same "read platform.yaml as a plain dict, mutate it, dump() it
 # back" pattern. Plain ``load()``/``dump()`` is safe-mode: it has no
 # comment-preservation machinery at all (that's what the separate
@@ -297,3 +306,202 @@ def dump_round_trip(data: Any) -> str:  # noqa: ANN401
     buf = StringIO()
     _yaml_rt.dump(data, buf)
     return buf.getvalue()
+
+
+# bug-162 — layout-preserving round-trip + single-entry list edits.
+#
+# `cli.permissions.mutate_platform_rules` inserts or removes ONE entry
+# of `authorization.config.rules` and must leave every other line of a
+# user-authored `platform.yaml` alone. ruamel keeps comments but not
+# indentation (it re-indents with its configured defaults), and it
+# stores a comment that sits between two list entries as a post-comment
+# on the *previous* entry's last key. The helpers below guess the
+# file's indentation and move those between-entry comments so they
+# stay above the entry they precede.
+
+
+@dataclass(frozen=True, slots=True)
+class RoundTripLayout:
+    """Block indentation of a YAML text, in ruamel's `indent()` terms."""
+
+    mapping: int = 2
+    sequence: int = 2
+    offset: int = 0
+
+
+def _guess_layout(text: str) -> RoundTripLayout:
+    """Guess mapping / block-sequence indentation from the first examples.
+
+    Same heuristic as `ruamel.yaml.util.load_yaml_guess_indent`, but
+    also returns the nested-mapping indent. Falls back to ruamel's
+    defaults (2 / 2 / 0) for anything it can't see.
+    """
+    mapping: int | None = None
+    sequence: int | None = None
+    offset: int | None = None
+    key_indent = 0
+    key_only_at: int | None = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        lead = len(line) - len(line.lstrip(" "))
+        if stripped.startswith("- ") and sequence is None:
+            rest = line[lead + 1 :]
+            content = lead + 1 + (len(rest) - len(rest.lstrip(" ")))
+            if not line[content:].startswith("#"):
+                offset = lead - key_indent
+                sequence = content - key_indent
+        elif mapping is None and key_only_at is not None and lead > key_only_at:
+            mapping = lead - key_only_at
+        if stripped.endswith(":") and not stripped.startswith("- "):
+            key_indent = key_only_at = lead
+        else:
+            key_only_at = None
+        if mapping is not None and sequence is not None:
+            break
+    default = RoundTripLayout()
+    seq = sequence if sequence is not None else default.sequence
+    off = offset if offset is not None else default.offset
+    if off >= seq:  # unrepresentable (dash past content); use defaults
+        seq, off = default.sequence, default.offset
+    return RoundTripLayout(
+        mapping=mapping if mapping is not None else default.mapping,
+        sequence=seq,
+        offset=off,
+    )
+
+
+def load_round_trip_with_layout(text: str) -> tuple[Any, RoundTripLayout]:
+    """Round-trip-load ``text`` and guess its block indentation.
+
+    Pair with :func:`dump_round_trip_with_layout` so an unchanged node
+    dumps back with the file's own indentation.
+    """
+    yaml = YAML(typ="rt")
+    yaml.preserve_quotes = True  # keep `'*'` vs `"*"` as written
+    return yaml.load(text), _guess_layout(text)
+
+
+def dump_round_trip_with_layout(data: Any, layout: RoundTripLayout) -> str:  # noqa: ANN401
+    """Like :func:`dump_round_trip`, indenting blocks per ``layout``."""
+    yaml = YAML(typ="rt")
+    yaml.default_flow_style = False
+    yaml.sort_base_mapping_type_on_output = False  # type: ignore[assignment]
+    yaml.width = 4096  # never re-wrap a user's long lines
+    yaml.indent(mapping=layout.mapping, sequence=layout.sequence, offset=layout.offset)
+    buf = StringIO()
+    yaml.dump(data, buf)
+    return buf.getvalue()
+
+
+def _post_comment_slot(item: Any) -> tuple[Any, Any] | None:  # noqa: ANN401
+    """Return `(comment_items, last_key)` of a flat mapping list entry.
+
+    The slot holding the comment that follows the entry (inline on its
+    last line, then any full-line comments before the next entry).
+    `None` for anything but a `CommentedMap` whose last value is a
+    scalar (nested values carry the comment deeper — left alone).
+    """
+    if not isinstance(item, CommentedMap) or not item:
+        return None
+    last_key = list(item.keys())[-1]
+    if isinstance(item[last_key], Mapping | list):
+        return None
+    return item.ca.items, last_key
+
+
+def _take_following_comment(item: Any) -> str:  # noqa: ANN401
+    """Detach and return the full-line comment block that follows ``item``.
+
+    Keeps ``item``'s own inline comment (on its last line) in place.
+    Returns the detached text (each line with its own indentation),
+    or ``""`` when there is none.
+    """
+    slot = _post_comment_slot(item)
+    if slot is None:
+        return ""
+    items, key = slot
+    entry = items.get(key)
+    token = entry[2] if entry and len(entry) > 2 else None  # noqa: PLR2004
+    if token is None:
+        return ""
+    value: str = token.value
+    first, sep, following = value.partition("\n")
+    if not sep or not following:
+        return ""
+    if first.strip():
+        token.value = first + "\n"  # keep the inline comment
+    else:
+        entry[2] = None
+    return following
+
+
+def _append_following_comment(item: Any, following: str) -> bool:  # noqa: ANN401
+    """Attach a full-line comment block after ``item``; `False` if impossible."""
+    if not following:
+        return True
+    slot = _post_comment_slot(item)
+    if slot is None:
+        return False
+    items, key = slot
+    entry = items.setdefault(key, [None, None, None, None])
+    while len(entry) < 3:  # noqa: PLR2004
+        entry.append(None)
+    token = entry[2]
+    if token is None:
+        entry[2] = CommentToken("\n" + following, CommentMark(0), None)
+    else:
+        token.value = token.value + following
+    return True
+
+
+def seq_insert_preserving_comments(
+    seq: Any,  # noqa: ANN401 — a ruamel CommentedSeq
+    index: int,
+    item: Mapping[str, Any],
+) -> None:
+    """Insert mapping ``item`` at ``index`` of a round-trip list.
+
+    A full-line comment block that sat directly above the old
+    ``seq[index]`` (stored by ruamel on ``seq[index - 1]``) is moved
+    onto the new entry, so it stays directly above the entry it
+    described. Every comment is kept.
+    """
+    new = CommentedMap(item)
+    if index > 0 and index < len(seq) + 1:
+        following = _take_following_comment(seq[index - 1])
+        if following and not _append_following_comment(new, following):
+            _append_following_comment(seq[index - 1], following)
+    seq.insert(index, new)
+
+
+def seq_delete_preserving_comments(seq: Any, index: int) -> None:  # noqa: ANN401
+    """Delete ``seq[index]`` of a round-trip list, keeping following comments.
+
+    The full-line comment block after the removed entry (i.e. above the
+    next entry) is re-attached to the previous entry, or turned into
+    the list's leading comment when the first entry is removed. The
+    removed entry's own inline comments go with it.
+    """
+    following = _take_following_comment(seq[index])
+    del seq[index]
+    if not following:
+        return
+    if index > 0 and _append_following_comment(seq[index - 1], following):
+        return
+    if index == 0:
+        comment = seq.ca.comment
+        if comment is None:
+            seq.ca.comment = [None, []]
+            comment = seq.ca.comment
+        while len(comment) < 2:  # noqa: PLR2004
+            comment.append([])
+        if comment[1] is None:
+            comment[1] = []
+        for line in following.splitlines(keepends=True):
+            if line.strip():
+                col = len(line) - len(line.lstrip(" "))
+                comment[1].append(
+                    CommentToken(line.lstrip(" "), CommentMark(col), None)
+                )

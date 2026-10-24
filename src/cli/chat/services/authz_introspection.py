@@ -867,6 +867,23 @@ async def handle_reload(runtime: PlatformRuntime) -> ReloadResult:
             ),
         )
 
+    # bug-162 — carry the chat's approval registration over to the new
+    # provider BEFORE it goes live. Without this, after `/reload` every
+    # `prompt` rule collapsed to deny and uncovered actions hit default
+    # deny: approvals silently stopped for the rest of the chat. Done
+    # here (after every parse succeeded) so a failed reload — which
+    # returned above — leaves the old provider and its registration
+    # untouched.
+    old_authz = getattr(runtime, "authz", None)
+    if (
+        isinstance(old_authz, RuleBasedAuthorizationProvider)
+        and old_authz.registered_prompt_callback is not None
+    ):
+        new_authz.register_prompt_callback(
+            old_authz.registered_prompt_callback,
+            on_rule_added=old_authz.rule_added_hook,
+        )
+
     # --- Phase B: atomic swap. All parses succeeded above ----------
     #
     # From here on the mutations are non-recoverable — but each is a

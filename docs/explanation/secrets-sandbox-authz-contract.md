@@ -711,10 +711,22 @@ The Authorization provider does NOT own:
   surface owns its HTTP shape; tests inject a deny-everything
   callback. The provider is UI-agnostic.
 - Rule persistence. The provider reads from the in-memory rule list
-  that Asset Management loaded from `platform.yaml`. Live edits are
-  the chat/CLI surface's responsibility (per
-  `kolsch permissions {list, add, remove, show}` — Phase 2.0
-  patch §4.1).
+  that Asset Management loaded from `platform.yaml`, and never hands
+  that list to a writer. When a prompt answer persists a rule, the
+  provider inserts it in memory and passes the `on_rule_added` hook
+  one `RulePersistRequest(rule, anchor)` (`anchor` = the platform
+  `prompt` rule that asked, else `None`). Every rule write — the
+  chat's hook, `/perm`, `kolsch permissions add/remove` — is one
+  insert or remove applied to the rules **currently on disk** by
+  `cli.permissions.mutate_platform_rules`, under
+  `assets.platform_config.platform_yaml_lock` (anchors matched
+  structurally, the default-deny tail found by shape, comments kept).
+  Rule edits made on disk mid-session are kept on disk but not
+  enforced until `/reload` or restart: the in-memory list is never
+  rebuilt from disk on a write (bug-162 D1). A failed write
+  (`authz.rules_persist_failed`) leaves the file untouched and the
+  rule live for the session only. `/reload` carries the chat's
+  prompt callback and hook over to the new provider.
 
 ### 3.7.5 The `allow_all_test` variant
 

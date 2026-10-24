@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import argparse
 import io
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 import yaml
@@ -30,6 +30,18 @@ def _workspace(tmp_path: Path) -> Path:
     only default rule set."""
     for sub in ("bundles", "sessions", "content", "logs", "data", ".platform"):
         (tmp_path / sub).mkdir(exist_ok=True)
+    # bug-162: `add` now validates a new rule's `what` against the
+    # catalog before writing (a rule the next load would reject is
+    # never persisted), so ship the `kolsch/tools/bash` the tests name.
+    tools = tmp_path / "bundles" / "kolsch" / "tools"
+    tools.mkdir(parents=True)
+    (tmp_path / "bundles" / "kolsch" / "bundle.yaml").write_text(
+        yaml.safe_dump(
+            {"name": "kolsch", "version": "0.1.0", "description": "fixture"}
+        ),
+        encoding="utf-8",
+    )
+    (tools / "bash.py").write_text("# stub for bash\n", encoding="utf-8")
     (tmp_path / "platform.yaml").write_text(
         yaml.safe_dump(
             {
@@ -277,8 +289,83 @@ async def test_permissions_remove_default_deny_leaves_yaml_byte_identical(
         err=err,
     )
     assert rc == 1
+    assert err.getvalue().startswith("error:")
     assert "protected" in err.getvalue().lower()
     assert path.read_bytes() == before
+
+
+async def test_bug162_add_of_an_effective_rule_writes_nothing(tmp_path: Path) -> None:
+    root = _workspace(tmp_path)
+    args = _args(
+        root,
+        permissions_command="add",
+        what="kolsch/tools/bash",
+        pattern="rg *",
+        effect="allow",
+    )
+    assert await cmd_permissions(args, out=io.StringIO(), err=io.StringIO()) == 0
+    before = (root / "platform.yaml").read_bytes()
+    out, err = io.StringIO(), io.StringIO()
+
+    rc = await cmd_permissions(args, out=out, err=err)
+
+    assert rc == 0
+    assert "already present at position 3; nothing written" in out.getvalue()
+    assert (root / "platform.yaml").read_bytes() == before
+
+
+async def test_bug162_add_keeps_comments_and_reports_position(tmp_path: Path) -> None:
+    root = _workspace(tmp_path)
+    path = root / "platform.yaml"
+    path.write_text("# operator header\n" + path.read_text(encoding="utf-8"))
+    out, err = io.StringIO(), io.StringIO()
+    rc = await cmd_permissions(
+        _args(
+            root,
+            permissions_command="add",
+            what="kolsch/tools/bash",
+            pattern="rg *",
+            effect="allow",
+        ),
+        out=out,
+        err=err,
+    )
+    assert rc == 0
+    assert path.read_text(encoding="utf-8").startswith("# operator header\n")
+    assert "(position 3)" in out.getvalue()
+
+
+async def test_bug162_add_persist_failure_exits_1(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import cli.permissions as permissions_mod
+    from assets.platform_config import platform_yaml_lock
+
+    root = _workspace(tmp_path)
+    before = (root / "platform.yaml").read_bytes()
+    out, err = io.StringIO(), io.StringIO()
+    real = permissions_mod.mutate_platform_rules
+
+    def short_lock(*a: Any, **kw: Any) -> Any:
+        return real(*a, **kw, lock_timeout_s=0.2)
+
+    monkeypatch.setattr(permissions_mod, "mutate_platform_rules", short_lock)
+    with platform_yaml_lock(root):
+        rc = await cmd_permissions(
+            _args(
+                root,
+                permissions_command="add",
+                what="kolsch/tools/bash",
+                pattern="rg *",
+                effect="allow",
+            ),
+            out=out,
+            err=err,
+        )
+    assert rc == 1
+    assert err.getvalue().startswith("error:")
+    assert "lock_timeout" in err.getvalue()
+    assert (root / "platform.yaml").read_bytes() == before
 
 
 async def test_permissions_remove_unknown_rule(tmp_path: Path) -> None:

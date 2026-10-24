@@ -30,8 +30,8 @@ from typing import TYPE_CHECKING, Any
 import yaml
 
 from cli._modal import ApprovalModal
-from cli.permissions import _write_back
-from providers import RuleBasedAuthorizationProvider
+from cli.permissions import persist_rule_request
+from providers import RuleBasedAuthorizationProvider, RulePersistRequest
 from providers.authz import AuthzEffect, Rule
 
 if TYPE_CHECKING:
@@ -90,8 +90,8 @@ async def test_no_rule_fires_modal_then_persists_allow(tmp_path: Path) -> None:
     )
     provider = _provider_empty()
 
-    def _on_rule_added(rules: list[Rule]) -> None:
-        _write_back(yaml_path, rules)
+    def _on_rule_added(request: RulePersistRequest) -> None:
+        persist_rule_request(yaml_path, request, catalog=None)
 
     invocations = 0
 
@@ -157,10 +157,10 @@ async def test_no_rule_deny_once_does_not_persist() -> None:
     out = _io.StringIO()
     modal = ApprovalModal(stdout=out, input_fn=deny_input)
 
-    hook_calls: list[list[Rule]] = []
+    hook_calls: list[RulePersistRequest] = []
 
-    def _on_rule_added(rules: list[Rule]) -> None:
-        hook_calls.append(list(rules))
+    def _on_rule_added(request: RulePersistRequest) -> None:
+        hook_calls.append(request)
 
     provider.register_prompt_callback(modal, on_rule_added=_on_rule_added)
 

@@ -19,8 +19,9 @@ Two consequences:
 
 1. The modal can be unit-tested without a workspace on disk.
 2. There is one persist path (the chat's registered hook), not
-   one-per-callsite. The same hook is reused by `kolsch permissions
-   add` (it calls the same `_write_back` helper).
+   one-per-callsite. The hook and `kolsch permissions add` both go
+   through `cli.permissions.mutate_platform_rules`, which inserts the
+   one rule into the rules currently on disk (bug-162).
 
 **Replay-safety.** The modal's choice is not persisted on the event
 log — the schema lacks `authz.prompt_requested` /

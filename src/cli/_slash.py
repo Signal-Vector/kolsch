@@ -1085,6 +1085,59 @@ async def _perm_list(ctx: SlashContext) -> None:
             )
 
 
+def _live_catalog(runtime: Any) -> Any:
+    """Return the runtime's asset catalog for rule validation, or `None`."""
+    am = getattr(runtime, "asset_management", None)
+    if am is None:
+        return None
+    try:
+        return am.catalog()
+    except Exception:  # noqa: BLE001 — validation degrades to catalog-free
+        return None
+
+
+async def _persist_perm_op(
+    ctx: SlashContext, *, verb: str, yaml_path: Any, op: Any
+) -> Any:
+    """Apply `op` to the rules currently on disk, off the event loop (bug-162).
+
+    Returns the `RulesMutationResult`, or `None` after writing the
+    "applied for this chat only — not saved" line on any failure (the
+    in-memory edit stays live for this session).
+    """
+    import asyncio  # noqa: PLC0415
+    import logging  # noqa: PLC0415
+
+    from cli.permissions import mutate_platform_rules  # noqa: PLC0415
+    from errors import AuthzRulesPersistFailed  # noqa: PLC0415
+
+    assert ctx.state is not None  # guarded by caller
+    try:
+        return await asyncio.to_thread(
+            mutate_platform_rules,
+            yaml_path,
+            op,
+            catalog=_live_catalog(ctx.state.runtime),
+        )
+    except AuthzRulesPersistFailed as exc:
+        reason = f"{exc.detail['reason']}: {exc.detail['detail']}"
+        hint = (
+            " (if a bundle was installed since this chat started, run /reload)"
+            if exc.detail["reason"] == "invalid_rules"
+            else ""
+        )
+    except Exception as exc:  # noqa: BLE001 — never lose the in-memory edit
+        reason = f"{type(exc).__name__}: {exc}"
+        hint = ""
+    logging.getLogger("cli.slash").warning(
+        "/perm %s: rule change not saved to %s: %s", verb, yaml_path, reason
+    )
+    ctx.stdout.write(
+        f"/perm {verb}: applied for this chat only — not saved: {reason}{hint}\n",
+    )
+    return None
+
+
 async def _perm_upsert(
     ctx: SlashContext,
     *,
@@ -1100,11 +1153,12 @@ async def _perm_upsert(
     `(what, pattern, from_)` (replacing intent) then inserts above
     the default-deny tail. Rules with the same `(what, pattern)`
     but different `from_` are distinct — a `from:kolsch/agents/X`
-    rule doesn't shadow the unscoped variant. The output names the
-    final position so the user can immediately verify where it
-    landed.
+    rule doesn't shadow the unscoped variant. Applied to the live
+    provider AND, separately, to the rules currently on disk
+    (bug-162: never by writing the live list back). The output names
+    the rule's position in `platform.yaml`.
     """
-    from cli.permissions import _write_back  # noqa: PLC0415
+    from cli.permissions import UpsertRule  # noqa: PLC0415
     from providers import Rule, RuleBasedAuthorizationProvider  # noqa: PLC0415
 
     assert ctx.state is not None  # guarded by caller
@@ -1114,25 +1168,29 @@ async def _perm_upsert(
         return
 
     effect = _VERB_TO_EFFECT[verb]
-    removed_index = await _remove_matching_new_rule(
+    await _remove_matching_new_rule(
         authz,
         what=tool,
         pattern=pattern,
         from_=from_ref,
     )
     new_rule = Rule(what=tool, pattern=pattern, from_=from_ref, effect=effect)
-    inserted = await authz.add_rule(new_rule)
-    _write_back(yaml_path, await authz.list_rules())
-    position = await _position_of(authz, inserted.id)
-    landed = "above the catch-all" if position is not None else "<unknown>"
-    if removed_index is not None:
+    await authz.add_rule(new_rule)
+    result = await _persist_perm_op(
+        ctx, verb=verb, yaml_path=yaml_path, op=UpsertRule(new_rule)
+    )
+    if result is None:
+        return
+    if result.replaced_position is not None:
         ctx.stdout.write(
-            f"/perm {verb}: replaced previous rule at position {removed_index}\n",
+            f"/perm {verb}: replaced previous rule at position "
+            f"{result.replaced_position}\n",
         )
     from_str = f"  from={from_ref!r}" if from_ref is not None else ""
     ctx.stdout.write(
         f"/perm {verb}: added rule  what={tool!r}  pattern={pattern!r}"
-        f"{from_str}  effect={effect}  ({landed}, position {position})\n",
+        f"{from_str}  effect={effect}  (above the catch-all, position "
+        f"{result.position} in platform.yaml)\n",
     )
 
 
@@ -1151,10 +1209,12 @@ async def _perm_remove(
     `kolsch permissions remove <id>`. Refusing to drop them via
     `/perm remove` also prevents accidentally clobbering a
     hand-authored regex rule whose `what` happens to look like a
-    qualified ref.
+    qualified ref. The live provider and the rules currently on disk
+    are edited separately (bug-162); the output names the disk
+    position.
     """
-    from cli.permissions import _write_back  # noqa: PLC0415
-    from providers import RuleBasedAuthorizationProvider  # noqa: PLC0415
+    from cli.permissions import RemoveRule  # noqa: PLC0415
+    from providers import Rule, RuleBasedAuthorizationProvider  # noqa: PLC0415
 
     assert ctx.state is not None
     authz = ctx.state.runtime.authz
@@ -1175,9 +1235,21 @@ async def _perm_remove(
             "(legacy rules: use `kolsch permissions remove <id>`)\n",
         )
         return
-    _write_back(yaml_path, await authz.list_rules())
+    # The effect is ignored by `RemoveRule(match=)`; any value works.
+    match = Rule(what=tool, pattern=pattern, from_=from_ref, effect="deny")
+    result = await _persist_perm_op(
+        ctx, verb="remove", yaml_path=yaml_path, op=RemoveRule(match=match)
+    )
+    if result is None:
+        return
+    if not result.removed:
+        ctx.stdout.write(
+            f"/perm remove: dropped rule what={tool!r}  pattern={pattern!r} "
+            "for this chat; it was not in platform.yaml (nothing saved)\n",
+        )
+        return
     ctx.stdout.write(
-        f"/perm remove: dropped rule at position {removed}  "
+        f"/perm remove: dropped rule at position {result.position}  "
         f"what={tool!r}  pattern={pattern!r}\n",
     )
 
@@ -1205,15 +1277,6 @@ async def _remove_matching_new_rule(
             continue  # never touch legacy rules from /perm
         if rule.what == what and rule.pattern == pattern and rule.from_ == from_:
             await authz.remove_rule(rule.id)
-            return index
-    return None
-
-
-async def _position_of(authz: Any, rule_id: str) -> int | None:
-    """Walk the in-memory rule list once to find a rule's index."""
-    rules = await authz.list_rules()
-    for index, rule in enumerate(rules):
-        if rule.id == rule_id:
             return index
     return None
 

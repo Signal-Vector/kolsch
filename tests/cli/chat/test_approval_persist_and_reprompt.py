@@ -552,3 +552,83 @@ def test_flagship_uses_no_replay_scaffold() -> None:
     # Positive requirements: real Pilot key dispatch + real bus seams.
     assert "pilot.press" in text
     assert "authz.allow" in text
+
+
+# ----------------------------------------------------------------------
+# bug-162 — a persist failure mounts a transcript notice; the rule stays
+# live in memory; platform.yaml is untouched.
+# ----------------------------------------------------------------------
+
+
+async def _answer_always(pilot: Any) -> None:
+    """Drive `a` → Enter (accept pattern) → `y` (save) on the live block."""
+    for key in ("a", "enter", "y"):
+        await pilot.press(key)
+        for _ in range(20):
+            await pilot.pause()
+            await asyncio.sleep(0.02)
+
+
+@pytest.mark.asyncio
+async def test_bug162_persist_failure_mounts_notice_and_keeps_rule_live(
+    chat_app: Any,
+) -> None:
+    from cli.chat.widgets.notice import NoticeWidget
+
+    async with chat_app.run_test() as pilot:
+        await pilot.pause()
+        authz = pilot.app.session.runtime.authz
+        yaml_path = pilot.app.session.root / "platform.yaml"
+        # Mid-chat: the file becomes unparseable (e.g. a botched hand edit).
+        yaml_path.write_text("authorization: [unclosed\n", encoding="utf-8")
+        before = yaml_path.read_bytes()
+
+        target_ref = "acme/workflows/job_description_review"
+        allow_task = asyncio.create_task(
+            authz.allow("agent.test", "kolsch/tools/run_workflow", target=target_ref),
+        )
+        await _wait_for_approval_block(pilot, timeout=3.0)
+        await _answer_always(pilot)
+        result = await asyncio.wait_for(allow_task, timeout=3.0)
+        assert result.allowed is True
+
+        notices: list[str] = []
+        for _ in range(40):
+            await pilot.pause()
+            notices = [n.text for n in pilot.app.query(NoticeWidget)]
+            if any("active for this chat only" in n for n in notices):
+                break
+            await asyncio.sleep(0.05)
+        saved = [n for n in notices if "active for this chat only" in n]
+        assert len(saved) == 1, notices
+        kinds = [n.kind for n in pilot.app.query(NoticeWidget) if n.text == saved[0]]
+        assert kinds == ["warning"]
+        assert "unparseable" in saved[0]
+        assert "kolsch permissions add" in saved[0]
+        assert yaml_path.read_bytes() == before
+
+        # The rule is live in memory: the identical call doesn't re-prompt.
+        again = await asyncio.wait_for(
+            authz.allow("agent.test", "kolsch/tools/run_workflow", target=target_ref),
+            timeout=1.0,
+        )
+        assert again.allowed is True
+
+
+@pytest.mark.asyncio
+async def test_bug162_unmount_clears_registration_on_the_current_provider(
+    chat_app: Any,
+) -> None:
+    """After a `/reload` swap, chat exit clears the NEW provider's registration."""
+    async with chat_app.run_test() as pilot:
+        await pilot.pause()
+        runtime = pilot.app.session.runtime
+        old = runtime.authz
+        assert old.registered_prompt_callback is not None
+        swapped = RuleBasedAuthorizationProvider(config={"rules": []})
+        swapped.register_prompt_callback(
+            old.registered_prompt_callback, on_rule_added=old.rule_added_hook
+        )
+        runtime.authz = swapped  # what `handle_reload`'s Phase B does
+    assert swapped.registered_prompt_callback is None
+    assert swapped.rule_added_hook is None
