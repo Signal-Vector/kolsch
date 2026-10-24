@@ -9,13 +9,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from cli.chat.services.authz_introspection import (
     DenialCardData,
     ReloadResult,
+    _assemble_card_data,
     _extract_layer_from_reason,
     _find_correlated_policy,
     _find_target_tool_failed,
@@ -720,3 +721,80 @@ def test_reload_result_shape() -> None:
     assert ok.error is None
     err = ReloadResult(error="broken")
     assert err.summary is None
+
+
+# ---------------------------------------------------------------------------
+# feat-160 — locked platform rules in the hint and the /why card.
+# ---------------------------------------------------------------------------
+
+
+def _locked_matched_rule() -> dict[str, Any]:
+    from providers import derive_locked_rule_id
+
+    return {
+        "id": derive_locked_rule_id("kolsch/tools/bash", "*", "deny"),
+        "effect": "deny",
+        "what": "kolsch/tools/bash",
+        "pattern": "*",
+        "source_file": "/Users/dev/.kolsch/platform.yaml",
+        "source_line": 9,
+    }
+
+
+def test_denial_hint_names_locked_rule() -> None:
+    matched = _locked_matched_rule()
+    lines = format_denial_hint(matched).split("\n")
+    assert len(lines) == 2
+    assert f"denied by {matched['id']} (deny)" in lines[0]
+    assert "platform.yaml:9" in lines[0]
+    assert lines[1] == (
+        "locked rule — workflow/agent/bundle allows can't override it; "
+        "edit authorization.config.locked_rules in platform.yaml, then /reload"
+    )
+
+
+def test_denial_hint_non_locked_unchanged() -> None:
+    hint = format_denial_hint({"id": "rl_abc123", "effect": "deny", "pattern": "rm *"})
+    assert hint.split("\n")[1] == "pattern rm * — /reload to reapply after editing"
+
+
+def test_why_card_layer_locked_from_rule_id() -> None:
+    matched = _locked_matched_rule()
+    tool_failed = _make_tool_failed_event(
+        tool_call_id="tc_1",
+        tool_name="bash",
+        matched_rule=matched,
+        action="kolsch/tools/bash",
+    )
+    events: list[Any] = [
+        _make_policy_event(
+            tool_call_id="tc_1", action="kolsch/tools/bash", rule_id=matched["id"]
+        ),
+        tool_failed,
+    ]
+    card = _assemble_card_data(events, cast("Any", tool_failed))
+    assert card.layer == "locked"
+    assert card.rule_id == matched["id"]
+    # A non-locked rule keeps the pre-existing (unknown) layer.
+    plain = _make_tool_failed_event(
+        tool_call_id="tc_2",
+        tool_name="bash",
+        matched_rule={"id": "rl_abc123", "effect": "deny"},
+        action="kolsch/tools/bash",
+    )
+    assert _assemble_card_data([cast("Any", plain)], cast("Any", plain)).layer is None
+
+
+def test_spoofed_locked_id_on_a_non_deny_is_not_reported_locked() -> None:
+    # A locked rule is always a deny; a prefixed id on another effect
+    # (only reachable by bypassing load-time validation) isn't "locked".
+    spoof = {**_locked_matched_rule(), "effect": "prompt"}
+    assert "locked rule" not in format_denial_hint(spoof)
+    tool_failed = _make_tool_failed_event(
+        tool_call_id="tc_3",
+        tool_name="bash",
+        matched_rule=spoof,
+        action="kolsch/tools/bash",
+    )
+    card = _assemble_card_data([cast("Any", tool_failed)], cast("Any", tool_failed))
+    assert card.layer is None

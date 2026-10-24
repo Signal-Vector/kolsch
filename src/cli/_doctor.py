@@ -282,10 +282,10 @@ _BUNDLES_FINDING = (
 )
 _WILDCARD_FINDING = (
     "allow `write_file` on a glob pattern without asking",
-    "rule patterns match the path as the agent wrote it, and `*`, `?` and "
-    "`[...]` also match `/` and `.`, so these rules can reach `bundles/` "
-    "too (for example through `../`) until authz patterns are matched "
-    "against normalized paths.",
+    "glob characters `*`, `?` and `[...]` also match `/` and `.`, so these "
+    "rules can reach further than they read (for example `?undles/*` "
+    "matches `bundles/…`); patterns are matched on the canonical path, so "
+    "`../` can't escape them.",
 )
 _ALL_CLEAR = (
     "no rule allows `bash`, and no rule allows `write_file` under "

@@ -14,6 +14,7 @@ a small registry seam so future variants slot in without core changes.
 from providers.authz import (
     DEFAULT_DENY_RULE_ID,
     KOLSCH_TEST_BUILD_ENV_VAR,
+    LOCKED_RULE_ID_PREFIX,
     AllowAllTestAuthorizationProvider,
     AuthorizationProvider,
     AuthorizationResult,
@@ -24,6 +25,7 @@ from providers.authz import (
     RuleBasedAuthorizationConfig,
     RuleBasedAuthorizationProvider,
     RulePersistRequest,
+    derive_locked_rule_id,
     derive_rule_id,
     describe_default_deny_tail_problem,
     inspect_default_deny_tail,
@@ -68,6 +70,7 @@ from providers.secrets import (
 __all__ = [
     "DEFAULT_DENY_RULE_ID",
     "KOLSCH_TEST_BUILD_ENV_VAR",
+    "LOCKED_RULE_ID_PREFIX",
     "AllowAllTestAuthorizationProvider",
     "AuthorizationProvider",
     "AuthorizationResult",
@@ -93,6 +96,7 @@ __all__ = [
     "RulePersistRequest",
     "SandboxProvider",
     "SecretsProvider",
+    "derive_locked_rule_id",
     "derive_rule_id",
     "describe_default_deny_tail_problem",
     "inspect_default_deny_tail",

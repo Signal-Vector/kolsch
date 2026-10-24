@@ -127,6 +127,36 @@ class ContextFileSpec(BaseModel):
         return value
 
 
+LOCKED_RULE_ID_PREFIX = "rl_locked_"
+"""The id prefix reserved for locked platform rules.
+
+Only the authz provider's `authorization.config.locked_rules` compile
+path assigns ids with this prefix; every surface that reports a locked
+denial (the denial hint, `/why`, `kolsch permissions remove`, the
+`policy.decision.made` audit trail) trusts it. An author-written `id`
+with this prefix is therefore refused everywhere a rule can be
+written — see [`reserved_rule_id_violation`][schemas.config.reserved_rule_id_violation].
+Lives here so the schemas layer can check it without importing
+`providers`; `providers.authz` re-exports it."""
+
+
+def reserved_rule_id_violation(rule_id: object) -> str | None:
+    """Return why an author-written rule `id` is refused, or `None` if it's fine.
+
+    Ids starting [`LOCKED_RULE_ID_PREFIX`][schemas.config.LOCKED_RULE_ID_PREFIX]
+    are reserved for locked platform rules, so a hand-written one would
+    make an ordinary rule look locked in denials and in the audit trail.
+    """
+    if isinstance(rule_id, str) and rule_id.startswith(LOCKED_RULE_ID_PREFIX):
+        return (
+            f"rule id {rule_id!r} uses the reserved prefix "
+            f"`{LOCKED_RULE_ID_PREFIX}`, which only locked rules in "
+            "`authorization.config.locked_rules` get (their ids are derived); "
+            "remove the `id` or choose another"
+        )
+    return None
+
+
 def legacy_rule_scope_violation(
     *,
     from_value: object,
@@ -231,6 +261,9 @@ class PermissionRule(BaseModel):
 
     @model_validator(mode="after")
     def _reject_scoped_legacy(self) -> PermissionRule:
+        reserved = reserved_rule_id_violation(self.id)
+        if reserved is not None:
+            raise ValueError(reserved)
         if self.who is not None:
             reason = legacy_rule_scope_violation(
                 from_value=self.from_, pattern=self.pattern

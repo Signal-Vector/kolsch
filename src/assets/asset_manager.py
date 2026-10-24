@@ -193,7 +193,7 @@ class AssetManagement:
 
         Read-only accessor used by the engine's tools-subsystem
         registration to look up the bundle's `permissions:` field for
-        the four-level authz stack.
+        the four-level authz stack (after any locked platform rules).
 
         Args:
             name: The bundle name (matches the directory name under

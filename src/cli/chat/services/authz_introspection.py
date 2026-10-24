@@ -97,8 +97,33 @@ def format_denial_hint(matched_rule: dict[str, Any]) -> str:
         at_clause = "at (unknown source)"
     pattern = matched_rule.get("pattern") or matched_rule.get("what") or "*"
     line1 = f"denied by {rule_id} ({effect}) {at_clause}"
-    line2 = f"pattern {pattern} — /reload to reapply after editing"
+    if _is_locked_denial(matched_rule):
+        line2 = (
+            "locked rule — workflow/agent/bundle allows can't override it; "
+            "edit authorization.config.locked_rules in platform.yaml, then /reload"
+        )
+    else:
+        line2 = f"pattern {pattern} — /reload to reapply after editing"
     return f"{line1}\n{line2}"
+
+
+def _is_locked_denial(matched_rule: dict[str, Any]) -> bool:
+    """Return True when `matched_rule` is a locked platform rule's deny.
+
+    Keyed on the `rl_locked_<hash>` id, which only the locked stage
+    assigns (author-written ids with the prefix are refused at load),
+    and on `effect: deny`, the only effect a locked rule can have — so
+    a rule that somehow carried the prefix with another effect is not
+    reported as locked.
+    """
+    from providers import LOCKED_RULE_ID_PREFIX  # noqa: PLC0415
+
+    rule_id = matched_rule.get("id")
+    return (
+        isinstance(rule_id, str)
+        and rule_id.startswith(LOCKED_RULE_ID_PREFIX)
+        and matched_rule.get("effect") == "deny"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -458,6 +483,10 @@ def _assemble_card_data(
     layer = _extract_layer_from_reason(
         matched_rule.get("reason") or policy_payload.get("reason") or "",
     )
+    # A locked rule is identifiable from its id alone, so its layer is
+    # known even though no reason string reaches this reader.
+    if layer is None and _is_locked_denial(matched_rule):
+        layer = "locked"
 
     # Target string — prefer the policy event (which normalises None
     # → the empty string) so the card shows what the matcher saw.
@@ -857,6 +886,10 @@ async def handle_reload(runtime: PlatformRuntime) -> ReloadResult:
             config=authz_cfg.get("config", {}),
             catalog=fresh_catalog,
             source_map=source_map,
+            locked_source_map=authorization_rule_source_map(
+                root, list_key="locked_rules"
+            ),
+            config_file=str(root / "platform.yaml"),
         )
     except Exception as exc:  # noqa: BLE001 — surface any construction error
         return ReloadResult(
@@ -894,6 +927,17 @@ async def handle_reload(runtime: PlatformRuntime) -> ReloadResult:
 
     # Platform layer — the feat-041 swap.
     object.__setattr__(runtime, "authz", new_authz)
+    # The engine holds its own reference for the `agent.execute.*`
+    # pre-flight. Without this rebind a rule (or locked rule) added via
+    # /reload on that action would be reported as applied but not
+    # enforced until restart. Every other holder reads through
+    # `runtime.authz` or `tools_subsystem._authz` at use time: slash
+    # contexts are built per command, workflow executors per run (an
+    # in-flight run keeps the provider it started with), and the MCP
+    # tool bridge dispatches through the tools subsystem.
+    engine = getattr(runtime, "engine", None)
+    if engine is not None and hasattr(engine, "_authz"):
+        object.__setattr__(engine, "_authz", new_authz)
     tools_sub = getattr(runtime, "tools_subsystem", None)
     if tools_sub is not None:
         object.__setattr__(tools_sub, "_authz", new_authz)

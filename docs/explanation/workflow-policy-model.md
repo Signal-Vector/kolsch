@@ -37,11 +37,14 @@ Tools authored before this iteration used the two-segment `<bundle>/<name>` form
 
 Walked first-match-wins per layer; a match at any layer (allow / deny / prompt) ends the walk:
 
+0. Locked platform rules — `platform.yaml`'s `authorization.config.locked_rules`. Deny-only and evaluated before every layer below, so a `policy:` allow can't override them (see the [authz contract §3.8.4](secrets-sandbox-authz-contract.md#384-locked-platform-rules)).
 1. `workflow_policy` — workflow YAML's top-level `policy:` block.
 2. `agent_policy` — existing agent-level rules.
 3. `bundle_policy` — existing bundle-level rules.
 4. Platform `_rules` — existing platform-level rules.
 5. Default deny.
+
+Layers 1–3 sit above the platform on purpose: a workflow `policy:` allow overrides a platform deny for that workflow's builtin nodes. Only stage 0 is beyond any layer's reach.
 
 **`policy:` is NOT inherited across `extends:` (R6 S5).** When workflow `B` `extends:` workflow `A`, `B`'s `workflow_policy` layer is sourced from `B`'s OWN `policy:` block only — `A`'s `policy:` rules do NOT contribute. The reasoning is the same as the proximate-caller rule below: extending a workflow is a structural composition of nodes + edges; it should NOT silently grant the extender whatever elevations the extended workflow declared. If `A` had `policy: [{what: kolsch/tools/bash, effect: allow}]` and `B` `extends: [acme/workflows/A]`, then a node in `B` firing `bash` does NOT inherit that allowance — `B` must declare its own `bash` allowance or fall back through `agent_policy` / `bundle_policy` / platform `_rules`.
 
