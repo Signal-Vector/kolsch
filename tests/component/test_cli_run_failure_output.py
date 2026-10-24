@@ -140,7 +140,8 @@ def test_failed_run_prints_only_the_block_and_logs_the_detail(
 
     assert result.returncode == 2, result.stderr  # (a)
     assert result.stdout == ""  # (b) no panels, no warnings
-    assert "platform.internal_error" in result.stderr  # (c)
+    # (c) a provider HTTP 400 is classified at the call seam (bug-145)
+    assert "model.bad_request" in result.stderr
     assert f"  session: {session_id}" in result.stderr
     assert f"kolsch sessions events {session_id}" in result.stderr
     for noise in _NOISE:  # (d)
