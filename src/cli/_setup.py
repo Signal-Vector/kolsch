@@ -37,8 +37,9 @@ from assets.default_rules import (
     workspace_only_default_rules as _workspace_only_rules_source,
 )
 from assets.platform_config import default_platform_payload as _stock_defaults
+from cli._platform_yaml_write import rewrite_platform_yaml_locked
 from cli._run_failure import one_line as _one_line
-from kolsch._yamlio import dump, dump_preserving_trailing_comment_block, load
+from kolsch._yamlio import dump, load
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -716,16 +717,22 @@ def _write_defaults_model(yaml_path: Path, model: str | dict[str, str]) -> None:
     `dump()`) so a trailing, fully-commented scaffold block — e.g.
     the fresh-install `hooks:` example — already on disk survives
     this rewrite. A no-op on a workspace with no such block.
+
+    bug-146: goes through
+    [`rewrite_platform_yaml_locked`][cli._platform_yaml_write.rewrite_platform_yaml_locked].
     """
-    previous_text = yaml_path.read_text(encoding="utf-8") if yaml_path.is_file() else ""
-    payload = _read_yaml(yaml_path)
-    defaults = payload.get("defaults")
-    if not isinstance(defaults, dict):
-        defaults = {}
-    defaults["model"] = model
-    payload["defaults"] = defaults
-    new_text = dump_preserving_trailing_comment_block(previous_text, payload)
-    yaml_path.write_text(new_text, encoding="utf-8")
+
+    def change(payload: dict[str, Any]) -> bool:
+        defaults = payload.get("defaults")
+        if not isinstance(defaults, dict):
+            defaults = {}
+        defaults["model"] = model
+        payload["defaults"] = defaults
+        return True
+
+    # bug-146 — a whole-document re-dump, so under the rules lock with
+    # the read inside it (a concurrent chat "always" survives).
+    rewrite_platform_yaml_locked(yaml_path.parent, change)
 
 
 def _announce_picked_model(io: _SetupIO, model: str | dict[str, str]) -> None:
@@ -1138,43 +1145,43 @@ def _write_rules_locked(
 ) -> Path | None:
     """Rewrite `authorization.config.rules` under the rules lock (bug-146).
 
-    Takes [`platform_yaml_lock`][assets.platform_config.platform_yaml_lock]
-    — as [`mutate_platform_rules`][cli.permissions.mutate_platform_rules]
-    does — re-reads `platform.yaml` *inside* it and calls
+    Through
+    [`rewrite_platform_yaml_locked`][cli._platform_yaml_write.rewrite_platform_yaml_locked]:
+    takes the rules lock, re-reads `platform.yaml` *inside* it and calls
     `rewrite(payload, rules)` on that fresh copy, so a rule a chat
     "always" (or `kolsch permissions`) wrote since the caller's first
     read is never lost. `rewrite` returns the new rule list, or `None`
-    when there is nothing to do on the fresh copy. Backs the file up,
-    then replaces it atomically.
+    when there is nothing to do on the fresh copy. Backs the file up
+    (under the lock), then replaces it atomically.
 
     Returns:
         The backup path, or `None` when nothing was written (no-op, or
         the lock could not be taken — reported on `io.out`).
     """
-    from assets.platform_config import platform_yaml_lock  # noqa: PLC0415
-    from cli.permissions import _atomic_write_text  # noqa: PLC0415
     from errors import PlatformError  # noqa: PLC0415
 
+    backups: list[Path] = []
+
+    def change(payload: dict[str, Any]) -> bool:
+        rules = ((payload.get("authorization") or {}).get("config") or {}).get(
+            "rules"
+        ) or []
+        new_rules = rewrite(payload, rules if isinstance(rules, list) else [])
+        if new_rules is None:
+            return False
+        payload["authorization"]["config"]["rules"] = new_rules
+        return True
+
     try:
-        with platform_yaml_lock(io.root):
-            payload = _read_yaml(yaml_path)
-            rules = ((payload.get("authorization") or {}).get("config") or {}).get(
-                "rules"
-            ) or []
-            new_rules = rewrite(payload, rules if isinstance(rules, list) else [])
-            if new_rules is None:
-                return None
-            backup = _backup_platform_yaml(yaml_path)
-            previous_text = yaml_path.read_text(encoding="utf-8")
-            payload["authorization"]["config"]["rules"] = new_rules
-            _atomic_write_text(
-                yaml_path,
-                dump_preserving_trailing_comment_block(previous_text, payload),
-            )
-            return backup
+        written = rewrite_platform_yaml_locked(
+            yaml_path.parent,
+            change,
+            before_write=lambda path: backups.append(_backup_platform_yaml(path)),
+        )
     except PlatformError as exc:
         io.out.write(f"  ⚠ authorization rules not changed: {exc}\n")
         return None
+    return backups[0] if written else None
 
 
 def _backup_platform_yaml(yaml_path: Path) -> Path:
@@ -1404,13 +1411,33 @@ def _maybe_add_workspace_root_to_file_access(io: _SetupIO) -> None:
         return
     if "." in allowed:
         return
-    backup = _backup_platform_yaml(yaml_path)
-    previous_text = yaml_path.read_text(encoding="utf-8")
-    file_access["allowed_paths"] = [".", *allowed]
-    yaml_path.write_text(
-        dump_preserving_trailing_comment_block(previous_text, payload),
-        encoding="utf-8",
-    )
+
+    def change(fresh: dict[str, Any]) -> bool:
+        # Re-checked on the copy read under the lock.
+        fresh_access = fresh.get("file_access")
+        if not isinstance(fresh_access, dict):
+            return False
+        fresh_allowed = fresh_access.get("allowed_paths")
+        if not isinstance(fresh_allowed, list) or "." in fresh_allowed:
+            return False
+        fresh_access["allowed_paths"] = [".", *fresh_allowed]
+        return True
+
+    from errors import PlatformError  # noqa: PLC0415
+
+    backups: list[Path] = []
+    try:
+        written = rewrite_platform_yaml_locked(
+            io.root,
+            change,
+            before_write=lambda path: backups.append(_backup_platform_yaml(path)),
+        )
+    except PlatformError as exc:
+        io.out.write(f"  ⚠ file_access.allowed_paths not changed: {exc}\n")
+        return
+    if not written:
+        return
+    backup = backups[0]
     io.out.write(
         "  ✓ added '.' to file_access.allowed_paths — list_files(\".\") "
         "now works in the workspace root\n",

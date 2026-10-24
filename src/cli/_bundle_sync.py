@@ -106,13 +106,19 @@ class _SyncReport:
     rule_lines: list[str] = field(default_factory=list)
     rule_failures: list[str] = field(default_factory=list)
     rules_offered: bool = False
+    rules_unresolved: int = 0
     # Bundle-relative paths deleted (or, in a dry run, to be deleted)
     # by the retired pass; the migrator must not write them back.
     deleted: set[str] = field(default_factory=set)
 
     def is_partial(self) -> bool:
         """True when the sync left any drift unresolved."""
-        return bool(self.skipped or self.parse_failures or self.rule_failures)
+        return bool(
+            self.skipped
+            or self.parse_failures
+            or self.rule_failures
+            or self.rules_unresolved
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -147,6 +153,14 @@ async def sync_kolsch_bundle(
             "to install the starter bundle first.\n"
         )
         return 1
+
+    if not (yes or no) and _needs_terminal(io):
+        io.out.write(
+            "error: `kolsch setup --sync-bundle` asks before each change, but "
+            "stdin is not a terminal. Re-run with --yes (safe defaults) or "
+            "--no (change nothing); add --dry-run to preview.\n"
+        )
+        return 2
 
     baseline = read_baseline(io.root)
     if baseline is None:
@@ -195,6 +209,7 @@ async def sync_kolsch_bundle(
     report.rule_lines = rules_outcome.lines
     report.rule_failures = rules_outcome.failures
     report.rules_offered = rules_outcome.offered
+    report.rules_unresolved = rules_outcome.unresolved
 
     if not dry_run:
         report.baseline_refreshed = update_baseline_entries(
@@ -658,6 +673,15 @@ def _print_diff(io: _SetupIO, source: Path, workspace: Path, *, rel: str) -> Non
 # ---------------------------------------------------------------------------
 
 
+def _needs_terminal(io: _SetupIO) -> bool:
+    """True when the real stdin prompter would read from a non-terminal."""
+    import sys  # noqa: PLC0415
+
+    from cli._setup import StdinSetupPrompter  # noqa: PLC0415 — import cycle
+
+    return isinstance(io.prompter, StdinSetupPrompter) and not sys.stdin.isatty()
+
+
 def _copy_atomic(src: Path, dst: Path) -> None:
     """Copy `src` over `dst` via a temp file + rename (never a truncated `dst`)."""
     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -778,10 +802,13 @@ def _render_report(report: _SyncReport, *, out: object, dry_run: bool) -> None:
 
     if report.is_partial():
         unresolved = (
-            len(report.skipped) + len(report.parse_failures) + len(report.rule_failures)
+            len(report.skipped)
+            + len(report.parse_failures)
+            + len(report.rule_failures)
+            + report.rules_unresolved
         )
         line = f"\n{unresolved} item(s) left unresolved — exit 1 (partial)."
-        if report.skipped and report.non_interactive:
+        if (report.skipped or report.rules_unresolved) and report.non_interactive:
             line += (
                 " Re-run `kolsch setup --sync-bundle` without --yes/--no "
                 "to review each ([d]iff)."

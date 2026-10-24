@@ -180,6 +180,8 @@ async def test_rule_interactive_accept_inserts_directly_before_tail(
     )
     assert "✓ added rl_" in output
     assert "directly before the default-deny tail" in output
+    # N3: the auto-approve caveat is spelled out.
+    assert "is an allow under `kolsch chat --auto-approve`" in output
     assert list((tmp_path / ".platform").glob("platform.yaml.bak.*"))
     text = yaml_path.read_text(encoding="utf-8")
     assert "# my authz notes" in text
@@ -246,6 +248,11 @@ async def test_rule_interactive_choose_each(
 
     io_ = _io(tmp_path, prompter)
     assert await run_setup(_sync_args(tmp_path), io_) == 0
+    # N7: the per-rule question says what "no" means.
+    assert any(
+        "kolsch/tools/jev_decide" in q and "(no = don't offer again)" in q
+        for q in prompter.questions
+    )
     added = _assert_only_additions(before, _rules(yaml_path))
     assert [r["what"] for r in added] == ["kolsch/tools/run_workflow"]
     ledger = _ledger(tmp_path)
@@ -291,10 +298,16 @@ async def test_rule_no_writes_no_rule_and_offers_again(
     before_text = yaml_path.read_text(encoding="utf-8")
 
     io_ = _io(tmp_path)
-    await run_setup(_sync_args(tmp_path, no=True), io_)
-    assert "not added (--no)" in io_.out.getvalue()
+    rc = await run_setup(_sync_args(tmp_path, no=True), io_)
+    output = io_.out.getvalue()
+    assert "not added (--no)" in output
     assert yaml_path.read_text(encoding="utf-8") == before_text
-    assert "jev_decide" not in _ledger(tmp_path)
+    # N1: `--no` changes nothing, the ledger included (not even `present`).
+    assert not (tmp_path / ".kolsch" / "default-rules.json").exists()
+    # N2: an offered rule left out is unresolved, like a kept file.
+    assert rc == 1, output
+    assert "1 item(s) left unresolved — exit 1 (partial)." in output
+    assert "without --yes/--no" in output
 
     io2 = _io(tmp_path)
     await run_setup(_sync_args(tmp_path, dry_run=True), io2)
@@ -649,3 +662,31 @@ async def test_doctor_counts_a_tool_sync_would_copy_as_installed(
     assert rc == 1, text
     assert "+ kolsch/tools/jev_decide → prompt" in text
     assert "not installed" not in text
+
+
+async def test_sync_interactive_without_terminal_refuses_cleanly(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """N4: no `--yes`/`--no` and stdin isn't a TTY → a clear error, no EOFError."""
+    import sys
+
+    from cli._setup import StdinSetupPrompter
+
+    yaml_path = await _legacy_workspace(tmp_path, monkeypatch)
+    before = yaml_path.read_bytes()
+    monkeypatch.setattr(sys, "stdin", io.StringIO(""))
+    out = io.StringIO()
+    io_ = _SetupIO(
+        root=tmp_path,
+        out=out,
+        err=io.StringIO(),
+        prompter=StdinSetupPrompter(out),
+        connect_io_factory=_connect_io_factory,
+        run_handler=_noop_run_handler,
+    )
+    for args in (_sync_args(tmp_path), _sync_args(tmp_path, dry_run=True)):
+        assert await run_setup(args, io_) == 2
+    text = out.getvalue()
+    assert "error: `kolsch setup --sync-bundle` asks before each change" in text
+    assert "--yes" in text and "--no" in text
+    assert yaml_path.read_bytes() == before

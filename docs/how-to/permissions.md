@@ -838,12 +838,15 @@ kolsch setup --sync-bundle --yes       # adds the missing prompt/deny defaults
 permission rules**. The rules for what an upgrade may do:
 
 - **Only `prompt` and `deny` defaults are ever added.** A `prompt`
-  rule asks a human before each call, and is a deny for everything
-  that isn't a chat (`kolsch run`, the server, headless workflows), so
-  it can't grant anything on its own. A missing **`allow`** default is
-  only reported, with the `kolsch permissions add …` command — an
-  upgrade never turns a deny into an allow for you, not even with
-  `--yes`.
+  rule asks a human before each call in `kolsch chat`, and is a deny
+  for everything that isn't a chat (`kolsch run`, the server, headless
+  workflows). The one exception is `kolsch chat --auto-approve`, which
+  turns every `prompt` into an allow: in a workspace *with* a
+  default-deny tail, an added `prompt` default changes that tool from
+  deny to allow in an auto-approve chat — exactly as on a fresh
+  install. A missing **`allow`** default is only reported, with the
+  `kolsch permissions add …` command — an upgrade never adds an
+  `allow` rule, not even with `--yes`.
 - **Placement.** Each added rule goes directly before the default-deny
   tail (or at the end when there is no tail), through the same locked
   writer as `kolsch permissions add`. So it can only change the outcome
@@ -857,9 +860,11 @@ permission rules**. The rules for what an upgrade may do:
 - **Offered once.** Each decision — `added`, `declined` (`[s]kip`),
   `present` (you had a rule), or `installed` (a new workspace got it at
   setup) — is recorded in `.kolsch/default-rules.json`. A default you
-  declined, or removed after it was added, is never offered again. To
-  be offered again, delete its entry (or the file). `--no` and
-  `--dry-run` record nothing.
+  declined (`[s]kip`, or "no" under `[c]hoose each`), or removed after
+  it was added, is never offered again. To be offered again, delete
+  its entry (or the file). `--no` and `--dry-run` record nothing; under
+  `--no` an offered rule counts as unresolved (exit 1), like a kept
+  file.
 - **Not for missing tools.** A default for a tool the workspace doesn't
   have isn't offered (a rule naming an unknown tool would stop the
   rules from loading); copy the tool in with `--sync-bundle` first.

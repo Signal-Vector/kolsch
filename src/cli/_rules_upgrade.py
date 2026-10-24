@@ -17,8 +17,11 @@ The runner half of
   records each decision in `.kolsch/default-rules.json`.
 
 Modes (owner decisions D2 to D4): `--yes` adds every proposal (they are
-`prompt` / `deny` only); `--no` adds none and records nothing, so they
-are offered again; `--dry-run` writes nothing; interactive asks once
+`prompt` / `deny` only — a `prompt` rule asks a human in chat and is a
+deny for every non-chat caller, but is an allow under
+`kolsch chat --auto-approve`, exactly as on a fresh install); `--no`
+adds none, records nothing and leaves them unresolved (exit 1), so
+they are offered again; `--dry-run` writes nothing; interactive asks once
 (`[a]dd all / [c]hoose each / [s]kip`), and a skip is recorded as
 `declined`. Missing `allow` defaults and a missing tail are only ever
 reported.
@@ -75,6 +78,8 @@ class RulesPassOutcome:
     failures: list[str] = field(default_factory=list)
     # True when at least one rule was offered (so the run wasn't a no-op).
     offered: bool = False
+    # Offered but left out under `--no`: unresolved, like a kept file.
+    unresolved: int = 0
 
 
 async def check_default_rules(
@@ -154,7 +159,8 @@ async def run_default_rules_pass(
             f"! missing default `allow` (never added by sync — {entry.rationale}): "
             f"`{permissions_add_command(rule)}`"
         )
-    if not dry_run:
+    if not dry_run and not no:
+        # `--no` changes nothing, the ledger included.
         record_decisions(io.root, decisions)
     return outcome
 
@@ -182,8 +188,10 @@ def _decide(
     )
     for entry in plan.proposals:
         outcome.lines.append(f"  + {_label(entry)}")
+    outcome.lines.append(f"  ({_PROMPT_CAVEAT})")
     if no:
         outcome.lines.append("  → not added (--no); offered again next run.")
+        outcome.unresolved = len(plan.proposals)
         return []
     if yes or dry_run:
         return list(plan.proposals)
@@ -199,7 +207,10 @@ def _decide(
         return [
             entry
             for entry in plan.proposals
-            if io.prompter.confirm(f"[sync] add {_label(entry)}?", default=True)
+            if io.prompter.confirm(
+                f"[sync] add {_label(entry)}? (no = don't offer again)",
+                default=True,
+            )
         ]
     outcome.lines.append("  → skipped; recorded as declined (not offered again).")
     return []
@@ -242,6 +253,14 @@ def _insert(
             # Identical rule already in effect (written meanwhile).
             decisions[entry.key] = "present"
     return decisions
+
+
+# bug-146 N3 — what adding a `prompt` default does to each surface.
+_PROMPT_CAVEAT = (
+    "a `prompt` rule asks before each call in `kolsch chat`, is a deny for "
+    "`kolsch run` / the server / headless workflows, and is an allow under "
+    "`kolsch chat --auto-approve`"
+)
 
 
 def _label(entry: StarterRule) -> str:

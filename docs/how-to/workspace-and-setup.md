@@ -220,7 +220,9 @@ the accepted ones directly before the default-deny tail (or at the end
 if there is none), and records each decision in
 `.kolsch/default-rules.json` so a default is offered only once.
 Missing `allow` defaults are only reported, with the
-`kolsch permissions add` command. See
+`kolsch permissions add` command. Without `--yes` / `--no`, sync asks
+on the terminal; if stdin isn't a terminal it stops with an `error:`
+line (exit 2) telling you to pass one of them. See
 [New default rules on an existing workspace](permissions.md#new-default-rules-on-an-existing-workspace).
 
 ## When the workspace doesn't exist
