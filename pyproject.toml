@@ -178,6 +178,10 @@ packages = [
     # be shadowed and the SDK unreachable — see the module docstring
     # for the collision detail.
     "src/mcp_server",
+    # bug-150 — missing since the package landed; editable installs
+    # hid it. tests/unit/test_packaging_wheel_list.py keeps this list
+    # equal to src/'s top-level packages.
+    "src/workflows",
 ]
 
 # Phase 2.2 (ENV-R13 / E-2.2-001 A3) — repo-root docs ship as
