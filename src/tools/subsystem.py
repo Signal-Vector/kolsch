@@ -546,6 +546,7 @@ class ToolsSubsystem:
             context.principal,
             action,
             layers=layers,
+            caller_chain=context.caller_chain.frames,
             tool_call_id=context.tool_call_id,
         )
         if not auth.allowed:
@@ -558,6 +559,7 @@ class ToolsSubsystem:
                 matched_rule=(
                     auth.matched_rule.model_dump() if auth.matched_rule else None
                 ),
+                caller_chain=context.caller_chain,
             )
 
         # Lazy start — the subprocess starts on first use.

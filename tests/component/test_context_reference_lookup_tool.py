@@ -14,7 +14,7 @@ from uuid import uuid4
 import pytest
 
 from errors import ToolExecutionFailed
-from schemas import Actor, Event, EventType
+from schemas import Actor, CallerChain, Event, EventType
 from tools.context_reference import ReferenceLookupArgs, make_reference_lookup
 
 if TYPE_CHECKING:
@@ -59,6 +59,7 @@ def _ctx() -> Any:
         thread_id=_TID,
         principal="user.local",
         secrets={},
+        caller_chain=CallerChain.unattributed(),
     )
 
 

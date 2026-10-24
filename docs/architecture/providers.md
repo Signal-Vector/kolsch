@@ -132,12 +132,18 @@ a workflow can never inherit the workflow's broader permissions.
 The workflow layer only fires when the workflow node itself is
 directly invoking a tool.
 
-**Caller-chain.** The engine assembles a proximate-first tuple of
-caller frames (`(kolsch/agents/X, kolsch/workflows/W)` for
-`W → X → tool.bash`) and threads it into every `allow` call. The
-`from:` filter matches transitively against this chain — any frame
-that matches is enough. An empty chain (engine bootstrap) fails
-closed for any `from:`-filtered rule. See
+**Caller-chain.** Every `allow` call receives a proximate-first
+`CallerChain` of agent/workflow refs (`(kolsch/agents/X,
+kolsch/workflows/W)` for `W → X → bash`). The engine builds one per
+exchange (the agent's own ref, then its callers) and uses it for the
+`agent.execute.*` check and every tool call, including calls over
+the MCP tool bridge; workflow nodes build theirs from the run's call
+chain. It travels on the required `ToolContext.caller_chain` and is
+recorded on `tool.unauthorized` denials. The `from:` filter matches
+transitively — any frame that matches is enough. An empty
+(unattributed) chain never matches a `from:`-filtered rule. Scoping
+does not change layer precedence: an agent- or bundle-level rule is
+decided before any platform rule, scoped or not. See
 [`docs/how-to/permissions.md`](../how-to/permissions.md#scoping-rules-to-a-specific-agent-or-workflow)
 for the operator-facing guide.
 

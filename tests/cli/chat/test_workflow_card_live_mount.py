@@ -30,6 +30,7 @@ from cli.chat.app import ChatApp
 from cli.chat.services.workflows_impl import WorkflowsImpl
 from cli.chat.widgets.card_body.workflow import WorkflowRenderer
 from cli.chat.widgets.card_widget import CardWidget
+from schemas import CallerChain
 from schemas.events import EventType
 from schemas.identifiers import AgentId, SessionId, ThreadId
 from tests.cli.chat.services.mocks import (
@@ -178,6 +179,7 @@ async def _invoke_tool_via_pilot(
         prompts=registry.prompts if registry is not None else None,
         workflows=registry.workflows if registry is not None else None,
         session=registry.session if registry is not None else None,
+        caller_chain=CallerChain.unattributed(),
     )
     return await _invoke_tool(tool_fn, validated_args, ctx)
 

@@ -30,7 +30,7 @@ from providers import (
     NativeSandboxProvider,
     RuleBasedAuthorizationProvider,
 )
-from schemas import AgentId, SessionId, ThreadId
+from schemas import AgentId, CallerChain, SessionId, ThreadId
 from tools import ToolContext, ToolsSubsystem
 
 if TYPE_CHECKING:
@@ -63,6 +63,7 @@ def _context() -> ToolContext:
         thread_id=ThreadId(f"th_{uuid4()}"),
         principal=f"agent.{agent_id}",
         secrets={},
+        caller_chain=CallerChain.unattributed(),
     )
 
 

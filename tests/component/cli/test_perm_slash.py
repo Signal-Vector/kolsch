@@ -29,7 +29,7 @@ from cli._slash import (
     dispatch_slash,
 )
 from platform_runtime import bootstrap_runtime
-from schemas import ToolFailedData
+from schemas import CallerChain, ToolFailedData
 from schemas.error import Error
 
 if TYPE_CHECKING:
@@ -448,6 +448,7 @@ def test_engine_derives_hint_for_bash_authz_denial() -> None:
         action="tool.bash",
         principal="agent.test",
         matched_rule={"what": "kolsch/tools/bash", "pattern": "*", "effect": "deny"},
+        caller_chain=CallerChain.unattributed(),
     )
     hint = _derive_authz_recovery_hint(exc, arguments={"command": "find / -name foo"})
     assert hint == '/perm allow kolsch/tools/bash "find *"'
@@ -468,6 +469,7 @@ def test_engine_skips_hint_when_matched_rule_lacks_qualified_ref() -> None:
             "what": r"tool\.bash",
             "effect": "deny",
         },
+        caller_chain=CallerChain.unattributed(),
     )
     hint = _derive_authz_recovery_hint(exc, arguments={"command": "find /"})
     assert hint is None
@@ -483,6 +485,7 @@ def test_engine_hint_uses_star_when_no_args() -> None:
         action="tool.bash",
         principal="agent.test",
         matched_rule={"what": "kolsch/tools/bash", "pattern": "*", "effect": "deny"},
+        caller_chain=CallerChain.unattributed(),
     )
     hint = _derive_authz_recovery_hint(exc, arguments={})
     assert hint == "/perm allow kolsch/tools/bash *"

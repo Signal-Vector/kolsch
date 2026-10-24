@@ -1454,6 +1454,7 @@ async def _handler_fork(arg_text: str, ctx: SlashContext) -> ControlSignal:
     from workflows.errors import (  # noqa: PLC0415
         WorkflowError,
         WorkflowInputInvalid,
+        WorkflowLineageUnavailable,
         WorkflowResumeRejected,
         WorkflowRunNotFound,
         WorkflowRuntimeError,
@@ -1545,6 +1546,13 @@ async def _handler_fork(arg_text: str, ctx: SlashContext) -> ControlSignal:
             fork_event_id=EventId(event_id),
             input_overrides=overrides,
         )
+    except WorkflowLineageUnavailable as exc:
+        # bug-158: the forked child's ancestor run is gone. The fork was
+        # refused before its first event and its run dir discarded, so
+        # don't leave `pending` pointing at it.
+        state.pending_workflow_run_id = previous_pending
+        ctx.stdout.write(f"/fork: {exc.caller_message} (missing run {exc.run_id})\n")
+        return ControlSignal.CONTINUE
     except WorkflowRunNotFound as exc:
         message = getattr(exc, "caller_message", None) or str(exc)
         ctx.stdout.write(f"/fork: {message}\n")

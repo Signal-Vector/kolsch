@@ -32,7 +32,7 @@ from providers import (
     NativeSandboxProvider,
     RuleBasedAuthorizationProvider,
 )
-from schemas import AgentId, EventType
+from schemas import AgentId, CallerChain, EventType
 from tests.fixtures.assertions import assert_event_content
 from tools import ToolContext, ToolsSubsystem, tool
 
@@ -214,6 +214,7 @@ async def test_flagged_tool_with_missing_secret_is_hidden(
             thread_id="th_00000000-0000-0000-0000-000000000000",
             principal="agent.ag_t",
             secrets={},
+            caller_chain=CallerChain.unattributed(),
         ),
     )
     assert result.result == {"q": "hi"}

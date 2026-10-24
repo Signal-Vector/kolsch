@@ -45,6 +45,8 @@ from tools.decorator import ToolContext
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
+    from schemas import CallerChain
+
 
 # ---------------------------------------------------------------------------
 # Typed outcome — Ok | Denied | Failed
@@ -112,6 +114,7 @@ async def invoke_observed(
     tools_subsystem: Any,  # noqa: ANN401 — duck-typed `invoke_tool` facade; stubs in tests
     tool_name: str,
     args: dict[str, Any],
+    caller_chain: CallerChain,
     tool_call_id: str | None = None,
     cancel: Any = None,  # noqa: ANN401 — CancelToken; typed loosely to avoid a tools → engine import
 ) -> ToolOutcome:
@@ -149,6 +152,11 @@ async def invoke_observed(
         args: The model-emitted arguments. Copied before both the
             event emit and the dispatch — the caller's dict is never
             mutated or shared.
+        caller_chain: The proximate-first frames the call's
+            authorization is judged against, set on the dispatched
+            `ToolContext`. Required: the engine passes its exchange
+            chain, the MCP bridge passes the chain it was constructed
+            with (never one read from the wire).
         tool_call_id: The framework's call id; when `None` the core
             mints the identical legacy fallback `tc_<uuid4>`.
         cancel: Optional `CancelToken` forwarded as
@@ -183,6 +191,7 @@ async def invoke_observed(
                 thread_id=thread_id,  # type: ignore[arg-type]
                 principal=f"agent.{agent_id}",
                 secrets={},
+                caller_chain=caller_chain,
                 tool_call_id=call_id,
                 cancellation=cancel,
             ),

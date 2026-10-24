@@ -448,6 +448,40 @@ The optional `from:` filter is the primitive that scopes rules to
 a specific agent or workflow — the caller-chain the engine
 constructs carries the workflow/agent frames of the invocation.
 
+**Who builds the chain (bug-158).** The chain is a typed
+`schemas.CallerChain` — proximate-first catalog refs — built only by
+kolsch code from engine and catalog state, never from model output,
+tool arguments, or MCP wire frames:
+
+- **The engine exchange** builds one chain per exchange: the agent's
+  own catalog ref (`AssetManagement.get_ref_for_agent_id`), then the
+  frames in `ExecutionContext.caller_chain` (the callers). That one
+  chain is used for the `agent.execute.*` pre-flight and every tool
+  call of the exchange — model-driven calls, the forced skill read,
+  and calls arriving over the MCP tool bridge (the bridge takes the
+  chain from its constructor only).
+- **Workflow nodes** use `NodeContext.node_caller_chain()`: this run's
+  workflow ref, then each enclosing workflow out to the root. Builtin
+  tool nodes pass it as their chain; the agent runner passes it as
+  the spawned agent's callers, so the agent sees `(A, W, …)`. A run
+  rebuilt outside its parent's process (resume / fork) recovers its
+  parent frames from the persisted run pointers, and is refused
+  (`WorkflowLineageUnavailable`, before anything runs) when an ancestor
+  run is gone — the chain is never silently shortened.
+- **Agent identity is unique.** `build_resolved_config` refuses a
+  second agent ref resolving to an already-mapped `agent_id`
+  (`config.duplicate_agent_id`), so the agent frame can't be
+  attributed to the wrong ref.
+
+The chain reaches every check through the required
+`ToolContext.caller_chain` field. An **empty** chain exists only as
+`CallerChain.unattributed()` — "no agent or workflow frame is known"
+(today only an agent not backed by a catalog entry with no callers).
+`from:`-scoped rules never match it. See the
+[permissions how-to](../how-to/permissions.md#what-the-chain-is-at-each-call-site)
+for the per-site table and the known limits (a workflow launched via
+`run_workflow` does not carry the launching agent's frame).
+
 ### 3.2.6 The default deny
 
 The default-deny rule is what makes the system honest: forgetting to
@@ -592,6 +626,14 @@ Straightforward. The optional `from:` check sits at the top so a
 rule scoped to a specific agent short-circuits before doing any
 glob work when the caller-chain doesn't match.
 
+`caller_chain` keeps its `()` default on the provider signature, but
+production callers never rely on it: every `allow(` call in `src/`
+passes `caller_chain=` explicitly (from `ToolContext.caller_chain` or
+the exchange chain), which a guard test enforces. Layer precedence is
+unaffected by `from:` — the agent and bundle `layers` are walked
+before the platform rules, so a matching agent-level rule decides
+before a platform-level scoped rule is ever reached.
+
 ## 3.5 Where Authorization Checks Happen
 
 The contract specifies the interface; *where* checks happen is the
@@ -605,7 +647,11 @@ caller's responsibility. The intended call sites in v1:
    subsystem spec: check `allow(principal, "<bundle>/tools/<name>")`
    before invocation (3-segment catalog ref per
    qol-action-namespace-bundle-scoped.md). Raise — surfaced as
-   `tool.failed` event — if denied.
+   `tool.failed` event — if denied. The check sites are
+   `dispatch_tool` (every in-process tool), `ToolsSubsystem._invoke_mcp`
+   (MCP tools) and the in-tool `permissions.check` / `require`
+   (§3.8.3). Each passes the call's `ToolContext.caller_chain`, and a
+   denial's `tool.unauthorized` detail records it as `caller_chain`.
 
 3. **The Memory MemoryContext, on write and read.** Optionally check
    `allow(principal, "memory.write")` etc. v1's default allow-everything
@@ -869,7 +915,9 @@ block the tool's coroutine).
 
 Implementation: the tool dispatcher (`src/tools/dispatch.py`)
 constructs a `PermissionsBinding` carrying the provider, the
-agent + bundle permissions, the principal, and the tool name;
+agent + bundle permissions, the principal, the tool name, and the
+dispatching call's caller chain (a required field — an in-tool check
+is judged against the same frames as the dispatch-boundary check);
 binds it to a module-level `ContextVar` inside the sandbox's
 `_work` closure (so the binding lifetime exactly matches the
 tool body); clears it on both success and exception paths.

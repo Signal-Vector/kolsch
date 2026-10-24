@@ -34,7 +34,7 @@ from providers import (
     NativeSandboxProvider,
     RuleBasedAuthorizationProvider,
 )
-from schemas import AgentId, SessionId, ThreadId
+from schemas import AgentId, CallerChain, SessionId, ThreadId
 from tools import ToolContext, ToolsSubsystem
 
 # ---------------------------------------------------------------------------
@@ -72,6 +72,7 @@ def _ctx(
         principal="agent.ag_int",
         secrets={},
         tool_call_id=tool_call_id,
+        caller_chain=CallerChain.unattributed(),
     )
 
 

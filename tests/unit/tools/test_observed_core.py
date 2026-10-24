@@ -27,7 +27,7 @@ import pytest
 from pydantic import BaseModel
 
 from errors import ToolExecutionFailed, ToolUnauthorized
-from schemas import Actor, EventType
+from schemas import Actor, CallerChain, EventType
 from tools.decorator import ToolResult
 from tools.observed import Denied, Failed, Ok, invoke_observed
 
@@ -68,6 +68,7 @@ def _denied_exc() -> ToolUnauthorized:
             "pattern": "*",
             "effect": "deny",
         },
+        caller_chain=CallerChain.unattributed(),
     )
 
 
@@ -106,6 +107,7 @@ async def _invoke(
         args={"message": "ack"} if args is None else args,
         tool_call_id=tool_call_id,
         cancel=None,
+        caller_chain=CallerChain.unattributed(),
     )
 
 
@@ -290,6 +292,7 @@ async def test_core_event_parity_with_engine_wrapper(arm: str) -> None:
             args_schema=_EmptyOrPingArgs,
             func=_noop_fn,
         ),
+        caller_chain=CallerChain.unattributed(),
     )
     from engine.framework import ToolCall
 

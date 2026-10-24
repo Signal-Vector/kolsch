@@ -25,6 +25,7 @@ from providers import (
     NativeSandboxProvider,
     RuleBasedAuthorizationProvider,
 )
+from schemas import CallerChain
 from schemas.identifiers import AgentId
 from tools.subsystem import ToolsSubsystem
 
@@ -140,6 +141,7 @@ async def test_shipped_run_workflow_description_survives_pipeline(
         thread_id="th_test",
         tools_subsystem=tools_subsystem,
         defn=defn,
+        caller_chain=CallerChain.unattributed(),
     )
 
     # (a) The handle carries a real description.

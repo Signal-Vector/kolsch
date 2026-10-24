@@ -75,21 +75,25 @@ The matcher consults `from:` first: if a rule has `from:` set and the caller cha
 
 ### Caller chain construction
 
-Ordering: PROXIMATE FIRST (`chain[0]` is closest to the tool call), distal last.
+Ordering: PROXIMATE FIRST (`chain[0]` is closest to the tool call), distal last. The chain is a typed `schemas.CallerChain` carried to every tool check on the required `ToolContext.caller_chain` field (bug-158). It is built from engine and catalog state only — never from model output, tool arguments, or MCP wire frames.
 
-Push events:
-- Agent execution starts → push `<bundle>/agents/<name>`.
-- Workflow execution starts → push `<bundle>/workflows/<name>`.
-- A sub-workflow node invokes a child workflow → push the child workflow's frame.
-- An agent invokes a sub-agent → push the callee agent's frame.
+Where frames come from:
 
-Pop on return or error.
+- **Workflow frames.** The executor keeps the run's call chain (`NodeContext.call_chain`, stored root-first: `(root, …, parent, this run)`; a sub-workflow node appends the child's ref). `NodeContext.node_caller_chain()` reverses it into proximate-first order. Builtin tool nodes in workflow `W` are authorized as `(W,)`; in child `C` of parent `P`, as `(C, P)`.
+- **Agent frame.** The engine builds one chain per exchange: the agent's own catalog ref (resolved from its `agent_id`) followed by `ExecutionContext.caller_chain`, which holds the callers only. The workflow agent runner passes the node's workflow frames there, so agent node `A` in `W` is authorized as `(A, W)` — for its `agent.execute.*` pre-flight and for every tool call (model-driven, the forced skill read, and calls over the MCP tool bridge). In `kolsch chat` / `kolsch run` / the API there are no callers and the chain is `(A,)`.
+- **Resume / fork.** A run rebuilt outside its parent's process (`kolsch workflows resume|fork`, chat resume, `/fork`) recovers its frames from the persisted `parent` / `forked_from` pointers (`WorkflowRunStore.call_chain_for`), so a directly resumed child keeps `(C, P)`. If an ancestor run is missing from disk the resume / fork fails closed with `WorkflowLineageUnavailable` before any side effect.
 
 Edge cases:
-- Engine bootstrap (no agent or workflow active yet) → `chain = ()`.
-- Synthetic skill read fired during agent `X` → `chain = [<X-ref>]` (engine threads the current agent frame; the `principal="system"` telemetry stays where it is and is not the matcher input).
+- No agent or workflow frame known → `CallerChain.unattributed()` (empty). `from:`-scoped rules never match it. In production this only happens for an agent not backed by a catalog entry with no callers.
+- Synthetic skill read fired during agent `X` → `(X, …)` — the exchange chain; the `principal="system"` telemetry stays where it is and is not the matcher input.
+- A workflow launched by an agent through the `run_workflow` tool does **not** carry the launching agent's frame (`WorkflowRun` has no caller chain); its nodes see `(W,)`. Scope the launch instead: `{what: kolsch/tools/run_workflow, from: <agent>, effect: deny}`.
 
-**Persistence.** The caller chain is no longer in-memory only. The events `workflow.tool.called`, `workflow.node.started`, and `model.request.sent` carry the resolved `caller_chain: list[str]` in their payload. This enables "who authorized this?" forensics after a run completes — the chain at decision time is recoverable from the JSONL alone.
+**Persistence.** The chain a decision was judged against is recorded in two places:
+
+- `policy.decision.made` → `payload.caller_chain`, in the workflow run's JSONL, for decisions made while a workflow run is active (subject to `audit_level`; see below). Chat and `kolsch run` exchanges outside a workflow emit no `policy.decision.made`.
+- `tool.failed` → `error.detail.caller_chain` on every `tool.unauthorized` denial, in the session JSONL — chat, run and workflow-spawned agents alike.
+
+The `workflow.node.started` (and related node event) payloads carry a `caller_chain` field that is always `[]` today; it reflects the run's external callers, not the workflow frames. `model.request.sent` carries no caller chain.
 
 ### Refs unification (single grammar across agents, tools, workflows, nodes)
 

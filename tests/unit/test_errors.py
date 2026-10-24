@@ -50,6 +50,7 @@ from errors import (
     ConfigDeprecatedRefForm,
     ConfigDeprecatedRegexRule,
     ConfigDeprecatedRuleForm,
+    ConfigDuplicateAgentId,
     ConfigExtendsTemplateWithoutInheritance,
     ConfigFallbackDuplicate,
     ConfigInputsInAgentTemplate,
@@ -134,6 +135,8 @@ from errors import (
     iter_error_classes,
     list_catalog_codes,
 )
+from schemas import CallerChain
+from workflows.errors import WorkflowLineageUnavailable
 
 # ---------------------------------------------------------------------------
 # Construction map — minimal valid args for every concrete subclass.
@@ -157,6 +160,14 @@ CONSTRUCTOR_ARGS: dict[type[PlatformError], dict[str, Any]] = {
         "canonical_form": "kolsch/bash",
     },
     ConfigAgentInheritanceCycle: {"cycle": ["a.yaml", "b.yaml", "a.yaml"]},
+    ConfigDuplicateAgentId: {
+        "agent_id": "ag_helper",
+        "refs": ["kolsch/agents/helper", "kolsch/agents/helper_b"],
+    },
+    WorkflowLineageUnavailable: {
+        "child_run_id": "wrk_child",
+        "run_id": "wrk_parent",
+    },
     ConfigParentAgentNotFound: {
         "path": "kolsch:agents/missing.yaml",
         "resolved": "/tmp/missing.yaml",
@@ -219,6 +230,7 @@ CONSTRUCTOR_ARGS: dict[type[PlatformError], dict[str, Any]] = {
         "tool_name": "bash",
         "action": "tool.bash",
         "principal": "agent.ag_x",
+        "caller_chain": CallerChain(("kolsch/agents/x",)),
     },
     ToolNotFound: {"tool_name": "frobnicate", "agent_id": "ag_x"},
     ToolPermissionsNoContext: {"tool": "bash"},
@@ -603,13 +615,18 @@ def test_catalog_has_no_orphan_codes() -> None:
     in spirit (E-I2).
 
     Restrict the comparison to subclasses defined inside the ``errors.*``
-    namespace so ad-hoc test-local subclasses (which auto-register via
-    ``__init_subclass__``) don't satisfy the reverse direction by
-    accident.
+    namespace — plus ``workflows.errors``, whose
+    ``WorkflowLineageUnavailable`` (bug-158) is a catalogued
+    ``PlatformError`` that must also subclass the workflow error family
+    the workflow CLI / chat handlers render — so ad-hoc test-local
+    subclasses (which auto-register via ``__init_subclass__``) don't
+    satisfy the reverse direction by accident.
     """
     catalog_codes = list_catalog_codes()
     class_codes = {
-        cls.code for cls in iter_error_classes() if cls.__module__.startswith("errors.")
+        cls.code
+        for cls in iter_error_classes()
+        if cls.__module__.startswith("errors.") or cls.__module__ == "workflows.errors"
     }
     orphans = catalog_codes - class_codes
     assert not orphans, (
@@ -661,6 +678,7 @@ def test_where_must_be_non_empty() -> None:
             action="tool.bash",
             principal="agent.ag_x",
             where="",
+            caller_chain=CallerChain.unattributed(),
         )
 
 
@@ -670,6 +688,7 @@ def test_detail_keys_match_catalog_shape_for_known_types() -> None:
         tool_name="bash",
         action="tool.bash",
         principal="agent.ag_x",
+        caller_chain=CallerChain.unattributed(),
     )
     assert set(err.detail) >= {"tool_name", "action", "principal", "matched_rule"}
 

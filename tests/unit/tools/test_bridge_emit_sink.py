@@ -32,6 +32,7 @@ from bus import InProcessEventBus
 from engine import ExecutionContext
 from engine.engine import _Exchange
 from errors import ToolExecutionFailed, ToolUnauthorized
+from schemas import CallerChain
 from store import SessionStore, SqliteBackend
 from tools import invoke_observed
 from tools.bridge import make_bridge_emit_sink
@@ -80,6 +81,7 @@ def _stub_for(arm: str) -> Any:
                     "pattern": "*",
                     "effect": "deny",
                 },
+                caller_chain=CallerChain.unattributed(),
             )
         )
     return _StubRaise(
@@ -102,6 +104,7 @@ async def _invoke(emit: Any, subsystem: Any, *, session_id: str, thread_id: str)
         args={"message": "ack"},
         tool_call_id=_TOOL_CALL_ID,
         cancel=None,
+        caller_chain=CallerChain.unattributed(),
     )
 
 

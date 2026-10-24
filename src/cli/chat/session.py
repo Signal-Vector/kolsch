@@ -171,6 +171,7 @@ async def _resume_pending_workflow(
     )
     from workflows.errors import (  # noqa: PLC0415
         WorkflowError,
+        WorkflowRunNotFound,
         WorkflowValidationError,
     )
     from workflows.ids import WorkflowRunId  # noqa: PLC0415
@@ -216,6 +217,14 @@ async def _resume_pending_workflow(
             run=run,
             resume_response={"response": response_text},
         )
+    except WorkflowRunNotFound as exc:
+        # bug-158: `WorkflowLineageUnavailable` — an ancestor run of this
+        # child is gone, so the resume is refused before anything runs.
+        stdout.write(
+            f"resume failed: {exc.caller_message} (missing run {exc.run_id})\n"
+        )
+        state.expecting_user_input_response = False
+        return
     except (WorkflowValidationError, ExceptionGroup) as exc:
         # bug-142: the reloaded workflow fails validation. The resume
         # gate rejects it before any side effect, so the run is still

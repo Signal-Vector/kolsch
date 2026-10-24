@@ -450,25 +450,115 @@ knob.
 - { what: kolsch/tools/bash, pattern: "ls *", effect: allow }
 ```
 
-Three rules to remember:
+!!! warning "Behaviour change (bug-158): `from:` rules on tools are now enforced"
+    Before bug-158 the caller chain never reached tool authorization,
+    so **every `from:`-scoped tool rule was silently inert** (and
+    `agent.execute.*` rules scoped with `from:` only matched inside
+    workflows). After upgrading:
+
+    - a scoped **deny** now blocks the agent or workflow it names —
+      calls that used to fall through to a broader allow fail with
+      `tool.unauthorized`;
+    - a scoped **allow** now grants — calls that used to prompt or be
+      denied now run without asking;
+    - a scoped **prompt** now prompts (and collapses to deny outside
+      chat);
+    - `from:`-scoped `agent.execute.*` rules now also match in
+      `kolsch chat` / `kolsch run` / the API (chain `(A,)`), and inside
+      workflows they see the workflow frames too.
+
+    Review your scoped rules with `kolsch permissions list` (look for
+    `from=`) and the `permissions:` blocks in agent / bundle YAML and
+    workflow `policy:`.
+
+Four rules to remember:
 
 1. **`from:` is a 3-segment glob.** Shape must be
    `<bundle>/<agents|workflows>/<name>`; `<name>` can be a literal
    or a glob (`kolsch/agents/*`). Anything else raises a parse-time
    error.
-2. **Caller-chain is proximate-first.** For a workflow `W`
-   invoking agent `A` invoking `tool.bash`, the chain is
-   `(kolsch/agents/A, kolsch/workflows/W)`. A rule with
-   `from: kolsch/workflows/W` fires because the workflow appears in
-   the chain (any frame matches — the check is transitive).
-3. **Empty chain fails closed.** A rule with `from:` set will NOT
-   fire for engine-bootstrap invocations that never entered an
-   agent/workflow frame.
+2. **The caller chain is proximate-first, and any frame matches.**
+   The chain lists the frames that led to the call, closest first:
+   the calling agent, then the workflow it runs in, then any
+   enclosing workflows out to the root. A rule with
+   `from: kolsch/workflows/W` fires for every call whose chain
+   contains `W` — W's own tool nodes and the agents W runs alike.
+3. **An empty chain never matches.** A call with no agent or
+   workflow frame (only an agent that isn't backed by a catalog
+   entry and has no callers) is *unattributed*: a scoped allow does
+   not grant it and a scoped deny does not block it.
+4. **Layers still win over `from:`.** Scoping narrows *which calls* a
+   rule applies to; it does not move the rule up the
+   [four-level stack](#the-four-level-stack). A matching rule in the
+   agent's own `permissions:` (or its bundle's) is decided before any
+   platform rule, scoped or not. The starter `helper.yaml`, for
+   example, carries `{what: kolsch/tools/bash, effect: prompt}`, so a
+   platform-level `{what: kolsch/tools/bash, from: kolsch/agents/helper,
+   effect: deny}` never fires for `helper` — remove or edit the agent
+   rule (or put the scoped deny in the agent's YAML).
 
-The chat modal auto-populates `from:` from the proximate frame
-when you press `[a]` or `[d]` — so approving a tool during agent
-`X`'s run scopes the rule to `X` by default. Type `*` at the
-`from: [<default>]` prompt to broaden.
+### What the chain is at each call site
+
+The engine and the workflow executor build the chain from their own
+state — the agent's catalog ref, the workflow run's call chain. It is
+never taken from model output, tool arguments, or the MCP wire.
+
+| Call site | Caller chain |
+|---|---|
+| Agent `A` in `kolsch chat` / `kolsch run` / the API — tool calls, the forced skill read, and the `agent.execute.*` check | `(A,)` |
+| `claude_code` agent `A` calling a kolsch tool through the MCP bridge | the same as `A`'s exchange: `(A,)`, or `(A, W, …)` inside a workflow |
+| Builtin tool node (`bash`, `read_file`, `write_file`, `list_files`, `browse_url`, `jev`) in workflow `W` | `(W,)` |
+| Builtin tool node in child workflow `C` called by parent `P` | `(C, P)` |
+| Agent node `A` in `W` — its tool calls and its `agent.execute.*` check | `(A, W)` |
+| Agent node `A` in `C`, under `P` | `(A, C, P)` |
+| In-tool `permissions.check` / `require` | the chain of the tool call that is running |
+
+A child run resumed or forked on its own (`kolsch workflows resume` /
+`fork`) is rebuilt with its parent frames from the run's stored
+parent pointers, so it keeps `(C, P)` — or is refused if one of those
+runs is gone (see below). The chain a denial was judged
+against is recorded in the session log as
+`tool.unauthorized` → `detail.caller_chain`, and in a workflow run's
+JSONL as `policy.decision.made` → `payload.caller_chain`.
+
+### Known limits
+
+- **A workflow started by an agent doesn't carry the agent's frame.**
+  When agent `A` launches workflow `W` with the `run_workflow` tool,
+  `W`'s nodes see `(W,)`, not `(W, A)`. To stop an agent launching
+  workflows, scope the launch itself:
+  `{what: kolsch/tools/run_workflow, pattern: "*", from: kolsch/agents/A, effect: deny}`.
+- **A child run whose parent run was deleted can't be resumed or
+  forked.** The parent frames can't be proven, so `kolsch workflows
+  resume|fork` (and the chat equivalents) refuse it with
+  `workflow.lineage_unavailable` (`WorkflowLineageUnavailable`), naming
+  the child and the missing run, before the run gets any event (a
+  refused fork's new run is discarded). Keep parent runs while their children may
+  still be resumed.
+- **Claude Code's own tools are outside kolsch.** A `claude_code`
+  agent's calls to *kolsch* tools go through the MCP bridge and are
+  authorized here, with the agent's chain. Claude Code's built-in
+  tools (its own Bash, Read, Edit, …) never reach kolsch. kolsch
+  launches `claude` with `--permission-mode dontAsk`,
+  `--setting-sources user` and `--allowedTools <kolsch MCP wire
+  names>` (`--disallowedTools=*` for text-only agents), so those
+  native tools are **refused** unless you pre-allowed them in your
+  Claude Code user settings (`~/.claude/settings.json`) — and a native
+  tool you pre-allowed there runs without these rules applying.
+- **Two agents can't share an `agent_id`.** The chain's agent frame is
+  resolved from the agent's id, so building a second agent with an id
+  already in use raises `config.duplicate_agent_id`. This includes an
+  `extends:` child that inherits its parent's explicit `agent_id:` —
+  the error says so; set `agent_id:` on the child (or drop the
+  parent's to use derived ids).
+
+### Where scoped rules come from
+
+The live chat's approval prompt saves **unscoped** rules — "always
+allow" / "always deny" apply to every caller. To scope a rule, use
+`kolsch permissions add --from <ref>`, `/perm <verb> <tool> <pattern>
+from:<ref>`, or write `from:` into `platform.yaml`, an agent's or
+bundle's `permissions:`, or a workflow's `policy:` by hand.
 
 ---
 

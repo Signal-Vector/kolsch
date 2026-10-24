@@ -23,7 +23,7 @@ from pydantic import BaseModel
 from engine.framework import ToolCall
 from engine.observers import _ObservedToolHandle
 from errors import ToolUnauthorized
-from schemas import EventType
+from schemas import CallerChain, EventType
 from tools.decorator import ToolDefinition, ToolResult
 
 _HINT = "/perm allow kolsch/tools/ping *"
@@ -81,6 +81,7 @@ def _handle(
         ),
         register_span=spans.register_span,
         close_span=spans.close_span,
+        caller_chain=CallerChain.unattributed(),
     )
 
 
@@ -96,6 +97,7 @@ async def test_observed_denied_arm_returns_error_payload_with_hint() -> None:
             "pattern": "*",
             "effect": "deny",
         },
+        caller_chain=CallerChain.unattributed(),
     )
     emitted: list[dict[str, Any]] = []
     spans = _SpanRecorder()

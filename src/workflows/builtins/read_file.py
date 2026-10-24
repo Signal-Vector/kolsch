@@ -154,6 +154,7 @@ def _build_tool_ctx(ctx: NodeContext) -> ToolContext:
         thread_id=ThreadId(f"th_{uuid.uuid4()}"),
         principal=f"workflow.{ctx.workflow_run_id}",
         secrets={},
+        caller_chain=ctx.node_caller_chain(),
         workspace_root=ctx.workspace_root,
         path_policy=None,
         tool_call_id=None,

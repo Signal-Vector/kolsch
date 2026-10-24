@@ -76,6 +76,7 @@ from tools.observed import Ok, invoke_observed
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Sequence
 
+    from schemas import CallerChain
     from tools.decorator import ToolInfo
 
 _log = logging.getLogger("tools.bridge")
@@ -357,6 +358,13 @@ class ToolBridgeServer:
     `finally`. Reconnect (a fresh `bind` with the same token after the
     previous connection dropped) is allowed within the exchange; a
     second bind while one connection is bound is refused.
+
+    `caller_chain` (required) is the exchange's
+    [`CallerChain`][schemas.caller_chain.CallerChain]; every bridged
+    call is authorized against it, so a kolsch tool called by a
+    `claude_code` agent obeys the same rules — `from:`-scoped ones
+    included — as the agent's in-process calls. The chain comes from
+    the constructor only, never from a wire frame.
     """
 
     def __init__(
@@ -367,10 +375,15 @@ class ToolBridgeServer:
         thread_id: str,
         tools_subsystem: Any,  # noqa: ANN401 — duck-typed facade, mirrors invoke_observed
         emit: Callable[..., Awaitable[None]],
+        caller_chain: CallerChain,
         cancel: Any = None,  # noqa: ANN401 — CancelToken; loosely typed, no engine import
         server_name: str = "kolsch",
     ) -> None:
         self._agent_id = agent_id
+        # bug-158: the exchange's caller chain. Every bridged call is
+        # authorized against THIS chain; nothing chain-like is ever
+        # read from a wire frame (the proxy is untrusted).
+        self._caller_chain = caller_chain
         self._session_id = session_id
         self._thread_id = thread_id
         self._tools_subsystem = tools_subsystem
@@ -662,6 +675,7 @@ class ToolBridgeServer:
                 tools_subsystem=self._tools_subsystem,
                 tool_name=bare_name,
                 args=arguments,
+                caller_chain=self._caller_chain,
                 tool_call_id=None,
                 cancel=self._cancel,
             )

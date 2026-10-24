@@ -48,7 +48,7 @@ from cli._slash import (
 from errors import AuthzBareToolRef
 from platform_runtime import bootstrap_runtime
 from providers import RuleBasedAuthorizationProvider
-from schemas import ToolFailedData
+from schemas import CallerChain, ToolFailedData
 from schemas.error import Error
 
 if TYPE_CHECKING:
@@ -424,6 +424,7 @@ def test_perm_sys_05_tool_failed_carries_recovery_hint() -> None:
         action="kolsch/tools/bash",
         principal="agent.test",
         matched_rule={"what": "kolsch/tools/bash", "pattern": "*", "effect": "deny"},
+        caller_chain=CallerChain.unattributed(),
     )
     hint = _derive_authz_recovery_hint(exc, arguments={"command": "find / -name foo"})
     assert hint == '/perm allow kolsch/tools/bash "find *"'

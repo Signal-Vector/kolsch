@@ -31,6 +31,7 @@ from engine.engine import _Exchange
 from engine.framework import ToolCall
 from engine.observers import _ObservedToolHandle
 from errors import ToolExecutionFailed, ToolUnauthorized
+from schemas import CallerChain
 from tests.component.test_engine import _build_engine, _config
 from tests.fixtures.mock_llm import MockLLM
 from tools.decorator import ToolDefinition, ToolResult
@@ -77,6 +78,7 @@ def _stub_for(arm: str) -> Any:
                     "pattern": "*",
                     "effect": "deny",
                 },
+                caller_chain=CallerChain(("kolsch/agents/test",)),
             )
         )
     return _StubRaise(
@@ -103,6 +105,8 @@ _DENIED_ERROR = {
         },
         "principal": "agent.ag_test",
         "tool_name": "ping",
+        # bug-158: additive — the frames the denial was judged against.
+        "caller_chain": ["kolsch/agents/test"],
     },
     "message": "Authorization denied for tool 'ping'",
     "type": "tool.unauthorized",
@@ -242,6 +246,7 @@ async def test_observer_full_envelope_equivalence(arm: str, tmp_path: Path) -> N
         cancel=None,
         register_span=exchange.register_span,
         close_span=exchange.close_span,
+        caller_chain=CallerChain.unattributed(),
     )
 
     returned = await handle(

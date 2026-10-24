@@ -14,6 +14,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from engine.observers import _ObservedToolHandle
+from schemas import CallerChain
 from tools.decorator import ToolDefinition
 
 
@@ -45,6 +46,7 @@ def test_observed_handle_carries_description() -> None:
         thread_id="th_test",
         tools_subsystem=object(),  # unused by attribute access
         defn=defn,
+        caller_chain=CallerChain.unattributed(),
     )
 
     assert handle.name == "do_x"

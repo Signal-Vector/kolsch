@@ -190,9 +190,13 @@ async def dispatch_tool(
         defn: The registered tool's definition.
         args: Raw argument dict from the framework; validated against
             `defn.args_schema` before anything else runs.
-        context: The runtime context handed to the tool body.
+        context: The runtime context handed to the tool body. Its
+            `caller_chain` is passed to `authz.allow`, recorded on a
+            `ToolUnauthorized` denial, and carried on the in-tool
+            `PermissionsBinding` so `from:`-scoped rules match.
         authz: Authorization provider — consulted with the composed
-            principal and `defn.action_name`.
+            principal, `defn.action_name` and the context's caller
+            chain.
         secrets: Secrets provider — resolves names listed in
             `defn.secrets_needed`.
         sandbox: Sandbox provider — wraps the tool body.
@@ -279,6 +283,7 @@ async def dispatch_tool(
         defn.action_name,
         target=target,
         layers=layers,
+        caller_chain=context.caller_chain.frames,
         tool_call_id=context.tool_call_id,
     )
     if not auth.allowed:
@@ -289,6 +294,7 @@ async def dispatch_tool(
             matched_rule=(
                 auth.matched_rule.model_dump() if auth.matched_rule else None
             ),
+            caller_chain=context.caller_chain,
         )
 
     # Step 3 — resolve declared secrets and rebuild the context with
@@ -334,6 +340,7 @@ async def dispatch_tool(
         bundle_permissions=list(bundle_permissions or []),
         principal=context.principal,
         tool=defn.name,
+        caller_chain=context.caller_chain,
     )
 
     async def _work() -> Any:  # noqa: ANN401
@@ -487,20 +494,3 @@ def _dump_args_to_json(
         # the widget's single-line row prefers a bounded length.
         return rendered[: char_limit - 1] + "…"
     return rendered
-
-
-def authz_call(
-    *,
-    authz: AuthorizationProvider,
-) -> Callable[..., Awaitable[Any]]:
-    """Return a thin authz invocation seam tests can monkeypatch.
-
-    A reserved no-op pass-through. Exists so tests that want to
-    substitute the authz invocation specifically can patch this
-    module rather than the provider.
-    """
-
-    async def _call(principal: str, action: str) -> Any:  # noqa: ANN401
-        return await authz.allow(principal, action)
-
-    return _call

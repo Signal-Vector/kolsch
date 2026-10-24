@@ -41,6 +41,7 @@ if TYPE_CHECKING:
     from contextvars import Token
 
     from providers.authz import AuthorizationProvider, Rule
+    from schemas import CallerChain
 
 
 # ---------------------------------------------------------------------------
@@ -60,6 +61,12 @@ class PermissionsBinding:
     stack (agent → bundle → platform → default) as the
     dispatch-boundary check — without the bundle layer the in-tool
     API would diverge silently from the pre-dispatch authz outcome.
+
+    `caller_chain` is the dispatching call's
+    [`ToolContext.caller_chain`][tools.decorator.ToolContext], so an
+    in-tool check sees the same proximate-first frames — and the same
+    `from:`-scoped rule matches — as the dispatch-boundary check.
+    Required (keyword-only, no default).
     """
 
     provider: AuthorizationProvider
@@ -67,6 +74,7 @@ class PermissionsBinding:
     bundle_permissions: list[Rule] = field(default_factory=list)
     principal: str = "user.local"
     tool: str = "<unknown>"
+    caller_chain: CallerChain = field(kw_only=True)
 
 
 _BINDING: ContextVar[PermissionsBinding | None] = ContextVar(
@@ -129,6 +137,7 @@ async def check(what: str) -> AuthzEffect:
         what,
         target=what,
         layers=_layers_from(binding),
+        caller_chain=binding.caller_chain.frames,
     )
     return result.effect
 
@@ -163,6 +172,7 @@ async def require(what: str) -> None:
         what,
         target=what,
         layers=_layers_from(binding),
+        caller_chain=binding.caller_chain.frames,
     )
     if result.effect is AuthzEffect.ALLOW:
         return

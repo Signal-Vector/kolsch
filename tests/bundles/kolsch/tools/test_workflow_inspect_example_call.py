@@ -20,6 +20,7 @@ from uuid import uuid4
 
 import pytest
 
+from schemas import CallerChain
 from schemas.identifiers import AgentId, SessionId, ThreadId
 from tests.fixtures.bundle_paths import STARTER_TOOLS_DIR, load_bundle_tool
 from tools.decorator import ToolContext
@@ -57,6 +58,7 @@ def _mk_ctx(workflows: Any) -> ToolContext:
         principal="agent.test",
         secrets={},
         workflows=workflows,
+        caller_chain=CallerChain.unattributed(),
     )
 
 

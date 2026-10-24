@@ -65,6 +65,8 @@ from uuid import uuid4
 import psutil
 import pytest
 
+from schemas import CallerChain
+
 if TYPE_CHECKING:
     from collections.abc import Iterator
     from types import ModuleType
@@ -134,6 +136,7 @@ def _ctx() -> ToolContext:
         thread_id=ThreadId(f"th_{uuid4()}"),
         principal=f"agent.{agent_id}",
         secrets={},
+        caller_chain=CallerChain.unattributed(),
     )
 
 
@@ -154,6 +157,7 @@ def _ctx_with_workspace(workspace_root: Path) -> ToolContext:
         principal=f"agent.{agent_id}",
         secrets={},
         workspace_root=workspace_root,
+        caller_chain=CallerChain.unattributed(),
     )
 
 

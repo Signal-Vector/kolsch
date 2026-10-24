@@ -802,7 +802,11 @@ async def _cmd_resume(
         WorkflowResumeRejected,
         WorkflowInputInvalid,
         WorkflowValidationError,
+        WorkflowRunNotFound,
     ) as exc:
+        # bug-158: `WorkflowRunNotFound` covers `WorkflowLineageUnavailable`
+        # (an ancestor run of this child is gone) — refused before any
+        # side effect, like the other arms.
         # bug-142: a workflow edited into an invalid state since the
         # pause is rejected by the resume gate; the run stays
         # `waiting_for_input` for a retry once the YAML is fixed.

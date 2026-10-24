@@ -32,7 +32,7 @@ import pytest
 
 from engine.context import CancelToken
 from errors import ExchangeCancelled
-from schemas import AgentId, SessionId, ThreadId
+from schemas import AgentId, CallerChain, SessionId, ThreadId
 from tools import ToolContext
 from tools.discovery import discover_tools_in_file
 
@@ -64,6 +64,7 @@ def _ctx_for(name: str, *, cancellation: CancelToken | None = None) -> ToolConte
         principal=f"agent.{name}",
         secrets={},
         cancellation=cancellation,
+        caller_chain=CallerChain.unattributed(),
     )
 
 

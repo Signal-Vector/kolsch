@@ -42,6 +42,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from engine.framework import LLMRequest, LLMResponse, ToolCall
+    from schemas import CallerChain
     from tools.decorator import ToolDefinition
 
 
@@ -236,6 +237,7 @@ class _ObservedToolHandle:
         thread_id: str,
         tools_subsystem: Any,
         defn: ToolDefinition,
+        caller_chain: CallerChain,
         cancel: Any = None,
         register_span: Callable[[str, Any], None] | None = None,
         close_span: Callable[[str], None] | None = None,
@@ -245,6 +247,9 @@ class _ObservedToolHandle:
         self._session_id = session_id
         self._thread_id = thread_id
         self._tools_subsystem = tools_subsystem
+        # bug-158: the exchange's caller chain, forwarded into every
+        # call's `ToolContext` so `from:`-scoped rules match.
+        self._caller_chain = caller_chain
         # The exchange's CancelToken, threaded by the engine.
         # Forwarded into the ToolContext at invocation time so tool
         # bodies can race long work against
@@ -344,6 +349,7 @@ class _ObservedToolHandle:
                 tools_subsystem=self._tools_subsystem,
                 tool_name=call.name,
                 args=call.arguments,
+                caller_chain=self._caller_chain,
                 tool_call_id=call.tool_call_id,
                 cancel=self._cancel,
             )

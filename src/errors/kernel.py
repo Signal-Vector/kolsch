@@ -123,6 +123,50 @@ class ConfigAgentInheritanceCycle(PlatformError):
         )
 
 
+class ConfigDuplicateAgentId(PlatformError):
+    """Raised when two agent definitions resolve to the same `agent_id`.
+
+    The resolved `agent_id` is the agent's identity everywhere at run
+    time — its `agent.<id>` principal, its sessions, and the catalog ref
+    the engine puts at the head of the exchange's caller chain (which
+    `from:`-scoped authz rules match). Two refs sharing one id would let
+    one agent be authorized as the other, so the second build is
+    refused. Usually two YAMLs declare the same explicit `agent_id:`, or
+    an `extends:` child inherits its parent's explicit `agent_id:` —
+    give each agent its own (or omit it to use the derived id).
+    """
+
+    code = "config.duplicate_agent_id"
+    level = Level.FATAL
+
+    def __init__(
+        self,
+        agent_id: str,
+        refs: list[str],
+        *,
+        inherited_via_extends: bool = False,
+        where: str = "assets.asset_manager.build_resolved_config",
+    ) -> None:
+        fix = (
+            f"set `agent_id:` on {refs[1]!r} — an `extends:` child inherits "
+            "its parent's explicit id"
+            if inherited_via_extends
+            else "give each agent its own agent_id"
+        )
+        super().__init__(
+            message=(
+                f"agent_id {agent_id!r} is declared by two agents: "
+                f"{refs[0]!r} and {refs[1]!r}; {fix}"
+            ),
+            where=where,
+            detail={
+                "agent_id": agent_id,
+                "refs": list(refs),
+                "inherited_via_extends": inherited_via_extends,
+            },
+        )
+
+
 class ConfigParentAgentNotFound(PlatformError):
     """Raised when an `extends:` reference resolves to a non-existent file."""
 

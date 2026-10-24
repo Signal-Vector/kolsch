@@ -33,6 +33,9 @@ CATALOG: dict[str, Level] = {
     "context.overflow_uncompactable": Level.FATAL,
     # Agent inheritance errors.
     "config.agent_inheritance_cycle": Level.FATAL,
+    # bug-158: two agent refs resolving to one agent_id would share an
+    # identity (and a caller-chain frame for `from:` authz rules).
+    "config.duplicate_agent_id": Level.FATAL,
     "config.parent_agent_not_found": Level.FATAL,
     "config.required_block_missing": Level.FATAL,
     "config.extends_template_without_inheritance": Level.FATAL,
@@ -208,6 +211,11 @@ CATALOG: dict[str, Level] = {
     # file.too_large, which is no longer raised by read_file under the
     # line-based shape.
     "file.line_too_long": Level.RECOVERABLE,
+    # ----- Workflows ---------------------------------------------------
+    # bug-158: a resumed / forked child run whose parent (or
+    # forked_from) ancestor run is gone — its authz caller chain can't
+    # be rebuilt, so the resume / fork is refused (fail closed).
+    "workflow.lineage_unavailable": Level.FATAL,
 }
 
 

@@ -28,6 +28,7 @@ import pytest
 from errors import AuthzDenied, ToolPermissionsNoContext
 from providers.authz import AuthzEffect, RuleBasedAuthorizationProvider
 from providers.authz import Rule as AuthzRule
+from schemas import CallerChain
 from tools import permissions
 
 # ---------------------------------------------------------------------------
@@ -59,6 +60,7 @@ async def test_check_returns_deny_when_platform_denies(
         provider=deny_bash_provider,
         principal="agent.ag_helper",
         tool="bash",
+        caller_chain=CallerChain.unattributed(),
     )
     token = permissions.bind(binding)
     try:
@@ -80,6 +82,7 @@ async def test_check_returns_allow_when_agent_rule_overrides_platform(
         ],
         principal="agent.ag_helper",
         tool="bash",
+        caller_chain=CallerChain.unattributed(),
     )
     token = permissions.bind(binding)
     try:
@@ -102,6 +105,7 @@ async def test_require_raises_authz_denied_on_deny(
         provider=deny_bash_provider,
         principal="agent.ag_helper",
         tool="bash",
+        caller_chain=CallerChain.unattributed(),
     )
     token = permissions.bind(binding)
     try:
@@ -128,6 +132,7 @@ async def test_require_returns_none_on_allow() -> None:
         provider=allow_provider,
         principal="agent.ag_helper",
         tool="bash",
+        caller_chain=CallerChain.unattributed(),
     )
     token = permissions.bind(binding)
     try:
@@ -173,6 +178,7 @@ async def test_context_var_cleared_after_clean_exit(
     binding = permissions.PermissionsBinding(
         provider=deny_bash_provider,
         principal="agent.ag_helper",
+        caller_chain=CallerChain.unattributed(),
     )
     assert permissions.current_binding() is None
     token = permissions.bind(binding)
@@ -193,6 +199,7 @@ async def test_context_var_cleared_after_exception_path(
     binding = permissions.PermissionsBinding(
         provider=deny_bash_provider,
         principal="agent.ag_helper",
+        caller_chain=CallerChain.unattributed(),
     )
     token = permissions.bind(binding)
     try:
@@ -255,6 +262,7 @@ def _ctx_for(name: str) -> ToolContext:
         thread_id=ThreadId(f"th_{u}"),
         principal=f"agent.{name}",
         secrets={},
+        caller_chain=CallerChain.unattributed(),
     )
 
 
@@ -395,10 +403,12 @@ async def test_nested_bindings_restore_outer_on_reset(
     outer = permissions.PermissionsBinding(
         provider=deny_bash_provider,
         principal="agent.outer",
+        caller_chain=CallerChain.unattributed(),
     )
     inner = permissions.PermissionsBinding(
         provider=deny_bash_provider,
         principal="agent.inner",
+        caller_chain=CallerChain.unattributed(),
     )
     outer_token = permissions.bind(outer)
     try:
@@ -412,3 +422,95 @@ async def test_nested_bindings_restore_outer_on_reset(
     finally:
         permissions.reset(outer_token)
     assert permissions.current_binding() is None
+
+
+@pytest.mark.asyncio
+async def test_in_tool_check_and_require_see_the_dispatch_chain() -> None:
+    """bug-158 — the binding carries the dispatching call's caller
+    chain, so in-tool `check` / `require` are judged against the same
+    frames (and the same `from:`-scoped rules) as the dispatch-boundary
+    check."""
+    from pydantic import BaseModel
+
+    from tools.decorator import ToolDefinition
+    from tools.dispatch import dispatch_tool
+
+    agent_a = "kolsch/agents/a"
+    agent_b = "kolsch/agents/b"
+
+    class _Args(BaseModel):
+        path: str
+
+    captured: dict[str, Any] = {}
+
+    async def _body(_args: _Args, _ctx: ToolContext) -> str:
+        binding = permissions.current_binding()
+        assert binding is not None
+        captured["binding_chain"] = binding.caller_chain
+        captured["check"] = await permissions.check("workspace.git.write")
+        try:
+            await permissions.require("workspace.git.write")
+        except AuthzDenied:
+            captured["require"] = "denied"
+        else:
+            captured["require"] = "allowed"
+        return "ok"
+
+    defn = ToolDefinition(
+        name="probe",
+        description="probe",
+        args_schema=_Args,
+        func=_body,
+        home_bundle="kolsch",
+    )
+    provider = RuleBasedAuthorizationProvider(
+        config={
+            "rules": [
+                {
+                    "what": "workspace.git.write",
+                    "pattern": "*",
+                    "from": agent_a,
+                    "effect": "deny",
+                },
+                {"what": "*", "pattern": "*", "effect": "allow"},
+            ],
+        },
+    )
+    recorded: list[tuple[str, tuple[str, ...]]] = []
+    original = provider.allow
+
+    async def _spy(principal: str, action: str, **kwargs: Any) -> Any:
+        recorded.append((action, kwargs["caller_chain"]))
+        return await original(principal, action, **kwargs)
+
+    provider.allow = _spy  # type: ignore[method-assign]
+
+    outcomes: dict[str, dict[str, Any]] = {}
+    for agent in (agent_a, agent_b):
+        captured.clear()
+        chain = CallerChain((agent, "kolsch/workflows/w"))
+        result = await dispatch_tool(
+            defn=defn,
+            args={"path": "/tmp/x"},
+            context=_ctx_for("probe").model_copy(update={"caller_chain": chain}),
+            authz=provider,
+            secrets=_StubSecrets(),
+            sandbox=_PassthroughSandbox(),
+        )
+        assert result == "ok"
+        assert captured["binding_chain"] is chain
+        outcomes[agent] = dict(captured)
+
+    assert outcomes[agent_a]["check"] is AuthzEffect.DENY
+    assert outcomes[agent_a]["require"] == "denied"
+    assert outcomes[agent_b]["check"] is AuthzEffect.ALLOW
+    assert outcomes[agent_b]["require"] == "allowed"
+    # Dispatch boundary + check + require, per call — all with the chain.
+    assert recorded == [
+        ("kolsch/tools/probe", (agent_a, "kolsch/workflows/w")),
+        ("workspace.git.write", (agent_a, "kolsch/workflows/w")),
+        ("workspace.git.write", (agent_a, "kolsch/workflows/w")),
+        ("kolsch/tools/probe", (agent_b, "kolsch/workflows/w")),
+        ("workspace.git.write", (agent_b, "kolsch/workflows/w")),
+        ("workspace.git.write", (agent_b, "kolsch/workflows/w")),
+    ]

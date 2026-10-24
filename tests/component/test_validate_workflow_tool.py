@@ -27,7 +27,7 @@ from uuid import uuid4
 import pytest
 
 from files import PathPolicy
-from schemas import AgentId, SessionId, ThreadId
+from schemas import AgentId, CallerChain, SessionId, ThreadId
 from tools import ToolContext
 from tools.discovery import discover_tools_in_file
 
@@ -59,6 +59,7 @@ def _ctx(workspace: Path) -> ToolContext:
         workspace_root=workspace,
         path_policy=PathPolicy(allowed_paths=["."], denied_paths=[]),
         tool_call_id="tc_validate_unit",
+        caller_chain=CallerChain.unattributed(),
     )
 
 

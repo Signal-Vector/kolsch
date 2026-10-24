@@ -61,6 +61,7 @@ from errors import (
 )
 from schemas import (
     Actor,
+    CallerChain,
     ConfigSetData,
     Error,
     Event,
@@ -1381,6 +1382,9 @@ class _Exchange:
         # bug-144: built once per exchange (lazily, after pre-flight
         # step 3 sets `session_id`) — see `_llm_call_context`.
         self._llm_context: LLMCallContext | None = None
+        # bug-158: built once per exchange (lazily) — see
+        # `_exchange_caller_chain`.
+        self._caller_chain: CallerChain | None = None
         # Wired in pre-flight step 6 — see _acquire_llm_if_needed.
         self.acquired_llm: crewai.LLM | None = None
         # Wired in pre-flight step 7 — Phase 1.3 fallback chain.
@@ -1743,14 +1747,13 @@ class _Exchange:
         thread = await self.engine._store.get_thread(self.context.thread_id)
         self.session_id = str(thread.session_id)
 
-        # Pass the proximate-first caller_chain so workflow-spawned
-        # invocations surface the workflow→agent frame in the authz
-        # audit decision. Chat / API surfaces leave the chain empty
-        # and existing behaviour is unchanged.
+        # bug-158: the exchange's chain — this agent's own ref, then
+        # its callers — so `from:`-scoped `agent.execute.*` rules match
+        # here exactly as they do for the exchange's tool calls.
         auth = await self.engine._authz.allow(
             principal,
             action,
-            caller_chain=self.context.caller_chain,
+            caller_chain=self._exchange_caller_chain().frames,
         )
         if not auth.allowed:
             raise AgentUnauthorized(
@@ -1933,6 +1936,30 @@ class _Exchange:
                 agent_id=self.agent_id,
             )
         return self._llm_context
+
+    def _exchange_caller_chain(self) -> CallerChain:
+        """Return this exchange's caller chain, building it once.
+
+        bug-158: proximate first — this agent's own catalog ref
+        (`AssetManagement.get_ref_for_agent_id`), then the frames that
+        invoked it (`ExecutionContext.caller_chain`, e.g. the workflow
+        frames of an agent node). One object serves the
+        `agent.execute.*` pre-flight and every tool call of the
+        exchange: model-driven calls, the force-invoke skill read and
+        the MCP bridge. An agent not backed by a catalog entry
+        (synthetic configs) contributes no frame; with no callers
+        either, the chain is explicitly unattributed.
+        """
+        if self._caller_chain is None:
+            agent_ref = self.engine._assets.get_ref_for_agent_id(self.agent_id)
+            frames = (
+                *((agent_ref,) if agent_ref is not None else ()),
+                *self.context.caller_chain,
+            )
+            self._caller_chain = (
+                CallerChain(frames) if frames else CallerChain.unattributed()
+            )
+        return self._caller_chain
 
     def _build_llm_factory(
         self,
@@ -2673,6 +2700,7 @@ class _Exchange:
                         thread_id=self.thread_id,  # type: ignore[arg-type]
                         principal="system",
                         secrets={},
+                        caller_chain=self._exchange_caller_chain(),
                         tool_call_id=tool_call_id,
                     ),
                 )
@@ -2804,6 +2832,7 @@ class _Exchange:
                     self.agent_id,  # type: ignore[arg-type]
                     t.name,
                 ),
+                caller_chain=self._exchange_caller_chain(),
                 # Thread the exchange's CancelToken so tool bodies
                 # receive it via `ctx.cancellation`.
                 cancel=self.cancel,
@@ -2870,6 +2899,7 @@ class _Exchange:
                 thread_id=self.thread_id,
                 tools_subsystem=self.engine._tools,
                 emit=sink,
+                caller_chain=self._exchange_caller_chain(),
                 cancel=self.cancel,
             )
             # Open ONCE, before the retry loop — a Recoverable retry

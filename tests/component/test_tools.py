@@ -27,7 +27,7 @@ from providers import (
     NativeSandboxProvider,
     RuleBasedAuthorizationProvider,
 )
-from schemas import AgentId, SessionId, ThreadId
+from schemas import AgentId, CallerChain, SessionId, ThreadId
 from tools import (
     MCPServer,
     ToolContext,
@@ -70,6 +70,7 @@ def _new_context(*, agent_id: str = "ag_test") -> ToolContext:
         thread_id=ThreadId(f"th_{uuid4()}"),
         principal=f"agent.{agent_id}",
         secrets={},
+        caller_chain=CallerChain.unattributed(),
     )
 
 

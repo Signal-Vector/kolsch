@@ -21,7 +21,11 @@ from assets.assembler import (
     pre_resolve_prompts,
 )
 from assets.platform_config import load_or_create, parse_hooks_section
-from errors import AssetsNotFound, ConfigInputsInAgentTemplate
+from errors import (
+    AssetsNotFound,
+    ConfigDuplicateAgentId,
+    ConfigInputsInAgentTemplate,
+)
 from kernel import resolve_and_validate
 from schemas import HookRule, ResolvedAgentConfig, derive_agent_id
 
@@ -84,6 +88,10 @@ class AssetManagement:
         # derived (`ag_<bundle>_<name>`); reversing the derivation
         # isn't reliable in the explicit case.
         self._agent_id_to_bundle: dict[str, str] = {}
+        # bug-158: sibling cache — resolved agent_id → canonical
+        # catalog ref, so the engine can put the agent's own frame at
+        # the head of the exchange's caller chain.
+        self._agent_id_to_ref: dict[str, str] = {}
 
     # --- bootstrap -----------------------------------------------------
 
@@ -235,6 +243,45 @@ class AssetManagement:
                 return bundle
         return None
 
+    def get_ref_for_agent_id(self, agent_id: str) -> str | None:
+        """Find the canonical catalog ref of a resolved agent.
+
+        The engine uses it to build the exchange's caller chain: the
+        agent's own ref (`<bundle>/agents/<name>`) is the proximate
+        frame every `from:`-scoped rule is matched against. Same
+        two-step lookup as
+        [`get_bundle_for_agent_id`][assets.asset_manager.AssetManagement.get_bundle_for_agent_id]:
+
+        1. The `_agent_id_to_ref` cache populated by
+           [`build_resolved_config`][assets.asset_manager.AssetManagement.build_resolved_config]
+           — covers explicit and derived `agent_id` YAMLs. The cache
+           never holds two refs for one id: `build_resolved_config`
+           raises `ConfigDuplicateAgentId` when a second agent
+           resolves to an id already mapped to a different ref.
+        2. Fallback: walk the catalog and match
+           [`schemas.derive_agent_id`][schemas.derive_agent_id]
+           outputs (derived ids only).
+
+        Args:
+            agent_id: The resolved agent id to attribute.
+
+        Returns:
+            The agent's 3-segment catalog ref, or `None` when no
+            catalog agent matches (synthetic configs not backed by a
+            bundle on disk) — the engine then omits the agent frame.
+        """
+        cached = self._agent_id_to_ref.get(str(agent_id))
+        if cached is not None:
+            return cached
+        _, catalog = self._require_initialized()
+        for entry in catalog.assets.values():
+            if entry.asset_type != "agent":
+                continue
+            agent_name = entry.ref.rsplit("/", 1)[-1]
+            if str(derive_agent_id(entry.bundle, agent_name)) == str(agent_id):
+                return entry.ref
+        return None
+
     def list_assets(
         self,
         asset_type: str | None = None,
@@ -338,6 +385,11 @@ class AssetManagement:
 
         Returns:
             The fully resolved [`ResolvedAgentConfig`][schemas.ResolvedAgentConfig].
+
+        Raises:
+            ConfigDuplicateAgentId: The resolved `agent_id` is already
+                mapped to a different agent ref (two agents claiming one
+                identity — see `get_ref_for_agent_id`).
         """
         platform_cfg, catalog = self._require_initialized()
 
@@ -454,7 +506,25 @@ class AssetManagement:
         # ``permissions:`` block. The resolved agent_id may be
         # explicit (the YAML's ``agent_id:``) or derived; this
         # mapping covers both cases without re-parsing.
-        self._agent_id_to_bundle[str(resolved.agent_id)] = bundle
+        # bug-158: one agent_id must map to one agent. The id is the
+        # agent's run-time identity, and the engine resolves it back to
+        # the ref that heads the exchange's caller chain — a second ref
+        # claiming the same id would be authorized as the first.
+        agent_id = str(resolved.agent_id)
+        known_ref = self._agent_id_to_ref.get(agent_id)
+        if known_ref is not None and known_ref != agent_entry.ref:
+            raise ConfigDuplicateAgentId(
+                agent_id=agent_id,
+                refs=[known_ref, agent_entry.ref],
+                # The leaf YAML set no `agent_id:` of its own, so the id
+                # came down an `extends:` chain.
+                inherited_via_extends=(
+                    len(agent_partials_chain) > 1
+                    and "agent_id" not in agent_partials_chain[0]
+                ),
+            )
+        self._agent_id_to_bundle[agent_id] = bundle
+        self._agent_id_to_ref[agent_id] = agent_entry.ref
         return resolved
 
     # --- internal ------------------------------------------------------
