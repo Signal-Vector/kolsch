@@ -155,10 +155,11 @@ async def sync_kolsch_bundle(
         return 1
 
     if not (yes or no) and _needs_terminal(io):
-        io.out.write(
+        hint = "" if dry_run else "; add --dry-run to preview"
+        io.err.write(
             "error: `kolsch setup --sync-bundle` asks before each change, but "
             "stdin is not a terminal. Re-run with --yes (safe defaults) or "
-            "--no (change nothing); add --dry-run to preview.\n"
+            f"--no (change nothing){hint}.\n"
         )
         return 2
 

@@ -675,18 +675,21 @@ async def test_sync_interactive_without_terminal_refuses_cleanly(
     yaml_path = await _legacy_workspace(tmp_path, monkeypatch)
     before = yaml_path.read_bytes()
     monkeypatch.setattr(sys, "stdin", io.StringIO(""))
-    out = io.StringIO()
-    io_ = _SetupIO(
-        root=tmp_path,
-        out=out,
-        err=io.StringIO(),
-        prompter=StdinSetupPrompter(out),
-        connect_io_factory=_connect_io_factory,
-        run_handler=_noop_run_handler,
-    )
-    for args in (_sync_args(tmp_path), _sync_args(tmp_path, dry_run=True)):
-        assert await run_setup(args, io_) == 2
-    text = out.getvalue()
-    assert "error: `kolsch setup --sync-bundle` asks before each change" in text
-    assert "--yes" in text and "--no" in text
+    for dry_run in (False, True):
+        out, err = io.StringIO(), io.StringIO()
+        io_ = _SetupIO(
+            root=tmp_path,
+            out=out,
+            err=err,
+            prompter=StdinSetupPrompter(out),
+            connect_io_factory=_connect_io_factory,
+            run_handler=_noop_run_handler,
+        )
+        assert await run_setup(_sync_args(tmp_path, dry_run=dry_run), io_) == 2
+        # N9: on stderr, like `kolsch skills`; no "add --dry-run" when given.
+        text = err.getvalue()
+        assert out.getvalue() == ""
+        assert "error: `kolsch setup --sync-bundle` asks before each change" in text
+        assert "--yes" in text and "--no" in text
+        assert ("add --dry-run to preview" in text) is (not dry_run)
     assert yaml_path.read_bytes() == before

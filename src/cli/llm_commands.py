@@ -27,6 +27,7 @@ from errors import (
     LlmConnectorUnknown,
     LlmDiscoveryFailed,
     LlmValidationFailed,
+    PlatformError,
 )
 from kolsch._yamlio import load
 from llm import (
@@ -154,6 +155,21 @@ def _write_platform_yaml_atomic(
 
     root.mkdir(parents=True, exist_ok=True)
     return rewrite_platform_yaml_locked(root, change)
+
+
+def _persist_platform_yaml(
+    io: _CommandIO, change: Callable[[dict[str, Any]], bool]
+) -> bool | None:
+    """Write via `_write_platform_yaml_atomic`; report a failure on `io.out`.
+
+    Returns whether the file was written, or `None` after printing an
+    `error:` line when it couldn't be (e.g. the rules lock timed out).
+    """
+    try:
+        return _write_platform_yaml_atomic(io.root, change)
+    except (PlatformError, OSError) as exc:
+        io.out.write(f"error: platform.yaml was not updated: {exc}\n")
+        return None
 
 
 def _load_dotenv_lines(env_path: Path) -> list[str]:
@@ -297,7 +313,8 @@ async def cmd_connect(args: argparse.Namespace, io: _CommandIO) -> int:
         payload["llm_providers"] = llm_providers
         return True
 
-    _write_platform_yaml_atomic(io.root, add_provider)
+    if _persist_platform_yaml(io, add_provider) is None:
+        return 1
     io.out.write("✓ wrote provider config to platform.yaml\n")
     return 0
 
@@ -438,8 +455,15 @@ async def cmd_disconnect(args: argparse.Namespace, io: _CommandIO) -> int:
             fresh.pop("llm_providers", None)
         return True
 
-    _write_platform_yaml_atomic(io.root, remove_provider)
-    io.out.write(f"✓ removed {provider_name} from platform.yaml\n")
+    written = _persist_platform_yaml(io, remove_provider)
+    if written is None:
+        return 1
+    if written:
+        io.out.write(f"✓ removed {provider_name} from platform.yaml\n")
+    else:
+        io.out.write(
+            f"provider {provider_name!r} was already removed from platform.yaml\n"
+        )
 
     if secret_name and _remove_dotenv_entry(io.root, secret_name):
         io.out.write(f"✓ removed {secret_name} from .env\n")
@@ -706,6 +730,9 @@ async def cmd_refresh(args: argparse.Namespace, io: _CommandIO) -> int:
         return 1
     secrets = _build_refresh_secrets(io.root, payload)
     targets = [args.provider] if args.provider else sorted(providers)
+    # bug-146 — exactly the fields refresh changes, per provider; merged
+    # into the fresh read under the lock (never whole blocks).
+    changes: dict[str, dict[str, Any]] = {}
     for name in targets:
         if name not in providers:
             io.out.write(f"provider {name!r} is not connected; skipping\n")
@@ -752,6 +779,7 @@ async def cmd_refresh(args: argparse.Namespace, io: _CommandIO) -> int:
         entries = await _maybe_augment(entries, existing_providers, connector, name, io)
 
         entry["models"] = [_model_entry_to_yaml(e) for e in entries]
+        changes.setdefault(name, {})["models"] = entry["models"]
 
     # Retroactive marker sweep. For any provider block whose connector
     # qualifies as a metadata source but lacks the flag, add it. This
@@ -768,23 +796,28 @@ async def cmd_refresh(args: argparse.Namespace, io: _CommandIO) -> int:
             continue
         if is_metadata_source(connector):
             entry["serves_as_metadata_source"] = True
+            changes.setdefault(name, {})["serves_as_metadata_source"] = True
             io.out.write(f"✓ {name}: marked as metadata source\n")
 
-    providers_after = dict(providers)
+    if not changes:
+        return 0
 
     def apply_refresh(fresh: dict[str, Any]) -> bool:
-        # Re-apply the refreshed blocks to the fresh copy; providers
-        # connected or disconnected meanwhile are left as they are.
+        # Merge only the refreshed fields into the fresh copy: a provider
+        # (re)connected or disconnected meanwhile keeps its other fields,
+        # and a vanished provider is not re-created.
         fresh_providers = fresh.get("llm_providers")
         if not isinstance(fresh_providers, dict):
             return False
-        for name, entry in providers_after.items():
-            if name in fresh_providers:
-                fresh_providers[name] = entry
-        return True
+        merged = False
+        for name, fields in changes.items():
+            fresh_entry = fresh_providers.get(name)
+            if isinstance(fresh_entry, dict):
+                fresh_entry.update(fields)
+                merged = True
+        return merged
 
-    _write_platform_yaml_atomic(io.root, apply_refresh)
-    return 0
+    return 1 if _persist_platform_yaml(io, apply_refresh) is None else 0
 
 
 # ---------------------------------------------------------------------------

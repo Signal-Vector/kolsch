@@ -650,10 +650,19 @@ async def _step_d_starter_agent(io: _SetupIO, *, non_interactive: bool) -> str:
             return _SKIPPED
 
     _copy_kolsch_bundle(io.root)
-    _write_defaults_model(io.root / "platform.yaml", model)
+    from errors import PlatformError  # noqa: PLC0415
+
+    try:
+        _write_defaults_model(io.root / "platform.yaml", model)
+    except PlatformError as exc:  # e.g. the rules lock timed out
+        model_written = False
+        io.out.write(f"  error: defaults.model not written to platform.yaml: {exc}\n")
+    else:
+        model_written = True
     io.out.write(f"  ✓ materialized bundle at {bundle_dir.relative_to(io.root)}/\n")
     io.out.write(f"  ✓ wrote starter agent at {agent_path.relative_to(io.root)}\n")
-    _announce_picked_model(io, model)
+    if model_written:
+        _announce_picked_model(io, model)
     return _PROCEEDED
 
 

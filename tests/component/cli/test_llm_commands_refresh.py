@@ -321,3 +321,115 @@ async def test_refresh_no_metadata_source(_set_cwd_to_tmp: Path) -> None:
         assert "context_length" not in entry
     # Augmentation output MUST NOT fire when there's no source.
     assert "Augmenting" not in buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# bug-146 P2-B2 — refresh merges only the fields it changed
+# ---------------------------------------------------------------------------
+
+
+async def test_refresh_keeps_a_concurrent_connect(_set_cwd_to_tmp: Path) -> None:
+    """A `connect` landing during discovery survives the refresh write.
+
+    Refresh reads `platform.yaml`, runs (slow) discovery, then writes.
+    Mid-discovery another process re-connects `openrouter` with a new
+    `base_url`, changes `opencode`'s `base_url` and connects `newp`.
+    Refresh must merge only `models` / `serves_as_metadata_source` into
+    the fresh read — never replace whole provider blocks.
+    """
+    from cli._platform_yaml_write import rewrite_platform_yaml_locked
+
+    tmp_path = _set_cwd_to_tmp
+    payload = {
+        "secrets": {"variant": "dotenv", "config": {"path": ".env"}},
+        "llm_providers": {
+            "opencode": {
+                "type": "opencode",
+                "api_key_secret": "OPENCODE_API_KEY",
+                "base_url": "https://opencode.example.com/v1",
+                "models": [{"id": "kimi-k2.6"}],
+            },
+            "openrouter": {
+                "type": "openrouter",
+                "api_key_secret": "OPENROUTER_API_KEY",
+                "models": [],
+            },
+        },
+    }
+    (tmp_path / "platform.yaml").write_text(
+        yaml.safe_dump(payload, sort_keys=False), encoding="utf-8"
+    )
+    (tmp_path / ".env").write_text(
+        "OPENCODE_API_KEY=sk-test\nOPENROUTER_API_KEY=sk-router\n", encoding="utf-8"
+    )
+    fired: list[bool] = []
+
+    def concurrent_connect(fresh: dict[str, object]) -> bool:
+        providers = fresh["llm_providers"]
+        assert isinstance(providers, dict)
+        providers["openrouter"]["base_url"] = "https://router.new/v1"
+        providers["opencode"]["base_url"] = "https://opencode.new/v1"
+        providers["newp"] = {"type": "openai_compat", "models": []}
+        return True
+
+    def opencode_during_discovery(request: httpx.Request) -> httpx.Response:
+        if not fired:
+            fired.append(True)
+            rewrite_platform_yaml_locked(tmp_path, concurrent_connect)
+        return _opencode_handler(request)
+
+    io_, buf = _command_io(
+        tmp_path, _factory(opencode_handler=opencode_during_discovery)
+    )
+    rc = await cmd_refresh(argparse.Namespace(provider="opencode"), io_)
+    assert rc == 0, buf.getvalue()
+    assert fired
+    after = yaml.safe_load((tmp_path / "platform.yaml").read_text())["llm_providers"]
+    assert after["openrouter"]["base_url"] == "https://router.new/v1"
+    assert after["openrouter"]["serves_as_metadata_source"] is True  # marker merged
+    assert after["opencode"]["base_url"] == "https://opencode.new/v1"
+    assert {m["id"] for m in after["opencode"]["models"]} == {
+        "kimi-k2.6",
+        "gpt-oss-120b",
+    }
+    assert "newp" in after
+
+
+async def test_refresh_does_not_recreate_a_concurrently_disconnected_provider(
+    _set_cwd_to_tmp: Path,
+) -> None:
+    from cli._platform_yaml_write import rewrite_platform_yaml_locked
+
+    tmp_path = _set_cwd_to_tmp
+    payload = {
+        "secrets": {"variant": "dotenv", "config": {"path": ".env"}},
+        "llm_providers": {
+            "opencode": {
+                "type": "opencode",
+                "api_key_secret": "OPENCODE_API_KEY",
+                "base_url": "https://opencode.example.com/v1",
+                "models": [],
+            },
+            "keep": {"type": "openai_compat", "models": []},
+        },
+    }
+    (tmp_path / "platform.yaml").write_text(
+        yaml.safe_dump(payload, sort_keys=False), encoding="utf-8"
+    )
+    (tmp_path / ".env").write_text("OPENCODE_API_KEY=sk-test\n", encoding="utf-8")
+
+    def disconnect(fresh: dict[str, object]) -> bool:
+        providers = fresh["llm_providers"]
+        assert isinstance(providers, dict)
+        del providers["opencode"]
+        return True
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        rewrite_platform_yaml_locked(tmp_path, disconnect)
+        return _opencode_handler(request)
+
+    io_, _buf = _command_io(tmp_path, _factory(opencode_handler=handler))
+    assert await cmd_refresh(argparse.Namespace(provider="opencode"), io_) == 0
+    after = yaml.safe_load((tmp_path / "platform.yaml").read_text())["llm_providers"]
+    assert "opencode" not in after
+    assert "keep" in after

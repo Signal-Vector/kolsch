@@ -156,3 +156,109 @@ async def test_llm_writer_no_change_writes_nothing(
     before = yaml_path.read_bytes()
     assert _write_platform_yaml_atomic(tmp_path, lambda _payload: False) is False
     assert yaml_path.read_bytes() == before
+
+
+# ---------------------------------------------------------------------------
+# N8 / N10 — vanished provider; lock timeout is a clean error line
+# ---------------------------------------------------------------------------
+
+
+class _StubPrompter:
+    def ask(self, field: object) -> str:
+        _ = field
+        return ""
+
+
+def _llm_io(root: Path) -> tuple[Any, io.StringIO]:
+    from cli.llm_commands import _CommandIO
+
+    buf = io.StringIO()
+
+    def no_connector(name: str) -> Any:
+        raise AssertionError(name)
+
+    return _CommandIO(
+        root=root, out=buf, prompter=_StubPrompter(), connector_factory=no_connector
+    ), buf
+
+
+def _write_provider_workspace(root: Path) -> Path:
+    yaml_path = root / "platform.yaml"
+    yaml_path.write_text(
+        yaml.safe_dump(
+            {"llm_providers": {"aaa": {"type": "openai_compat", "models": []}}},
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    return yaml_path
+
+
+async def test_disconnect_of_a_concurrently_removed_provider_says_so(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import cli.llm_commands as llm_mod
+    from cli.llm_commands import cmd_disconnect
+
+    yaml_path = _write_provider_workspace(tmp_path)
+    stale = _load(yaml_path)
+    yaml_path.write_text(yaml.safe_dump({"llm_providers": {}}), encoding="utf-8")
+    monkeypatch.setattr(llm_mod, "_load_platform_yaml", lambda _root: stale)
+
+    io_, buf = _llm_io(tmp_path)
+    assert await cmd_disconnect(argparse.Namespace(provider="aaa"), io_) == 0
+    assert "provider 'aaa' was already removed from platform.yaml" in buf.getvalue()
+    assert "✓ removed aaa" not in buf.getvalue()
+
+
+def _lock_times_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    import assets.platform_config as config_mod
+    from errors import AuthzRulesPersistFailed
+
+    class _TimedOut:
+        def __init__(self, root: Path, *, timeout_s: float = 5.0) -> None:
+            self.root = root
+            _ = timeout_s
+
+        def __enter__(self) -> None:
+            raise AuthzRulesPersistFailed(
+                path=str(self.root / "platform.yaml"),
+                reason="lock_timeout",
+                detail="rules lock still held after 5.0s",
+                where="test",
+            )
+
+        def __exit__(self, *exc: object) -> None:
+            return None
+
+    monkeypatch.setattr(config_mod, "platform_yaml_lock", _TimedOut)
+
+
+async def test_llm_writer_lock_timeout_is_an_error_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cli.llm_commands import cmd_disconnect
+
+    yaml_path = _write_provider_workspace(tmp_path)
+    before = yaml_path.read_bytes()
+    _lock_times_out(monkeypatch)
+    io_, buf = _llm_io(tmp_path)
+    assert await cmd_disconnect(argparse.Namespace(provider="aaa"), io_) == 1
+    text = buf.getvalue()
+    assert text.startswith("error: platform.yaml was not updated:"), text
+    assert "lock" in text
+    assert yaml_path.read_bytes() == before
+
+
+async def test_setup_defaults_model_lock_timeout_is_an_error_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
+    monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
+    _lock_times_out(monkeypatch)
+    io_ = _io(tmp_path)
+    await run_setup(argparse.Namespace(non_interactive=True, root=tmp_path), io_)
+    out = io_.out.getvalue()
+    assert "error: defaults.model not written to platform.yaml:" in out
+    assert "Traceback" not in out + io_.err.getvalue()
+    assert "materialized bundle" in out
