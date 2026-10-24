@@ -1,3 +1,6 @@
+kolsch requires Python 3.12 or 3.13 (3.14 isn't supported yet); if uv
+picks 3.14, add `--python 3.13` to the `uv tool install` command.
+
 The command depends on how kolsch is installed in your environment.
 Pick the section that matches yours:
 

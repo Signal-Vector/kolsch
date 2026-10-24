@@ -3,7 +3,12 @@ name = "kolsch"
 version = "0.12.0"
 description = "Local-first, definition-orchestrated multi-agent workflow platform."
 readme = "README.md"
-requires-python = ">=3.12"
+# Capped at <3.14 to mirror the pinned crewai==1.14.6 (Requires-Python
+# <3.14): on 3.14 its chromadb 1.1.1 dependency crashes at import
+# (pydantic.v1 ConfigError). uv ignores this upper bound, so
+# src/cli/_python_support.py enforces it at runtime too. Lift the cap
+# together with the crewai 1.15.x bump follow-up (bug-155).
+requires-python = ">=3.12,<3.14"
 license = "MIT"
 authors = [
     { name = "The kolsch authors" },

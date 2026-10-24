@@ -11,6 +11,8 @@ Kolsch is a local-first agent runtime. Build agents with tools and skills, compo
 
 ## Quickstart
 
+Requires Python 3.12 or 3.13 (3.14 isn't supported yet). If uv picks 3.14, run `uv tool install --python 3.13 kolsch` instead.
+
 ```bash
 uv tool install kolsch
 kolsch setup                # walks you through it
