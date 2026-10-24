@@ -131,6 +131,7 @@ async def test_dispatch_order_is_validate_authz_secrets_sandbox_execute(
             layers: Any = (),
             caller_chain: Any = (),
             tool_call_id: str | None = None,
+            path_target: Any = None,
         ) -> Any:
             order.append("authz")
             return await _allow_all_authz().allow(
@@ -141,6 +142,7 @@ async def test_dispatch_order_is_validate_authz_secrets_sandbox_execute(
                 layers=layers,
                 caller_chain=caller_chain,
                 tool_call_id=tool_call_id,
+                path_target=path_target,
             )
 
         async def list_rules(self) -> list[Any]:  # pragma: no cover

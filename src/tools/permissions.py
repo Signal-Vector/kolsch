@@ -118,6 +118,9 @@ async def check(what: str) -> AuthzEffect:
     default-deny) so in-tool decisions match what the platform would
     have decided pre-dispatch.
 
+    Path targets are not normalised here; dispatch-time authz is the
+    path-aware check.
+
     Args:
         what: The authz action string or target pattern.
 
@@ -155,6 +158,9 @@ async def require(what: str) -> None:
     not trigger the no-rule modal — surfacing one mid-execution
     would block the tool's coroutine and disconnect from the user's
     perspective. A `PROMPT` effect here always collapses to deny.
+
+    Path targets are not normalised here; dispatch-time authz is the
+    path-aware check.
 
     Args:
         what: The authz action string or target pattern.

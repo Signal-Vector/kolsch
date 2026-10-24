@@ -32,6 +32,7 @@ is set.
 from __future__ import annotations
 
 import fnmatch
+import functools
 import hashlib
 import inspect
 import logging
@@ -55,6 +56,7 @@ from errors import (
     ConfigInvalid,
 )
 from errors.assets import AssetsAmbiguousShorthand
+from files.authz_target import path_pattern_matches
 from schemas.config import legacy_rule_scope_violation
 from workflows.errors import (
     WorkflowFromAssetTypeError,
@@ -67,6 +69,7 @@ if TYPE_CHECKING:
 
     from assets.catalog import AssetCatalog
     from engine.context import ExecutionContext
+    from files.authz_target import PathTarget
 
 
 _log = logging.getLogger(__name__)
@@ -261,8 +264,12 @@ class Rule(BaseModel):
       OR a system action namespace (`agent.execute.*`) OR the
       catch-all `*`.
     - `pattern` is a glob matched against the target string (the
-      path / command / url the tool receives). Defaults to `*` for
-      rules that don't care about the target.
+      command / url the tool receives; for a file tool's `path`, the
+      canonical forms from
+      [`files.authz_target`][files.authz_target] — strict for
+      `allow`, loose for `deny` / `prompt`). Stored and hashed into
+      the id verbatim. Defaults to `*` for rules that don't care
+      about the target.
     - `effect` is `allow` / `deny` / `prompt`.
 
     The legacy shape `{id, who, what, effect}` (with `what` as a
@@ -732,7 +739,8 @@ if TYPE_CHECKING:
         """The hook chat surfaces inject to resolve `prompt` effects.
 
         Receives the matched rule's id, the action, the optional
-        target (resolved path / command string), and the caller_chain
+        target (a file tool's canonical display path / the command
+        string), and the caller_chain
         (proximate-first tuple of caller frames — the modal defaults
         newly-persisted rules' `from:` to `caller_chain[0]` so
         approved rules scope to the current agent by default).
@@ -801,8 +809,10 @@ class AuthorizationProvider(Protocol):
     """The two-method contract every authz variant honours.
 
     `allow` accepts optional `target` and `callback` parameters.
-    `target` is matched against the rule's `pattern` (for file tools
-    the resolved path; for `bash` the command string). `callback` is
+    `target` is matched against the rule's `pattern` (for `bash` the
+    command string; for file tools the canonical display path, with
+    `path_target` carrying the forms the pattern is matched against).
+    `callback` is
     the chat-surface prompt resolver — when omitted, `prompt`
     collapses to `deny` so unattended callers never hang.
     """
@@ -823,6 +833,7 @@ class AuthorizationProvider(Protocol):
         layers: tuple[PermissionLayer, ...] = (),
         caller_chain: tuple[str, ...] = (),
         tool_call_id: str | None = None,
+        path_target: PathTarget | None = None,
     ) -> AuthorizationResult:
         """Resolve the authz decision for `(principal, action, target)`.
 
@@ -830,6 +841,14 @@ class AuthorizationProvider(Protocol):
         `policy.decision.made` event payload so `/why <tool_call_id>`
         can correlate deterministically. `None` at call sites that
         aren't per-tool (e.g. `agent.execute.*` pre-flight).
+
+        `path_target` is set by tool dispatch when `target` came from a
+        file tool's `path` argument; `target` is then its canonical
+        display form. Rule patterns are matched against the target's
+        canonical forms — strictly for `allow` rules, generously for
+        `deny` / `prompt` rules (see
+        [`files.authz_target`][files.authz_target]). `None` (every
+        non-path target) keeps raw-string matching.
         """
 
     async def list_rules(self) -> list[Rule]:
@@ -848,10 +867,13 @@ class _CompiledRule:
 
     - **Legacy** rules carry `who_re` and `what_re` (compiled regex
       patterns matched via `re.fullmatch`). `what_re` matches against
-      the target (preferred) or action.
+      the target (preferred) or action; a path target is matched
+      through its canonical forms, picked by effect.
     - **New-shape** rules carry `what` (glob) and `pattern` (glob),
       both matched via `fnmatch.fnmatchcase`. `what` matches the
-      action OR the tool ref; `pattern` matches the target.
+      action OR the tool ref; `pattern` matches the target (a path
+      target through its canonical forms; the pattern itself is
+      normalised lexically at match time, never stored rewritten).
 
     `is_legacy` records which path the matcher should follow. The
     public surface is [`Rule`][providers.authz.Rule] — the raw,
@@ -1313,6 +1335,7 @@ class RuleBasedAuthorizationProvider:
         layers: tuple[PermissionLayer, ...] = (),
         caller_chain: tuple[str, ...] = (),
         tool_call_id: str | None = None,
+        path_target: PathTarget | None = None,
     ) -> AuthorizationResult:
         """Evaluate the action and target against the layered rule walk.
 
@@ -1354,6 +1377,7 @@ class RuleBasedAuthorizationProvider:
             callback=callback,
             layers=layers,
             caller_chain=caller_chain,
+            path_target=path_target,
         )
         # Emit `policy.decision.made` into the current workflow run's
         # JSONL when one is active. The contextvar gate means
@@ -1366,6 +1390,7 @@ class RuleBasedAuthorizationProvider:
             target=target,
             caller_chain=caller_chain,
             tool_call_id=tool_call_id,
+            path_target=path_target,
         )
         return result
 
@@ -1379,6 +1404,7 @@ class RuleBasedAuthorizationProvider:
         callback: PromptCallback | None,
         layers: tuple[PermissionLayer, ...],
         caller_chain: tuple[str, ...],
+        path_target: PathTarget | None = None,
     ) -> AuthorizationResult:
         """Inner rule walk — see `allow` for the full contract."""
         # Walk layers in the order the caller supplied. The engine is
@@ -1395,6 +1421,7 @@ class RuleBasedAuthorizationProvider:
                 callback=callback,
                 layer=layer.name,
                 caller_chain=caller_chain,
+                path_target=path_target,
             )
             if layer_match is not None:
                 return layer_match
@@ -1408,6 +1435,7 @@ class RuleBasedAuthorizationProvider:
             callback=callback,
             layer="platform",
             caller_chain=caller_chain,
+            path_target=path_target,
         )
         if platform_match is not None:
             return platform_match
@@ -1449,6 +1477,7 @@ class RuleBasedAuthorizationProvider:
         callback: PromptCallback | None,
         layer: str,
         caller_chain: tuple[str, ...] = (),
+        path_target: PathTarget | None = None,
     ) -> AuthorizationResult | None:
         """Walk one layer's compiled rules first-match-wins.
 
@@ -1477,6 +1506,7 @@ class RuleBasedAuthorizationProvider:
                 target=target,
                 tool_ref=tool_ref,
                 caller_chain=caller_chain,
+                path_target=path_target,
             ):
                 continue
             effect = AuthzEffect(compiled.effect)
@@ -1506,8 +1536,17 @@ class RuleBasedAuthorizationProvider:
         target: str | None,
         tool_ref: str | None,
         caller_chain: tuple[str, ...] = (),
+        path_target: PathTarget | None = None,
     ) -> bool:
         """Per-rule match decision; dispatches on shape.
+
+        With `path_target` set, only the target comparisons change:
+        they run over the target's canonical forms, picked by the
+        rule's effect (strict for `allow`, loose for `deny` /
+        `prompt`), with the matching case and Unicode folding. The
+        action / `what` / `from:` checks are unchanged, and with
+        `path_target=None` the raw `target` string is matched exactly
+        as before.
 
         The FIRST check is the `from:` caller-chain glob: a rule with
         `from_pattern` set fires only when at least one frame of
@@ -1531,7 +1570,16 @@ class RuleBasedAuthorizationProvider:
             assert compiled.what_re is not None
             if not compiled.who_re.fullmatch(principal):
                 return False
-            target_match = target is not None and compiled.what_re.fullmatch(target)
+            if path_target is not None:
+                target_match = _legacy_path_target_matches(
+                    compiled.what_re,
+                    path_target,
+                    restrictive=compiled.effect != "allow",
+                )
+            else:
+                target_match = target is not None and bool(
+                    compiled.what_re.fullmatch(target)
+                )
             action_match = compiled.what_re.fullmatch(action)
             return bool(target_match or action_match)
         # New-shape: `what` glob matches action OR tool_ref; `pattern`
@@ -1545,7 +1593,7 @@ class RuleBasedAuthorizationProvider:
         )
         if not (action_glob or tool_ref_match):
             return False
-        return fnmatch.fnmatchcase(target or "", compiled.raw.pattern)
+        return _new_shape_pattern_matches(compiled, target, path_target)
 
     @staticmethod
     def _reason_for_match(*, compiled: _CompiledRule, layer: str) -> str:
@@ -2073,6 +2121,63 @@ class RuleBasedAuthorizationProvider:
 
 
 # ---------------------------------------------------------------------------
+# Legacy-rule path matching
+# ---------------------------------------------------------------------------
+
+
+@functools.lru_cache(maxsize=256)
+def _ignorecase_twin(pattern: str, flags: int) -> re.Pattern[str]:
+    """Return a cached `re.IGNORECASE` recompilation of a legacy regex."""
+    return re.compile(pattern, flags | re.IGNORECASE)
+
+
+def _new_shape_pattern_matches(
+    compiled: _CompiledRule,
+    target: str | None,
+    path_target: PathTarget | None,
+) -> bool:
+    """Match a new-shape rule's `pattern` glob against the target.
+
+    A path target matches through its canonical forms (strict for
+    `allow`, loose for `deny` / `prompt`); any other target is globbed
+    raw, with `None` treated as the empty string so `pattern: "*"`
+    still matches.
+    """
+    if path_target is not None:
+        return path_pattern_matches(
+            compiled.raw.pattern,
+            path_target,
+            restrictive=compiled.effect != "allow",
+        )
+    return fnmatch.fnmatchcase(target or "", compiled.raw.pattern)
+
+
+def _legacy_path_target_matches(
+    what_re: re.Pattern[str],
+    path_target: PathTarget,
+    *,
+    restrictive: bool,
+) -> bool:
+    """Match a legacy `what` regex against a path target's canonical forms.
+
+    Same effect rule as new-shape patterns: `allow` rules see the
+    strict forms, `deny` / `prompt` rules the loose forms. When case
+    folds for the rule kind the regex runs with `re.IGNORECASE` over
+    the folded forms; restrictive rules also try the unfolded forms
+    so a regex written with non-NFC text still gets its literal match.
+    """
+    forms = path_target.comparable_forms(restrictive=restrictive)
+    if restrictive:
+        forms = (*forms, *path_target.forms_for(restrictive=restrictive))
+    regex = (
+        _ignorecase_twin(what_re.pattern, what_re.flags)
+        if path_target.folds_case(restrictive=restrictive)
+        else what_re
+    )
+    return any(regex.fullmatch(form) for form in forms)
+
+
+# ---------------------------------------------------------------------------
 # policy.decision.made emission
 # ---------------------------------------------------------------------------
 
@@ -2085,6 +2190,7 @@ def _maybe_emit_policy_decision(  # noqa: PLR0913 — single-payload emit gate; 
     target: str | None,
     caller_chain: tuple[str, ...],
     tool_call_id: str | None = None,
+    path_target: PathTarget | None = None,
 ) -> None:
     """Append a `policy.decision.made` event to the active workflow run.
 
@@ -2100,6 +2206,11 @@ def _maybe_emit_policy_decision(  # noqa: PLR0913 — single-payload emit gate; 
     that aren't per-tool (e.g. `agent.execute.*` at
     `engine.py:448`). `source_file` / `source_line` come from the
     matched rule when available.
+
+    When `path_target` is set and its raw spelling differs from the
+    canonical `target`, the payload also carries `raw_target` (the
+    path as the caller typed it). Canonical inputs add no key, so
+    their events are byte-identical to the pre-normalisation shape.
 
     No-op when no workflow run is active on this async task — chat,
     CLI run, and tests that don't construct a run see zero overhead.
@@ -2121,22 +2232,25 @@ def _maybe_emit_policy_decision(  # noqa: PLR0913 — single-payload emit gate; 
     if normalised == "rule_matched" and result.matched_rule is None:
         return
     matched = result.matched_rule
+    payload: dict[str, Any] = {
+        "action": action,
+        "target": target,
+        "effect": result.effect.value,
+        "rule_id": result.rule_id,
+        "caller_chain": list(caller_chain),
+        "tool_call_id": tool_call_id,
+        "source_file": matched.source_file if matched else None,
+        "source_line": matched.source_line if matched else None,
+    }
+    if path_target is not None and path_target.raw != path_target.display:
+        payload["raw_target"] = path_target.raw
     emit_event(
         ctx.store,
         PolicyDecisionMadeEvent(
             workflow_run_id=ctx.run_id,
             trace_id=ctx.trace_id,
             parent_event_id=None,
-            payload={
-                "action": action,
-                "target": target,
-                "effect": result.effect.value,
-                "rule_id": result.rule_id,
-                "caller_chain": list(caller_chain),
-                "tool_call_id": tool_call_id,
-                "source_file": matched.source_file if matched else None,
-                "source_line": matched.source_line if matched else None,
-            },
+            payload=payload,
         ),
     )
 
@@ -2193,6 +2307,7 @@ class AllowAllTestAuthorizationProvider:
         layers: tuple[PermissionLayer, ...] = (),
         caller_chain: tuple[str, ...] = (),
         tool_call_id: str | None = None,
+        path_target: PathTarget | None = None,
     ) -> AuthorizationResult:
         """Return `ALLOW` for every call; all kwargs are ignored."""
         _ = (
@@ -2203,6 +2318,7 @@ class AllowAllTestAuthorizationProvider:
             layers,
             caller_chain,
             tool_call_id,
+            path_target,
         )
         return AuthorizationResult(
             allowed=True,

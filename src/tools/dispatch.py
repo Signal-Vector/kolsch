@@ -30,17 +30,21 @@ from typing import TYPE_CHECKING, Any
 from pydantic import ValidationError as PydanticValidationError
 
 from errors import (
+    FileAccessDenied,
     PlatformError,
     ToolExecutionFailed,
     ToolInvalidArguments,
     ToolUnauthorized,
 )
+from files.authz_target import normalise_path_target
 from providers.authz import PermissionLayer
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
+    from pathlib import Path
 
     from cli.chat.service_registry import ChatServiceRegistry
+    from files.authz_target import PathTarget
     from providers import (
         AuthorizationProvider,
         SandboxProvider,
@@ -226,6 +230,10 @@ async def dispatch_tool(
 
     Raises:
         ToolInvalidArguments: Pydantic validation of `args` failed.
+        FileAccessDenied: A file tool's `path` argument can't be
+            normalised for authorization (an embedded NUL, or
+            resolution failed). Raised before `authz.allow`; the tool
+            body never runs.
         ToolUnauthorized: Authz denied the call.
         ToolExecutionFailed: The tool body raised a non-`PlatformError`.
     """
@@ -253,6 +261,16 @@ async def dispatch_tool(
         validated_args,
         target_shape=defn.target_shape,
     )
+    # A file tool's `path` is matched in canonical form so a rule means
+    # the same thing however the path is spelled; prompts and the audit
+    # event show the canonical display form.
+    path_target = _extract_path_target(
+        validated_args,
+        target_shape=defn.target_shape,
+        root=context.workspace_root,
+    )
+    if path_target is not None:
+        target = path_target.display
     # Assemble the layers tuple in proximate-caller order:
     # workflow → agent → bundle. The provider's docstring
     # (src/providers/authz.py:813-822) specifies workflow FIRST when
@@ -285,6 +303,7 @@ async def dispatch_tool(
         layers=layers,
         caller_chain=context.caller_chain.frames,
         tool_call_id=context.tool_call_id,
+        path_target=path_target,
     )
     if not auth.allowed:
         raise ToolUnauthorized(
@@ -384,9 +403,11 @@ network tools use ``url``. bug-025 extends the tuple with ``ref``
 ``workflow_status``) so those tools' approval widgets render a
 meaningful ``Args`` line instead of an empty tail.
 
-The authz rule's ``what`` matches against the tool's target string —
-the resolved path for file tools, the command for ``bash``, the
-workflow ref for ``run_workflow``. First-hit-wins so tools that
+The authz rule's ``pattern`` matches against the tool's target string —
+the command for ``bash``, the workflow ref for ``run_workflow``. A
+``path`` target is special: :func:`_extract_path_target` canonicalises
+it (see ``files.authz_target``) and the rule matches the canonical
+forms, not the raw string. First-hit-wins so tools that
 declare multiple priority attrs pick a stable one (``path`` beats
 ``ref`` — the existing convention wins for the tools that had it
 first).
@@ -463,6 +484,48 @@ def _extract_target_from_args(
         validated_args,
         char_limit=_TARGET_ARG_FALLBACK_CHAR_LIMIT,
     )
+
+
+def _extract_path_target(
+    validated_args: object,
+    *,
+    target_shape: str,
+    root: Path | None,
+) -> PathTarget | None:
+    """Return the canonical path target for a file tool's `path` arg.
+
+    A target is a path target exactly when `target_shape` is
+    ``"auto"`` and the validated args carry a ``str`` ``path``
+    attribute (the first entry of :data:`_TARGET_ARG_PRIORITY`).
+    Keyed off the arg name rather than a decorator flag so tool copies
+    installed into existing workspaces get it too.
+
+    Args:
+        validated_args: The Pydantic-validated args model instance.
+        target_shape: The `ToolDefinition.target_shape` hint.
+        root: The workspace root; `None` normalises lexically only.
+
+    Returns:
+        The [`PathTarget`][files.authz_target.PathTarget], or `None`
+        for a non-path target.
+
+    Raises:
+        FileAccessDenied: The path can't be normalised. Authorization
+            fails closed: the caller must not reach `authz.allow`.
+    """
+    if target_shape != "auto":
+        return None
+    raw = getattr(validated_args, "path", None)
+    if not isinstance(raw, str):
+        return None
+    try:
+        return normalise_path_target(raw, root=root)
+    except ValueError as exc:
+        raise FileAccessDenied(
+            path=raw,
+            reason="path cannot be normalised for authorization",
+            where="tools.dispatch.authorize",
+        ) from exc
 
 
 def _dump_args_to_json(
