@@ -771,3 +771,26 @@ async def test_reload_handles_missing_agent_yaml_consistently(
     assert result.error is not None
     assert "Old rules still active" in result.error
     assert "butler" in result.error or "agent YAML" in result.error
+
+
+async def test_reload_with_platform_yaml_missing_keeps_old_rules(
+    tmp_path: Path,
+) -> None:
+    """bug-157: a deleted `platform.yaml` aborts the reload.
+
+    `/reload` must not re-create the file (that would swap generated
+    default rules in live). The error names the missing file, nothing
+    is written, and `runtime.authz` is the same provider object.
+    """
+    runtime = _build_runtime(tmp_path)
+    old_authz = runtime.authz
+    (tmp_path / "platform.yaml").unlink()
+
+    result = await handle_reload(runtime)
+
+    assert result.summary is None
+    assert result.error is not None
+    assert "platform.yaml is missing" in result.error
+    assert "Old rules still active" in result.error
+    assert not (tmp_path / "platform.yaml").exists()
+    assert runtime.authz is old_authz

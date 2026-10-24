@@ -19,6 +19,7 @@ import pytest
 import yaml
 
 from assets import AssetManagement
+from assets.default_rules import fail_closed_default_rules
 from errors import (
     AssetsBundleNameMismatch,
     AssetsDuplicateBundleName,
@@ -569,6 +570,10 @@ async def test_first_run_generates_default_platform_yaml(
     assert bus_cfg["backend"] == "in_process"
     file_access = am.get_platform_config("file_access")
     assert "allowed_paths" in file_access and "denied_paths" in file_access
+    # bug-157: the generated authorization is fail-closed — agents may
+    # run, every tool falls through to the default-deny tail.
+    authz_cfg = am.get_platform_config("authorization")
+    assert authz_cfg["config"]["rules"] == fail_closed_default_rules()
 
 
 # ---------------------------------------------------------------------------

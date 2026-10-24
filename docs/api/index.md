@@ -53,6 +53,10 @@ resolved agent config) belong in the
     options:
       heading_level: 3
 
+::: assets.default_rules
+    options:
+      heading_level: 3
+
 ::: assets.platform_config
     options:
       heading_level: 3
