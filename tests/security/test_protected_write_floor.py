@@ -34,7 +34,7 @@ import pytest
 from assets.catalog import AssetCatalog
 from assets.platform_config import default_platform_payload
 from cli._setup import _workspace_only_default_rules
-from errors import FileAccessDenied
+from errors import FileAccessDenied, ToolUnauthorized
 from files import PathPolicy, load_policy
 from providers import DotenvSecretsProvider, NativeSandboxProvider
 from providers.authz import RuleBasedAuthorizationProvider
@@ -298,12 +298,14 @@ async def test_installed_write_file_refuses_protected_path_under_allow_all(
 
 @pytest.mark.parametrize("target", _BUNDLES_ESCAPE_TARGETS)
 async def test_bundles_allow_escape_is_refused(root: Path, target: str) -> None:
-    """Owner-workspace shape: a `bundles/*` write_file allow matches
-    `bundles/../platform.yaml` at authz (raw, unresolved target). The
-    floor refuses it in the tool body."""
+    """Owner-workspace shape: a `bundles/*` write_file allow. Authz
+    matches path targets in canonical form (bug-163), so the allow no
+    longer covers `bundles/../platform.yaml` and the call falls to the
+    tail deny before the tool body runs. The floor still backs this up
+    under an allow-all rule set (the tests above)."""
     defn = _installed_tool(root, "write_file.py", "write_file")
 
-    with pytest.raises(FileAccessDenied) as exc_info:
+    with pytest.raises(ToolUnauthorized):
         await _dispatch(
             root,
             defn,
@@ -312,7 +314,6 @@ async def test_bundles_allow_escape_is_refused(root: Path, target: str) -> None:
             policy=_wide_open_policy(),
         )
 
-    assert exc_info.value.detail["matched_rule"]["type"] == "protected_write_floor"
     _assert_untouched(root)
 
 

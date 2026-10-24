@@ -202,8 +202,9 @@ rule that governs it.
 ## Patterns: globs, not regex
 
 The pattern matches against the **target** the tool receives — for
-`bash` that's the command string; for file tools it's the resolved
-path; for network tools (future) it's the URL.
+`bash` that's the command string; for file tools it's the file's
+canonical path (see [Path targets](#path-targets) below); for network
+tools it's the URL.
 
 | Glob | Matches | Doesn't match |
 |---|---|---|
@@ -223,6 +224,96 @@ Notably **NOT supported**:
 Trying to write a regex-looking pattern produces
 `authz.pattern_invalid` at config load with the bad characters
 named. Fix the rule and reload.
+
+### Path targets
+
+For file tools (`read_file`, `write_file`, `list_files`, the legacy
+`read` / `write` / `edit`, and the
+`kolsch/nodes/{read_file,write_file,list_files}` workflow nodes) the
+target is the tool's `path` argument, matched in **canonical form** —
+`..`, `./`, `//` and symlinks are resolved first, and a relative path
+and its absolute spelling under the workspace are the same target. So
+a rule means the same thing however the agent spells the path.
+
+One rule decides how generous the match is:
+
+- **`allow` rules match strictly** — only where the file *really* is.
+  A `..` or a symlink that leaves the pattern's directory no longer
+  matches.
+- **`deny` and `prompt` rules match generously** — the real location
+  *and* the path as written (with `..` / `.` collapsed but symlinks
+  not followed), in any case, with or without a trailing `/`.
+
+With the workspace at `/ws`, `bundles/blink → ../data` a symlink, and
+the rule `write_file bundles/* allow`:
+
+| `write_file` path | Canonical target | `bundles/*` allow? |
+|---|---|---|
+| `bundles/u/x.md` | `bundles/u/x.md` | yes |
+| `./bundles/u/x.md` | `bundles/u/x.md` | yes |
+| `/ws/bundles/u/x.md` | `bundles/u/x.md` | yes |
+| `bundles/../platform.yaml` | `platform.yaml` | **no** |
+| `bundles/blink/x` | `data/x` | **no** (a `deny bundles/*` would still catch it) |
+| `BUNDLES/u/x.md` | `BUNDLES/u/x.md` | yes on a case-insensitive disk (macOS default); no on Linux |
+
+A relative pattern (`bundles/*`) and an absolute one
+(`/ws/bundles/*`) are interchangeable for files inside the workspace.
+A pattern starting with `..` is anchored to the workspace root.
+Patterns are cleaned up lexically (`./data//*` means `data/*`) but
+never resolved through the filesystem, so planting a symlink can't
+widen an allow. The prompt, the approval widget, its suggested
+"always" pattern and `policy.decision.made` show the canonical target;
+the audit event adds `raw_target` when the agent typed something
+else. The full rules are in the
+[contract §3.2.7](../explanation/secrets-sandbox-authz-contract.md#327-path-targets).
+
+!!! warning "Behaviour change (bug-163)"
+    Before bug-163 file-tool patterns were matched against the raw
+    string the model typed. Rules you already have may now match
+    differently:
+
+    - **B1 — traversal.** `P/../X` (and any `..` or symlink that
+      leaves `P`) no longer matches `P/*`; calls that relied on it now
+      prompt or deny. A deny / prompt on `dir/*` now also covers `dir`
+      itself (`list_files("data/secret")` is denied by
+      `data/secret/*`).
+    - **B2 — absolute ↔ relative.** A relative-pattern rule also
+      matches the absolute spelling of the same in-workspace file, and
+      an absolute-pattern rule also matches relative spellings. **An
+      absolute allow covering the workspace (for example
+      `write_file /Users/you/Documents/kolsch/*`) now also covers
+      relative paths, so writes that used to prompt no longer do.**
+      Narrow such a rule if you relied on the prompt.
+    - **B3 — spelling noise.** `./x`, `a//b` and `a/./b` match like
+      `x` and `a/b`; a pattern `./data/*` now matches `data/k`. A
+      trailing `/` no longer escapes a deny / prompt, and (as in B1) a
+      deny / prompt on `dir/*` covers `dir`.
+    - **B4 — symlinks.** Allows match the real location only; a
+      symlink inside an allowed directory that points elsewhere is no
+      longer covered. Denies / prompts match both the link path and
+      the real path.
+    - **B5 — case.** On a case-insensitive disk (macOS default) all
+      path patterns match case-insensitively. On a case-sensitive one,
+      deny / prompt patterns still match case-insensitively (over-deny)
+      and allows match exactly. Deny / prompt matching also treats NFC
+      and NFD Unicode spellings as equal.
+    - **B6 — patterns with leading `..`** are anchored to the
+      workspace root; absolute patterns that spell the root through a
+      symlink (`/tmp/ws/…` vs `/private/tmp/ws/…`) match either way.
+    - **B7 — display.** Prompts, the approval widget and
+      `policy.decision.made.target` show the canonical form
+      (`bundles/../platform.yaml` shows as `platform.yaml`;
+      `/ws/data/x` as `data/x`; `/tmp/x` as `/private/tmp/x` on macOS;
+      a symlink is shown at its destination, which may be outside the
+      workspace, such as `/etc/x`). Newly persisted "always" rules are
+      therefore workspace-relative.
+    - **B8 — unresolvable paths.** Any path that can't be resolved
+      (including one with an embedded NUL byte) fails closed with
+      `file_access.denied` before any rule is consulted.
+
+    Unchanged: every `pattern: "*"` rule (all `kolsch setup` defaults),
+    every non-file target (`bash`, URLs, workflow refs), rule ids,
+    `platform.yaml` contents, and the `file_access` path policy.
 
 ---
 

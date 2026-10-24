@@ -472,7 +472,10 @@ provider:
       closed).
    b. `rule.what` must glob-match the action (or the resolved tool
       ref).
-   c. `rule.pattern` must glob-match the target.
+   c. `rule.pattern` must glob-match the target. For a file tool's
+      `path` argument the target is matched in canonical form —
+      strictly for `allow` rules, generously for `deny` / `prompt`
+      rules — never as the raw string (§3.2.7).
 3. Returns the first matching rule's `effect`.
 4. If no rule matches: **default deny**. Returns "deny".
 
@@ -539,6 +542,121 @@ finding (detector:
 [`inspect_default_deny_tail`][providers.authz.inspect_default_deny_tail],
 by shape, never by id).
 
+### 3.2.7 Path targets
+
+*(bug-163.)* A rule must mean the same thing however the agent spells
+a path: `bundles/*` must not cover `bundles/../platform.yaml`, and a
+`data/secret/*` deny must not be dodged by `/ws/data/secret/k`,
+`./data/secret/k` or `DATA/secret/k`. Implemented by
+[`files.authz_target`](../api/index.md#files.authz_target).
+
+**Which targets are path targets.** Exactly those taken from the
+`path` attribute of a tool's validated args when the tool's
+`target_shape` is `"auto"` — every file tool (`read_file`,
+`write_file`, `list_files`, the legacy `read` / `write` / `edit`, and
+the `kolsch/nodes/{read_file,write_file,list_files}` workflow nodes).
+It is keyed off the arg name, not a decorator flag, so tool copies
+already installed in a workspace get it too. `bash` commands, URLs,
+workflow refs, JSON targets and in-tool `permissions.check` /
+`require` targets are not path targets and match raw, exactly as
+before.
+
+**Canonical target.** `dispatch_tool` resolves the path the same way
+the path policy and the tools do (`root / path` when relative, then
+`Path.resolve(strict=False)`: `..` and symlinks followed, no `~`
+expansion). From that it derives:
+
+- the **display form** — the workspace-relative POSIX path when the
+  resolved file is inside the workspace (`.` for the root itself),
+  else the resolved absolute path. A trailing `/` on the raw path is
+  kept (not on the root). The display form is what `allow` receives
+  as `target`, so prompts, the approval widget, persisted "always"
+  rules and `policy.decision.made.target` show it. It can name a
+  symlink's destination outside the workspace (`data/link` → `/etc/x`
+  displays as `/etc/x`).
+- the **strict forms** — the resolved relative form (inside the
+  workspace only) and the resolved absolute form;
+- the **loose forms** — the strict forms plus the *lexical* forms
+  (`..` and `.` collapsed against the root as configured, symlinks
+  **not** followed), relative and absolute. Every in-workspace
+  absolute loose form is also emitted in the other spelling of the
+  root (as configured vs. symlink-resolved), and every loose form
+  appears both with and without a trailing `/`, because the tools
+  treat `x/` and `x` as the same file.
+
+**Effect picks the forms.** Permissive rules match strictly,
+restrictive rules match generously:
+
+- `allow` rules match the **strict** forms only — an allow fires only
+  when the file's real location matches, so a `..` or symlink that
+  leaves the pattern's directory no longer matches. An under-match
+  only prompts or denies.
+- `deny` and `prompt` rules match the **loose** forms — any reasonable
+  spelling of the file. A deny written against a symlink's own path
+  keeps catching it, and so does one written against its real
+  location. Side effect: a deny / prompt on `dir/*` also covers `dir`
+  itself (`list_files("data/secret")` is denied by `data/secret/*`).
+- The raw string itself is never matched.
+
+**Case and Unicode.** `deny` / `prompt` rules always casefold both
+sides and NFC-normalise them (over-denying is safe; macOS's APFS treats
+NFC and NFD spellings as one file). `allow` rules casefold only when
+the workspace filesystem is case-insensitive, and stay byte-exact for
+Unicode. Case-insensitivity is probed once per resolved root, by
+`samefile`-comparing a case-swapped spelling of the nearest root
+component that has letters — so a root like `/Volumes/CS/123` probes
+the volume holding `/Volumes/CS`, not `123`'s. The probe's answer is
+applied to every path target, including absolute paths on other
+volumes: an allow on a case-sensitive external volume, under a
+case-insensitive workspace, could match a differently-cased sibling.
+
+**Patterns are normalised lexically, never rewritten.** At match time
+a pattern is reduced to one or more *pattern forms*: `*` is returned
+as-is; `//` and `.` segments collapse, a leading `./` is stripped, a
+trailing `/` is kept; a `..` segment is resolved only when the segment
+before it is literal (no `*` / `?`). A relative pattern that still
+starts with `..` is anchored to the workspace root, and an absolute
+pattern under either spelling of the root is also emitted in the
+other spelling (`/tmp/ws/data/*` matches when the root resolves to
+`/private/tmp/ws`). Root text spliced in by those two steps is
+glob-escaped, so a workspace directory named `w?s` or `w*s` matches
+only itself. **Patterns never touch the filesystem**, so an agent
+can't widen an allow by planting a symlink (`ln -s / data` doesn't
+turn `data/*` into `/*`). `Rule.pattern`, `list_rules()`,
+`platform.yaml` and rule ids stay byte-identical.
+
+**Edge cases.**
+
+- A `..` after a glob segment (`x/*/../y`) is left in place and never
+  matches a canonical target: inert as a deny, fails safe as an allow.
+- POSIX only: `\` is an ordinary filename character
+  (`bundles\..\platform.yaml` is one file name in the root). New-shape
+  patterns can't contain a backslash anyway.
+- With no workspace root (tests, programmatic callers) normalisation
+  is lexical only; a leading `..` stays relative and never matches a
+  `dir/*` pattern.
+- Legacy regex rules match the same canonical forms by the same effect
+  rule (with `re.IGNORECASE` when case folds). A legacy regex written
+  in NFD text still misses an NFC-typed target.
+
+**Fail closed.** A path that can't be normalised (an embedded NUL, or
+resolution raising) fails with `file_access.denied` before `allow` is
+called; the tool body never runs.
+
+**Audit.** `policy.decision.made.payload.target` is the display form.
+A `raw_target` key carries the path as typed **only when** it differs
+from the display form, so canonical inputs produce byte-identical
+events. `tool.called.arguments` keeps the raw args.
+
+**What this doesn't change.** The path policy (`file_access`) still
+runs inside the tool after authz and still blocks anything outside
+`allowed_paths`; this section changes *which rule matches*, never
+whether the path policy applies. Authz resolves the path at dispatch
+and the tool resolves it again, so an agent with `bash` could swap a
+symlink in between (the same residual as everywhere `bash` is
+allowed). Claude Code's native tools and `bash` are outside kolsch
+authz.
+
 ## 3.3 Interface
 
 ```
@@ -546,14 +664,21 @@ async def allow(
     principal: str,
     action: str,
     target: str | None = None,
+    path_target: PathTarget | None = None,
 ) -> AuthorizationResult
     """Return whether the principal may perform the action.
 
     *(Phase 2.0, TOOL-R3.)* ``target`` is the optional call-site
-    specifier the caller wants matched against the rule's ``what``
-    pattern — for file tools the resolved absolute path, for ``bash``
-    the command string. When omitted, ``what`` is matched against
-    ``action`` alone.
+    specifier the caller wants matched against the rule's ``pattern``
+    — for ``bash`` the command string; for file tools the canonical
+    display form of the ``path`` argument (§3.2.7). When omitted,
+    ``what`` is matched against ``action`` alone.
+
+    ``path_target`` *(bug-163)* is set by tool dispatch for file
+    tools; rule patterns are then matched against its canonical
+    forms (strict for ``allow``, loose for ``deny`` / ``prompt``)
+    instead of the raw ``target`` string. ``None`` for every
+    non-path target.
     """
 
 class AuthorizationResult:
@@ -629,7 +754,7 @@ deny is listed first so it matches before the general allow.
 
 ### 3.4.2 Behavior
 
-`allow(principal, action, target=None, caller_chain=())`:
+`allow(principal, action, target=None, caller_chain=(), path_target=None)`:
 
 ```python
 for rule in self.rules:
@@ -640,7 +765,13 @@ for rule in self.rules:
             continue
     if not fnmatch.fnmatchcase(action, rule.what):
         continue
-    if target is not None and not fnmatch.fnmatchcase(target, rule.pattern):
+    if path_target is not None:
+        # File tools (§3.2.7): canonical forms, picked by effect.
+        if not path_pattern_matches(
+            rule.pattern, path_target, restrictive=rule.effect != "allow"
+        ):
+            continue
+    elif target is not None and not fnmatch.fnmatchcase(target, rule.pattern):
         continue
     return AuthorizationResult(
         allowed=(rule.effect == "allow"),

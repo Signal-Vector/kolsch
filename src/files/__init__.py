@@ -7,6 +7,9 @@ Implements the file-access subsystem per
   each invocation's path argument.
 - The engine's `execute` boundary to validate `file_ref` inputs
   before any agent runs.
+- Tool dispatch and the authorization provider, which match rule
+  patterns against the canonical form of a file tool's `path`
+  argument via [`files.authz_target`][files.authz_target].
 - The platform bootstrap to load the policy via
   [`load_policy`][files.policy.load_policy] from the `file_access`
   section of `platform.yaml`.
@@ -21,6 +24,14 @@ The package is a top-level home rather than co-located in
 through `tools/` would force the engine to depend on tools.
 """
 
+from files.authz_target import (
+    PathTarget,
+    comparable,
+    is_case_insensitive_fs,
+    normalise_path_target,
+    path_pattern_forms,
+    path_pattern_matches,
+)
 from files.policy import (
     PROTECTED_WRITE_PATHS,
     PathPolicy,
@@ -34,9 +45,15 @@ from files.policy import (
 __all__ = [
     "PROTECTED_WRITE_PATHS",
     "PathPolicy",
+    "PathTarget",
     "assert_writable_destination",
     "check_path_allowed",
+    "comparable",
+    "is_case_insensitive_fs",
     "is_path_allowed",
     "load_policy",
+    "normalise_path_target",
+    "path_pattern_forms",
+    "path_pattern_matches",
     "validate_file_ref",
 ]

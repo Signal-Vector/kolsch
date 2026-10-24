@@ -53,6 +53,7 @@ class _RecordingAuthz:
         layers: tuple[Any, ...] = (),
         caller_chain: tuple[str, ...] = (),
         tool_call_id: str | None = None,
+        path_target: Any = None,
     ) -> Any:
         class _AllowResult:
             allowed = True

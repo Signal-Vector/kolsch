@@ -429,10 +429,11 @@ existing workspaces are covered without re-syncing), the
 workflow `kolsch/nodes/write_file` node. The check runs **after**
 authorization, so no authz outcome reaches these paths: not an
 allow-all rule set, not a workflow `policy:` or agent / bundle
-`permissions:` allow, not `kolsch chat --auto-approve`, and not a
-`write_file` allow with a `dir/*` pattern (which also matches
-`dir/../platform.yaml`, because rule patterns match the raw path
-argument). The target is resolved first (symlinks and `..` followed)
+`permissions:` allow, and not `kolsch chat --auto-approve`. (Authz
+itself no longer lets a `dir/*` allow match `dir/../platform.yaml`:
+path targets are matched in canonical form — see
+[authz contract §3.2.7](secrets-sandbox-authz-contract.md#327-path-targets);
+the floor holds regardless.) The target is resolved first (symlinks and `..` followed)
 and compared casefolded per component; an existing target that is the
 same file as a protected one (a hard link) is refused too. A refusal
 is `file_access.denied` with `matched_rule.type ==
@@ -551,6 +552,11 @@ Paths MUST be normalized (resolving `..`, following symlinks) before
 policy evaluation. Implementations MUST NOT allow symlink-based
 bypass — a symlink pointing into a denied location MUST be treated as
 the denied location, not the symlink path.
+
+Authorization rule patterns for file tools use the same resolution:
+dispatch matches a file tool's `path` against its canonical form, not
+the raw string (see the authz contract's
+[§3.2.7 Path targets](secrets-sandbox-authz-contract.md#327-path-targets)).
 
 ### Fh-I5 — Tools never write to `content/`
 
