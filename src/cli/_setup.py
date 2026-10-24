@@ -1538,14 +1538,14 @@ async def _maybe_warn_invalid_skills(io: _SetupIO) -> None:
 
     Builds a fresh `AssetManagement`, walks every catalogued skill,
     and prints a one-line warning per skill that fails
-    [`validate_skill_entry`][cli.skills.validate_skill_entry].
+    [`validate_skill_entry_detailed`][cli.skills.validate_skill_entry_detailed].
     Never blocks setup — a user mid-editing a SKILL.md should not
     be locked out of completing setup.
 
     Silent when the workspace has no skills catalogued.
     """
     from assets import AssetManagement  # noqa: PLC0415
-    from cli.skills import validate_skill_entry  # noqa: PLC0415
+    from cli.skills import validate_skill_entry_detailed  # noqa: PLC0415
 
     am = AssetManagement(root=io.root)
     try:
@@ -1563,8 +1563,17 @@ async def _maybe_warn_invalid_skills(io: _SetupIO) -> None:
 
     failures: list[tuple[str, list[str]]] = []
     for entry in skills:
-        errs = validate_skill_entry(entry)
-        if errs:
+        issues = validate_skill_entry_detailed(entry, workspace_root=io.root)
+        if issues:
+            # Codes only, except frontmatter failures, whose detail
+            # (e.g. the YAML error's line/column) is what makes them
+            # actionable.
+            errs = [
+                f"{i.code} ({i.message})"
+                if i.code.startswith("frontmatter-")
+                else i.code
+                for i in issues
+            ]
             failures.append((entry.ref, errs))
 
     if not failures:
@@ -1576,7 +1585,7 @@ async def _maybe_warn_invalid_skills(io: _SetupIO) -> None:
         "skill(s) have warnings:\n",
     )
     for ref, errs in failures:
-        # Show error codes only at the setup surface — keeps the
+        # Show error codes at the setup surface — keeps the
         # banner tight. Users get the full human-readable view via
         # `kolsch skills validate <ref>`.
         io.out.write(f"      {ref}: {', '.join(errs)}\n")

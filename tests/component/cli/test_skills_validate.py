@@ -18,14 +18,13 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
+import pytest
 import yaml
 
 from cli import main
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-    import pytest
 
 # ---------------------------------------------------------------------------
 # Workspace fixture.
@@ -338,3 +337,359 @@ def test_validate_all_flag_equivalent_to_bare(
     exit_code = main(["--root", str(tmp_path), "skills", "validate", "--all"])
     assert exit_code == 0
     assert "[OK]   acme/skills/good" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# bug-149 — the skill-body ref rule (cli._skill_refs).
+# ---------------------------------------------------------------------------
+
+
+def _validate_json(
+    root: Path, capsys: pytest.CaptureFixture[str]
+) -> list[dict[str, Any]]:
+    main(["--root", str(root), "skills", "validate", "--json"])
+    rows: list[dict[str, Any]] = json.loads(capsys.readouterr().out)
+    return rows
+
+
+def test_validate_ref_rule_skips_non_refs(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Tokens that are HTML, hosts, URLs, placeholders, globs, home or
+    absolute paths, code, unanchored prose paths, or inside a fenced
+    block never produce ``missing-ref``."""
+    _platform_yaml(tmp_path)
+    _make_bundle(tmp_path, "acme")
+    _write_skill_md(
+        tmp_path,
+        "acme",
+        "noisy",
+        body=(
+            "# Noisy\n\n"
+            "Separate with `<hr/>` or `<br/>`.\n"
+            "Open `app.example.so/<slug>/…` or `docs.example.com/guide`.\n"
+            "Fetch `https://x.io/a/b`.\n"
+            "Write `resume-<slug>.yaml` to `out/{company}_{role}_{date}.*`.\n"
+            "Read every `data/*.yaml` and `~/Documents/x/INDEX.md`.\n"
+            "Not `/etc/hosts/x` and not `utils/foo()`.\n"
+            "If you pass `resumes/resume-acme.yaml` the PDF lands next to it.\n"
+            "```bash\n"
+            "python `scripts/only_in_fence.py`\n"
+            "```\n"
+        ),
+    )
+    assert _validate_json(tmp_path, capsys) == [
+        {"ref": "acme/skills/noisy", "ok": True, "errors": [], "details": []},
+    ]
+
+
+# (body, normalised ref, setup(skill_dir) creating needed parent dirs)
+_ANCHORED_REFS: list[tuple[str, str, str | None]] = [
+    ("Run `scripts/extract.py`.", "scripts/extract.py", None),
+    ("Read `./references/methodology.md`.", "references/methodology.md", None),
+    ("Show `assets/logo.png`.", "assets/logo.png", None),
+    ("Then `steps/two.md`.", "steps/two.md", "steps"),
+    ("See [the forms](FORMS.md).", "FORMS.md", None),
+    (
+        "From the workspace root run `bundles/acme/skills/anchored/scripts/run.py`.",
+        "bundles/acme/skills/anchored/scripts/run.py",
+        None,
+    ),
+]
+
+
+@pytest.mark.parametrize(("body", "ref", "parent_dir"), _ANCHORED_REFS)
+def test_validate_ref_rule_anchored_refs_checked(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    body: str,
+    ref: str,
+    parent_dir: str | None,
+) -> None:
+    """Anchored refs fire exactly one ``missing-ref`` when absent and
+    none once the target exists (``bundles/…`` from the workspace
+    root, everything else from the skill dir)."""
+    _platform_yaml(tmp_path)
+    _make_bundle(tmp_path, "acme")
+    skill_md = _write_skill_md(tmp_path, "acme", "anchored", body=f"# A\n\n{body}\n")
+    if parent_dir is not None:
+        (skill_md.parent / parent_dir).mkdir()
+
+    assert _validate_json(tmp_path, capsys)[0]["errors"] == [f"missing-ref:{ref}"]
+
+    base = tmp_path if ref.startswith("bundles/") else skill_md.parent
+    target = base / ref
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("stub\n", encoding="utf-8")
+    assert _validate_json(tmp_path, capsys)[0]["errors"] == []
+
+
+def test_validate_ref_rule_wording_names_the_base(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The table row says which base a missing ref was resolved against."""
+    _platform_yaml(tmp_path)
+    _make_bundle(tmp_path, "acme")
+    _write_skill_md(
+        tmp_path,
+        "acme",
+        "x",
+        body="Run `scripts/a.py` then `bundles/acme/skills/x/scripts/run.py`.\n",
+    )
+    assert main(["--root", str(tmp_path), "skills", "validate"]) == 1
+    out = capsys.readouterr().out
+    assert "`scripts/a.py` not found under the skill directory" in out
+    assert (
+        "`bundles/acme/skills/x/scripts/run.py` not found under the workspace root"
+        in out
+    )
+
+
+def test_validate_ref_rule_dedupes_and_skips_escapes(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A repeated ref is reported once; ``..`` refs escaping the skill
+    dir (or ``<root>/bundles`` for the ``bundles/`` form) are skipped."""
+    _platform_yaml(tmp_path)
+    _make_bundle(tmp_path, "acme")
+    _write_skill_md(
+        tmp_path,
+        "acme",
+        "rep",
+        body=(
+            "Run `scripts/a.py`, then `scripts/a.py`, then [again](scripts/a.py).\n"
+            "Not `scripts/../../other/x.py`, [sibling](../other/SKILL.md),\n"
+            "or `bundles/../outside.txt`.\n"
+        ),
+    )
+    assert _validate_json(tmp_path, capsys)[0]["errors"] == ["missing-ref:scripts/a.py"]
+
+
+def test_validate_ref_rule_unprobeable_tokens_do_not_raise(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A segment longer than NAME_MAX makes ``exists()`` raise
+    ``OSError``; the token is treated as not a ref instead of
+    crashing validation."""
+    _platform_yaml(tmp_path)
+    _make_bundle(tmp_path, "acme")
+    long = "a" * 300
+    _write_skill_md(
+        tmp_path,
+        "acme",
+        "long",
+        body=f"See `{long}/x.py` and [x]({long}.md).\n",
+    )
+    assert _validate_json(tmp_path, capsys)[0]["errors"] == []
+
+
+def test_validate_ref_rule_percent_encoded_link_resolves(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Link targets are percent-decoded before resolution; the code
+    reports the target as written."""
+    _platform_yaml(tmp_path)
+    _make_bundle(tmp_path, "acme")
+    skill_md = _write_skill_md(
+        tmp_path, "acme", "enc", body="Read [notes](references/with%20space.md).\n"
+    )
+    assert _validate_json(tmp_path, capsys)[0]["errors"] == [
+        "missing-ref:references/with%20space.md"
+    ]
+    (skill_md.parent / "references").mkdir()
+    (skill_md.parent / "references" / "with space.md").write_text(
+        "x\n", encoding="utf-8"
+    )
+    assert _validate_json(tmp_path, capsys)[0]["errors"] == []
+
+
+# ---------------------------------------------------------------------------
+# bug-149 — actionable frontmatter diagnostics.
+# ---------------------------------------------------------------------------
+
+_YAML_ERROR_FM = (
+    'name: humanize\ndescription: Use when rewriting. Triggers on: "x", "y".\n'
+)
+
+
+def _write_raw_skill(root: Path, bundle: str, name: str, text: str) -> Path:
+    skill_dir = root / "bundles" / bundle / "skills" / name
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    skill_md = skill_dir / "SKILL.md"
+    skill_md.write_text(text, encoding="utf-8")
+    return skill_md
+
+
+def test_validate_frontmatter_missing_reports_only_that_code(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _platform_yaml(tmp_path)
+    _make_bundle(tmp_path, "acme")
+    _write_raw_skill(tmp_path, "acme", "bare", "# Skill: bare\n\nDoes things.\n")
+
+    (row,) = _validate_json(tmp_path, capsys)
+    assert row["errors"] == ["frontmatter-missing"]
+    assert row["details"] == [
+        {
+            "code": "frontmatter-missing",
+            "message": "no YAML frontmatter; SKILL.md must start with a `---` line",
+        }
+    ]
+
+
+def test_validate_frontmatter_yaml_error_carries_position_and_hint(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _platform_yaml(tmp_path)
+    _make_bundle(tmp_path, "acme")
+    _write_skill_md(tmp_path, "acme", "humanize", raw_frontmatter=_YAML_ERROR_FM)
+
+    (row,) = _validate_json(tmp_path, capsys)
+    assert row["errors"] == ["frontmatter-unparseable"]
+    column = len("description: Use when rewriting. Triggers on:")
+    expected = (
+        f"SKILL.md line 3, column {column}: mapping values are not allowed "
+        "in this context; values containing ': ' must be quoted"
+    )
+    assert row["details"] == [{"code": "frontmatter-unparseable", "message": expected}]
+
+    assert main(["--root", str(tmp_path), "skills", "validate"]) == 1
+    assert f"[FAIL] acme/skills/humanize: {expected}\n" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [
+        (
+            "---\nname: x\ndescription: y\n\nBody, never closed.\n",
+            "frontmatter opened on line 1 but never closed with `---`",
+        ),
+        ("---\n- a\n- b\n---\n\nBody.\n", "frontmatter must be a YAML mapping"),
+    ],
+)
+def test_validate_frontmatter_unparseable_other_kinds(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    text: str,
+    message: str,
+) -> None:
+    _platform_yaml(tmp_path)
+    _make_bundle(tmp_path, "acme")
+    _write_raw_skill(tmp_path, "acme", "odd", text)
+
+    (row,) = _validate_json(tmp_path, capsys)
+    assert row["errors"] == ["frontmatter-unparseable"]
+    assert row["details"][0]["message"] == message
+
+
+def test_validate_empty_frontmatter_block_reports_name_and_description(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """A well-formed but empty block is not a frontmatter error."""
+    _platform_yaml(tmp_path)
+    _make_bundle(tmp_path, "acme")
+    _write_raw_skill(tmp_path, "acme", "empty", "---\n---\n\n# Body\n\nText.\n")
+
+    (row,) = _validate_json(tmp_path, capsys)
+    assert row["errors"] == ["missing-name", "missing-description"]
+    assert [d["code"] for d in row["details"]] == row["errors"]
+
+
+# ---------------------------------------------------------------------------
+# bug-149 — incident replay: 12 synthetic skills mirroring the shapes of
+# the 2026-10-21 setup incident (7 flagged before the fix, 3 after).
+# Every string is invented.
+# ---------------------------------------------------------------------------
+
+
+def _incident_yaml_description() -> str:
+    """A plain-scalar description whose unquoted ``Triggers on:`` puts
+    the YAML error at file line 3, column 236 (as in the incident)."""
+    tail = ' Triggers on: "polish", "rewrite".'
+    head = "description: Use when " + "polishing drafted prose, " * 12
+    head = head[: 236 - len(" Triggers on:")]
+    return head + tail
+
+
+def _incident_workspace(root: Path) -> None:
+    _platform_yaml(root)
+    for bundle in ("ops", "jobs", "misc"):
+        _make_bundle(root, bundle)
+
+    def fm(name: str) -> str:
+        return f"---\nname: {name}\ndescription: Does the {name} task.\n---\n\n"
+
+    skills = {
+        # HTML, a bare host with placeholders, and a workspace-root ref
+        # that exists (both as a bare span and inside a command).
+        ("ops", "tracker"): fm("tracker")
+        + "Open `app.example.io/<slug>/…` in a browser.\n"
+        + "Separate entries with `<hr/>`; break lines with `<br/>`.\n"
+        + "From the workspace root: `python3 bundles/ops/skills/tracker/scripts/api.py`"
+        + " (the helper is `bundles/ops/skills/tracker/scripts/api.py`).\n",
+        # Invalid YAML: unquoted ': ' inside a plain-scalar description.
+        ("ops", "polish"): f"---\nname: polish\n{_incident_yaml_description()}\n---\n\n"
+        "Polish the text.\n",
+        # Home paths, globs, placeholders, repeats.
+        ("jobs", "apply"): fm("apply")
+        + "Read `~/Docs/Jobs/INDEX.md`, then every `~/Docs/Jobs/*.yaml`.\n"
+        + "Write `~/Docs/Jobs/out/{company}_{role}_{date}.*`.\n"
+        + "Re-read `~/Docs/Jobs/INDEX.md` before finishing.\n",
+        # No frontmatter at all (two skills).
+        ("jobs", "letter"): "# Skill: letter\n\nDrafts a letter.\n",
+        ("jobs", "search"): "# Skill: search\n\nSearches listings.\n",
+        # Example path in prose (no samples/ dir in the skill).
+        ("jobs", "tailor"): fm("tailor")
+        + "If you pass `samples/sample-acme.yaml`, the PDF lands at"
+        + " `samples/sample-acme.pdf`.\n",
+        # <slug> placeholders.
+        ("jobs", "tailor-fast"): fm("tailor-fast")
+        + "Load `~/Docs/Jobs/cv-<slug>.yaml` and `cv-<slug>.yaml`.\n",
+        # Five clean skills; one has a real references/ link.
+        ("misc", "alpha"): fm("alpha") + "Plain body.\n",
+        ("misc", "beta"): fm("beta") + "Call `run_thing` when ready.\n",
+        ("misc", "gamma"): fm("gamma") + "See [the method](references/method.md).\n",
+        ("misc", "delta"): fm("delta") + "A **plain** body.\n",
+        ("misc", "epsilon"): fm("epsilon") + "Fetch `https://example.org/a/b`.\n",
+    }
+    for (bundle, name), text in skills.items():
+        skill_dir = root / "bundles" / bundle / "skills" / name
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(text, encoding="utf-8")
+    tracker_scripts = root / "bundles/ops/skills/tracker/scripts"
+    tracker_scripts.mkdir()
+    (tracker_scripts / "api.py").write_text("# stub\n", encoding="utf-8")
+    gamma_refs = root / "bundles/misc/skills/gamma/references"
+    gamma_refs.mkdir()
+    (gamma_refs / "method.md").write_text("# Method\n", encoding="utf-8")
+
+
+def test_validate_incident_replay_flags_only_real_issues(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _incident_workspace(tmp_path)
+
+    exit_code = main(["--root", str(tmp_path), "skills", "validate", "--json"])
+    rows = json.loads(capsys.readouterr().out)
+    assert exit_code == 1
+    assert len(rows) == 12
+    failing = {r["ref"]: r for r in rows if not r["ok"]}
+    assert {ref: r["errors"] for ref, r in failing.items()} == {
+        "ops/skills/polish": ["frontmatter-unparseable"],
+        "jobs/skills/letter": ["frontmatter-missing"],
+        "jobs/skills/search": ["frontmatter-missing"],
+    }
+    assert not any(c.startswith("missing-ref:") for r in rows for c in r["errors"])
+    assert failing["ops/skills/polish"]["details"][0]["message"] == (
+        "SKILL.md line 3, column 236: mapping values are not allowed in this "
+        "context; values containing ': ' must be quoted"
+    )

@@ -15,11 +15,14 @@ Pins the warning-only contract the build prompt calls out:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import io
+import json
 from typing import TYPE_CHECKING
 
 import yaml
 
+from cli import main
 from cli._setup import NonInteractivePrompter, _SetupIO, _TestRunResult, run_setup
 
 if TYPE_CHECKING:
@@ -199,3 +202,112 @@ async def test_setup_rerun_with_only_canonical_skills_prints_validated_line(
     assert "✓ validated " in captured and "skill" in captured
     # All canonical skills clean — no warning surface.
     assert "⚠ skill validation" not in captured
+
+
+async def test_setup_rerun_resolves_bundles_refs_from_workspace_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """bug-149 — the setup hook passes the workspace root, so a
+    ``bundles/…`` body ref that exists is clean and one that doesn't
+    warns ``missing-ref:bundles/…``."""
+    monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
+    monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
+    await run_setup(
+        argparse.Namespace(non_interactive=True, root=tmp_path),
+        _make_test_io(tmp_path),
+    )
+    skill_dir = tmp_path / "bundles" / "kolsch" / "skills" / "ws-ref"
+    (skill_dir / "scripts").mkdir(parents=True)
+    script = skill_dir / "scripts" / "run.py"
+    script.write_text("# stub\n", encoding="utf-8")
+    ref = "bundles/kolsch/skills/ws-ref/scripts/run.py"
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: ws-ref\ndescription: Runs a helper.\n---\n\n"
+        f"From the workspace root run `{ref}`.\n",
+        encoding="utf-8",
+    )
+
+    clean_io = _make_test_io(tmp_path)
+    assert (
+        await run_setup(
+            argparse.Namespace(non_interactive=True, root=tmp_path), clean_io
+        )
+        == 0
+    )
+    assert "⚠ skill validation" not in clean_io.out.getvalue()
+
+    script.unlink()
+    broken_io = _make_test_io(tmp_path)
+    assert (
+        await run_setup(
+            argparse.Namespace(non_interactive=True, root=tmp_path), broken_io
+        )
+        == 0
+    )
+    assert f"kolsch/skills/ws-ref: missing-ref:{ref}" in broken_io.out.getvalue()
+
+
+async def test_setup_rerun_shows_frontmatter_detail_in_parentheses(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """bug-149 — frontmatter codes carry their detail on the setup
+    advisory line; other codes stay compact."""
+    monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
+    monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
+    await run_setup(
+        argparse.Namespace(non_interactive=True, root=tmp_path),
+        _make_test_io(tmp_path),
+    )
+    skills = tmp_path / "bundles" / "kolsch" / "skills"
+    (skills / "bad-yaml").mkdir(parents=True)
+    (skills / "bad-yaml" / "SKILL.md").write_text(
+        '---\nname: bad-yaml\ndescription: Use it. Triggers on: "x".\n---\n\n'
+        "Run `scripts/gone.py`.\n",
+        encoding="utf-8",
+    )
+    (skills / "no-fm").mkdir()
+    (skills / "no-fm" / "SKILL.md").write_text("# Skill\n\nBody.\n", encoding="utf-8")
+
+    io_ = _make_test_io(tmp_path)
+    assert (
+        await run_setup(argparse.Namespace(non_interactive=True, root=tmp_path), io_)
+        == 0
+    )
+    out = io_.out.getvalue()
+    assert (
+        "kolsch/skills/bad-yaml: frontmatter-unparseable (SKILL.md line 3, column "
+    ) in out
+    assert "must be quoted), missing-ref:scripts/gone.py\n" in out
+    assert (
+        "kolsch/skills/no-fm: frontmatter-missing (no YAML frontmatter; "
+        "SKILL.md must start with a `---` line)\n"
+    ) in out
+
+
+def test_starter_bundle_skills_validate_clean(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """bug-149 — every skill the starter bundle ships validates clean
+    in a freshly set-up workspace (guards the ref rule against shipped
+    content, e.g. a ``bundles/…`` mention)."""
+    monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
+    monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
+    # Sync test: ``cli.main`` runs its own event loop.
+    setup_rc = asyncio.run(
+        run_setup(
+            argparse.Namespace(non_interactive=True, root=tmp_path),
+            _make_test_io(tmp_path),
+        )
+    )
+    assert setup_rc == 0
+
+    exit_code = main(["--root", str(tmp_path), "skills", "validate", "--json"])
+    rows = json.loads(capsys.readouterr().out)
+    starter = [r for r in rows if r["ref"].startswith("kolsch/skills/")]
+    assert starter, "the starter bundle ships skills"
+    assert [r for r in starter if not r["ok"]] == []
+    assert exit_code == 0
