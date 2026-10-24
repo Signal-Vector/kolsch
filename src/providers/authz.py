@@ -12,6 +12,13 @@ implicit no-rule path (prompt when a callback is registered, else
 deny). [`inspect_default_deny_tail`][providers.authz.inspect_default_deny_tail]
 reports where (if anywhere) the tail sits.
 
+Ahead of every caller layer sits the opt-in `locked_rules` stage:
+deny-only platform rules no workflow, agent or bundle `allow` can
+override (ids prefixed
+[`LOCKED_RULE_ID_PREFIX`][providers.authz.LOCKED_RULE_ID_PREFIX]).
+The full walk is locked → caller layers → platform `rules` → no-rule
+prompt → default deny.
+
 The `effect` field carries three values — `allow`, `deny`, and
 `prompt`. The provider classifies; on `prompt` it either calls the
 supplied resolver callback or collapses to `deny` for unattended
@@ -51,6 +58,7 @@ from errors import (
     AuthzRegexInvalid,
     AuthzToolRefUnknown,
     ConfigInvalid,
+    PlatformError,
 )
 from errors.assets import AssetsAmbiguousShorthand
 from workflows.errors import (
@@ -256,6 +264,130 @@ def derive_rule_id(who: str, what: str, effect: str) -> str:
     payload = f"{who}|{what}|{effect}"
     digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:8]
     return f"rl_{digest}"
+
+
+LOCKED_RULE_ID_PREFIX = "rl_locked_"
+"""The id prefix every locked platform rule carries.
+
+Locked rules live in `authorization.config.locked_rules` and are
+evaluated before every layer. The prefix is how the CLI, the denial
+hint and the `/why` card recognise a locked rule from its id alone
+(`tool.failed`'s `matched_rule` and `policy.decision.made`'s
+`rule_id` carry no separate layer field). It can never collide with a
+[`derive_rule_id`][providers.authz.derive_rule_id] output, whose body
+after `rl_` is eight hex digits."""
+
+
+_LOCKED_RULE_KEYS: frozenset[str] = frozenset({"what", "pattern", "effect"})
+
+
+def derive_locked_rule_id(what: str, pattern: str, effect: str) -> str:
+    """Return the deterministic id of a locked platform rule.
+
+    The id is
+    [`LOCKED_RULE_ID_PREFIX`][providers.authz.LOCKED_RULE_ID_PREFIX]
+    followed by the first eight hex digits of
+    `sha256("locked|" + what + "|" + pattern + "|" + effect)`. Unlike
+    [`derive_rule_id`][providers.authz.derive_rule_id] it has no
+    catch-all collapse: a locked rule is never the default-deny tail,
+    so it never maps to
+    [`DEFAULT_DENY_RULE_ID`][providers.authz.DEFAULT_DENY_RULE_ID].
+    Two locked rules with the same content get the same id, which is
+    how duplicates are detected.
+    """
+    payload = f"locked|{what}|{pattern}|{effect}"
+    digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:8]
+    return f"{LOCKED_RULE_ID_PREFIX}{digest}"
+
+
+def _locked_key_problem(key: str, value: object) -> str | None:
+    """Return why one `locked_rules` key is not accepted, or `None`."""
+    if key in _LOCKED_RULE_KEYS:
+        return None
+    if key == "who":
+        return (
+            "legacy `{who, what, effect}` rules are not supported in "
+            "`locked_rules`; use the `{what, pattern, effect}` shape"
+        )
+    if key in ("from", "from_"):
+        if value is None:
+            return None
+        return (
+            "`from:` is not supported on locked rules: the tool path "
+            "does not pass a caller chain yet, so a `from:`-scoped "
+            "locked deny would never fire; lock the whole action instead"
+        )
+    if key == "id":
+        return (
+            "`id` is not accepted on locked rules; locked ids are "
+            f"derived (`{LOCKED_RULE_ID_PREFIX}<hash>`)"
+        )
+    return (
+        f"unknown key {key!r}; locked rules accept only `what`, `pattern` and `effect`"
+    )
+
+
+def _locked_ref_problem(what: str) -> str | None:
+    """Return why a `/`-containing locked `what` is not 3-segment, or `None`.
+
+    The matcher compares `what` to the action string verbatim, and tool
+    actions are 3-segment refs (`<bundle>/tools/<name>`). A 2-segment
+    `<bundle>/<name>` passes the catalog's legacy migration shim but
+    never matches, so as a locked deny it would load and silently do
+    nothing. Rejected rather than canonicalised, so what the operator
+    wrote is what is enforced.
+    """
+    parts = what.split("/")
+    if len(parts) == _THREE_SEG_PARTS and all(parts):
+        return None
+    hint = ""
+    if len(parts) == _TWO_SEG_PARTS and all(parts) and not any(c in what for c in "*?"):
+        hint = f"; did you mean {build_ref(parts[0], 'tool', parts[1])!r}?"
+    return (
+        f"`what: {what!r}` must be a 3-segment ref "
+        f"(`<bundle>/tools/<name>`); a locked rule written any other way "
+        f"would never match{hint}"
+    )
+
+
+def _locked_rule_problem(entry: Mapping[str, object]) -> str | None:
+    """Return why `entry` is not a valid locked rule, or `None` when it is.
+
+    Checks only the locked-specific constraints (key set, deny-only,
+    no `from:`, not the catch-all). The shape checks every new-shape
+    rule gets (`what`/`pattern` types, glob-only `pattern`, catalog
+    resolution) run afterwards in the shared compile path. Shared by
+    the load path (which raises `AuthzMalformedRule`) and
+    `add_locked_rule` (which raises `AuthzRuleInvalid`), so both
+    reject exactly the same inputs.
+    """
+    for key, value in entry.items():
+        problem = _locked_key_problem(key, value)
+        if problem is not None:
+            return problem
+    for required in ("what", "effect"):
+        if required not in entry:
+            return f"missing required field {required!r}"
+    effect = entry["effect"]
+    if effect != "deny":
+        return (
+            f"effect must be 'deny'; got {effect!r}. Locked rules are "
+            "deny-only: a locked 'allow' would stop layers from narrowing, "
+            "and a locked 'prompt' would persist approvals into the "
+            "`rules` list it pre-empts"
+        )
+    what = entry["what"]
+    if isinstance(what, str) and "/" in what:
+        problem = _locked_ref_problem(what)
+        if problem is not None:
+            return problem
+    if what == "*" and entry.get("pattern", "*") == "*":
+        return (
+            "the catch-all `{what: '*', pattern: '*', effect: deny}` cannot "
+            "be locked (it would deny everything before any layer runs); "
+            "keep it as the default-deny tail at the end of `rules`"
+        )
+    return None
 
 
 @dataclass(frozen=True)
@@ -508,9 +640,10 @@ class PermissionLayer:
     prevention with no new rule field required).
 
     `name` is the layer's display tag (`"workflow"` / `"agent"` /
-    `"bundle"` / `"platform"`); it surfaces in the
-    `AuthorizationResult.reason` and in the `policy.decision.made`
-    event payload's `layer` field.
+    `"bundle"`); it surfaces in the `AuthorizationResult.reason` as
+    `(who_chain=<name>)`. The `policy.decision.made` payload carries
+    no layer field; the provider's own stages tag their reasons
+    `locked` and `platform`.
     """
 
     name: str
@@ -534,11 +667,20 @@ class RuleBasedAuthorizationConfig(BaseModel):
     Arbitrary string values are accepted by the model; semantic
     interpretation is the engine's responsibility — unknown values
     collapse to `"rule_matched"` at the emit site.
+
+    `locked_rules` is the opt-in, operator-absolute list: deny-only
+    `{what, pattern, effect: deny}` rules evaluated before every
+    layer (workflow `policy:`, agent and bundle `permissions:`) and
+    before `rules`, so no layer `allow` can override them. It is read
+    only from `platform.yaml`; absent or empty changes nothing. The
+    provider validates entries strictly at construction (see
+    [`RuleBasedAuthorizationProvider`][providers.authz.RuleBasedAuthorizationProvider]).
     """
 
     model_config = ConfigDict(extra="allow")
 
     rules: list[dict[str, Any]] = Field(default_factory=list)
+    locked_rules: list[dict[str, Any]] = Field(default_factory=list)
     audit_level: str = "rule_matched"
 
 
@@ -710,6 +852,22 @@ class RuleBasedAuthorizationProvider:
     [`DEFAULT_DENY_RULE_ID`][providers.authz.DEFAULT_DENY_RULE_ID]
     and refuses removal. Construction does not check that the tail
     exists or is last; `bootstrap_runtime` warns about that.
+
+    **Locked rules.** `config["locked_rules"]` (opt-in) is a separate
+    list of deny-only `{what, pattern, effect: deny}` rules, evaluated
+    first-match-wins before every caller layer and before `rules`.
+    Construction validates it strictly and raises on any violation
+    (not a list, a non-mapping entry, a key other than
+    `what`/`pattern`/`effect`, a legacy `who`, an effect other than
+    `deny`, a non-null `from:`, the catch-all, a duplicate). Locked
+    ids carry
+    [`LOCKED_RULE_ID_PREFIX`][providers.authz.LOCKED_RULE_ID_PREFIX].
+    They are exposed through
+    [`list_locked_rules`][providers.authz.RuleBasedAuthorizationProvider.list_locked_rules]
+    and
+    [`add_locked_rule`][providers.authz.RuleBasedAuthorizationProvider.add_locked_rule];
+    `get_rule` / `remove_rule` accept locked ids, and `list_rules`
+    keeps returning only the `rules` list.
     """
 
     def __init__(
@@ -718,12 +876,30 @@ class RuleBasedAuthorizationProvider:
         config: dict[str, Any],
         catalog: AssetCatalog | None = None,
         source_map: RuleSourceMap | None = None,
+        locked_source_map: RuleSourceMap | None = None,
+        config_file: str | None = None,
     ) -> None:
+        # feat-160 — the file the config came from (`platform.yaml`),
+        # named in `locked_rules` load errors so a typo that stops every
+        # command points straight at its fix. `None` for programmatic
+        # construction.
+        self._config_file = config_file
         raw_rules = config.get("rules", []) or []
         if not isinstance(raw_rules, list):
             raise AuthzMalformedRule(
                 rule_index=-1,
                 error=(f"`rules` must be a list; got {type(raw_rules).__name__}"),
+            )
+        raw_locked = config.get("locked_rules", []) or []
+        if not isinstance(raw_locked, list):
+            raise AuthzMalformedRule(
+                rule_index=-1,
+                error=(
+                    "`locked_rules`"
+                    + (f" in {config_file}" if config_file else "")
+                    + " must be a list of `{what, pattern, effect: deny}` "
+                    f"mappings; got {type(raw_locked).__name__}"
+                ),
             )
         # The action-to-tool-ref bridge is gone for tools (the action
         # IS the 3-segment ref now; the matcher hits the action
@@ -748,6 +924,23 @@ class RuleBasedAuthorizationProvider:
         self._rules: list[_CompiledRule] = [
             self._compile(index, entry) for index, entry in enumerate(raw_rules)
         ]
+        # feat-160 — the operator-absolute stage. Same sidecar shape as
+        # `source_map`, keyed by index into `locked_rules`.
+        self._locked_source_map: RuleSourceMap = locked_source_map or {}
+        self._locked_rules: list[_CompiledRule] = []
+        for index, entry in enumerate(raw_locked):
+            compiled = self._compile_locked(index, entry)
+            for prior_index, prior in enumerate(self._locked_rules):
+                if prior.raw.id == compiled.raw.id:
+                    raise AuthzMalformedRule(
+                        rule_index=index,
+                        error=(
+                            f"{self._locked_label(index)}: duplicate of "
+                            f"locked_rules[{prior_index}] (same what/pattern/"
+                            f"effect, id {compiled.raw.id}); remove one"
+                        ),
+                    )
+            self._locked_rules.append(compiled)
         # Chat-injected callback resolved by `_resolve_prompt` when
         # `allow(callback=)` is omitted. The chat lifecycle registers
         # on startup and clears on exit so subsequent in-process
@@ -782,6 +975,99 @@ class RuleBasedAuthorizationProvider:
         if "who" in entry:
             return self._compile_legacy(index, entry, source=source)
         return self._compile_new_shape(index, entry, source=source)
+
+    def _locked_label(self, index: int) -> str:
+        """Return `locked_rules[<index>]`, plus where it was authored when known."""
+        label = f"locked_rules[{index}]"
+        source = self._locked_source_map.get(index)
+        if source is not None:
+            return f"{label} ({source[0]}:{source[1]})"
+        if self._config_file:
+            return f"{label} in {self._config_file}"
+        return label
+
+    def _compile_locked(self, index: int, entry: object) -> _CompiledRule:
+        """Compile one `locked_rules` entry, rejecting anything not locked-legal.
+
+        Every `AuthzMalformedRule` message starts `locked_rules[<index>]: `.
+        The locked-specific checks run first (`_locked_rule_problem`);
+        the remaining shape and catalog checks reuse
+        `_compile_new_shape`, whose typed errors (`AuthzPatternInvalid`,
+        `AuthzToolRefUnknown`, ...) propagate with their message prefixed
+        `locked_rules[<index>]: ` and their `where` set to
+        `authz.rule_based.locked_rules[<index>]`, so they are not
+        mistaken for a `rules` entry at the same index.
+        """
+        label = self._locked_label(index)
+        if not isinstance(entry, dict):
+            raise AuthzMalformedRule(
+                rule_index=index,
+                error=(f"{label}: rule must be a mapping; got {type(entry).__name__}"),
+            )
+        problem = _locked_rule_problem(entry)
+        if problem is not None:
+            raise AuthzMalformedRule(rule_index=index, error=f"{label}: {problem}")
+        return self._compile_locked_fields(
+            index,
+            {key: entry[key] for key in _LOCKED_RULE_KEYS if key in entry},
+            source=self._locked_source_map.get(index),
+            label=label,
+        )
+
+    def _compile_locked_fields(
+        self,
+        index: int,
+        fields: dict[str, Any],
+        *,
+        source: tuple[str, int] | None,
+        label: str | None = None,
+    ) -> _CompiledRule:
+        """Run the shared new-shape compile on pre-checked locked fields.
+
+        `fields` already passed `_locked_rule_problem`. The result keeps
+        the shared matcher inputs (so locked rules match exactly like
+        platform rules) but carries the locked id. Typed errors from the
+        shared checks keep their type and code, with the message
+        prefixed `<label>: ` (default `locked_rules[<index>]`).
+        """
+        where = f"authz.rule_based.locked_rules[{index}]"
+        label = label or f"locked_rules[{index}]"
+        try:
+            compiled = self._compile_new_shape(index, fields, source=source)
+        except AuthzMalformedRule as exc:
+            error = str(exc.detail.get("error", exc))
+            raise AuthzMalformedRule(
+                rule_index=index, error=f"{label}: {error}"
+            ) from exc
+        except PlatformError as exc:
+            # Keep the type, code and detail; prefix the message so an
+            # operator reading it looks at `locked_rules`, not `rules`.
+            exc.args = (f"{label}: {exc}",)
+            exc.where = where
+            raise
+        # The single choke point both `locked_rules` load and
+        # `add_locked_rule` pass through: a non-deny must never land in
+        # `_locked_rules`, so no locked match can reach a prompt
+        # callback via `_resolve_prompt`.
+        if compiled.effect != "deny":
+            raise AuthzMalformedRule(
+                rule_index=index,
+                error=(f"{label}: effect must be 'deny'; got {compiled.effect!r}"),
+            )
+        raw = compiled.raw.model_copy(
+            update={
+                "id": derive_locked_rule_id(
+                    compiled.raw.what, compiled.raw.pattern, compiled.raw.effect
+                )
+            }
+        )
+        return _CompiledRule(
+            effect=compiled.effect,
+            raw=raw,
+            is_legacy=False,
+            what=compiled.what,
+            from_pattern=None,
+        )
 
     @staticmethod
     def _compile_legacy(
@@ -1086,9 +1372,16 @@ class RuleBasedAuthorizationProvider:
     ) -> AuthorizationResult:
         """Evaluate the action and target against the layered rule walk.
 
+        The walk is: locked platform rules (`locked_rules`, when any)
+        → each of `layers` in order → platform `rules` → the no-rule
+        prompt callback (when one is registered) → default deny. The
+        first match at any stage ends the walk. A locked match is
+        always a deny with a reason ending `(who_chain=locked)`; no
+        layer can override it.
+
         The provider walks `layers` in order — first-match-wins per
-        layer; each layer's `name` lands in the result's `reason` and
-        in the `policy.decision.made` event payload's `layer` field.
+        layer; each layer's `name` lands in the result's `reason` as
+        `(who_chain=<name>)`.
 
         **Engine-side layer-tuple construction.** The engine builds
         the `layers` tuple with `PermissionLayer(name="workflow",
@@ -1151,6 +1444,26 @@ class RuleBasedAuthorizationProvider:
         caller_chain: tuple[str, ...],
     ) -> AuthorizationResult:
         """Inner rule walk — see `allow` for the full contract."""
+        # Locked platform rules first — operator-absolute, so no caller
+        # layer can override them. They go through the same matcher as
+        # every other stage. Locked rules are deny-only (enforced at
+        # compile), so `_resolve_prompt` is unreachable from here and
+        # no prompt callback can fire. Skipped outright when the list
+        # is empty so workspaces without locked rules walk exactly as
+        # before.
+        if self._locked_rules:
+            locked_match = await self._match_against_rules(
+                rules=self._locked_rules,
+                principal=principal,
+                action=action,
+                target=target,
+                callback=None,
+                layer="locked",
+                caller_chain=caller_chain,
+            )
+            if locked_match is not None:
+                return locked_match
+
         # Walk layers in the order the caller supplied. The engine is
         # responsible for putting the `workflow` layer FIRST when the
         # proximate frame is a workflow node, OMITTING it when the
@@ -1226,8 +1539,8 @@ class RuleBasedAuthorizationProvider:
         through `_resolve_prompt`); returns `None` when no rule fires
         so the caller can fall through to the next layer.
 
-        `layer` (`"agent"` / `"platform"` / `"workflow"` /
-        `"bundle"`) is folded into the result's `reason` (and into
+        `layer` (`"locked"` / `"workflow"` / `"agent"` / `"bundle"` /
+        `"platform"`) is folded into the result's `reason` (and into
         PROMPT's resolved reason via `_resolve_prompt`) so debugging
         output identifies which layer matched.
 
@@ -1471,8 +1784,23 @@ class RuleBasedAuthorizationProvider:
         )
 
     async def list_rules(self) -> list[Rule]:
-        """Return every rule currently held, in evaluation order."""
+        """Return the platform `rules` list, in evaluation order.
+
+        Locked rules are not included (see
+        [`list_locked_rules`][providers.authz.RuleBasedAuthorizationProvider.list_locked_rules]):
+        callers write this list back to `authorization.config.rules`,
+        so mixing them in would copy locked rules into `rules`.
+        """
         return [c.raw for c in self._rules]
+
+    async def list_locked_rules(self) -> list[Rule]:
+        """Return the locked platform rules, in evaluation order.
+
+        Every entry is a deny with an id starting
+        [`LOCKED_RULE_ID_PREFIX`][providers.authz.LOCKED_RULE_ID_PREFIX].
+        Empty when `platform.yaml` has no `locked_rules`.
+        """
+        return [c.raw for c in self._locked_rules]
 
     def lookup_tool_ref(self, action: str) -> str | None:
         """Map an action string to a qualified rule-shape ref, when one is needed.
@@ -1541,19 +1869,19 @@ class RuleBasedAuthorizationProvider:
     # -- live-edit API -------------------------------------------------
 
     async def get_rule(self, rule_id: str) -> Rule:
-        """Look up one rule by stable id.
+        """Look up one rule by stable id, in the locked or platform list.
 
         Raises:
             AuthzRuleNotFound: No rule with that id is held.
         """
         from errors import AuthzRuleNotFound  # noqa: PLC0415
 
-        for compiled in self._rules:
+        for compiled in (*self._locked_rules, *self._rules):
             if compiled.raw.id == rule_id:
                 return compiled.raw
         raise AuthzRuleNotFound(
             rule_id=rule_id,
-            available_ids=[c.raw.id for c in self._rules],
+            available_ids=[c.raw.id for c in (*self._locked_rules, *self._rules)],
         )
 
     def _insert_at_tail(self, rule: Rule) -> Rule:
@@ -1649,8 +1977,65 @@ class RuleBasedAuthorizationProvider:
         self._rules.insert(self._tail_index(), compiled)
         return compiled.raw
 
+    async def add_locked_rule(self, rule: Rule) -> Rule:
+        """Validate `rule` as a locked platform rule and append it.
+
+        Applies exactly the checks `locked_rules` gets at load: the
+        `{what, pattern, effect: deny}` shape only (no legacy `who`,
+        no `from:`, no caller-supplied `id` other than the derived
+        one), not the catch-all, not a duplicate, then the shared
+        pattern and catalog checks. The returned rule carries its
+        derived `rl_locked_` id. Like `add_rule`, this updates only the
+        in-memory list; writing `platform.yaml` is the caller's job.
+
+        Raises:
+            AuthzRuleInvalid: The rule is not locked-legal or is a
+                duplicate of a held locked rule.
+            AuthzPatternInvalid: `pattern` contains regex characters.
+            AuthzToolRefUnknown: `what` names a tool the catalog lacks
+                (only when the provider holds a catalog).
+        """
+        from errors import AuthzRuleInvalid  # noqa: PLC0415
+
+        fields: dict[str, object] = {
+            "what": rule.what,
+            "pattern": rule.pattern,
+            "effect": rule.effect,
+        }
+        if rule.who is not None:
+            fields["who"] = rule.who
+        if rule.from_ is not None:
+            fields["from"] = rule.from_
+        derived = derive_locked_rule_id(rule.what, rule.pattern, rule.effect)
+        if rule.id and rule.id != derived:
+            fields["id"] = rule.id
+        problem = _locked_rule_problem(fields)
+        if problem is not None:
+            raise AuthzRuleInvalid(position=-1, reason=problem)
+        for existing in self._locked_rules:
+            if existing.raw.id == derived:
+                raise AuthzRuleInvalid(
+                    position=-1,
+                    reason=f"locked rule {derived} already exists",
+                )
+        try:
+            compiled = self._compile_locked_fields(
+                len(self._locked_rules),
+                {key: fields[key] for key in _LOCKED_RULE_KEYS},
+                source=None,
+            )
+        except AuthzMalformedRule as exc:
+            raise AuthzRuleInvalid(
+                position=-1, reason=str(exc.detail.get("error", exc))
+            ) from exc
+        self._locked_rules.append(compiled)
+        return compiled.raw
+
     async def remove_rule(self, rule_id: str) -> None:
-        """Remove a rule by id.
+        """Remove a rule by id, from the locked or platform list.
+
+        Locked rules are not removal-protected: they are the
+        operator's own and come out like any other rule.
 
         Raises:
             AuthzProtectedRule: `rule_id` is the protected
@@ -1660,6 +2045,10 @@ class RuleBasedAuthorizationProvider:
         """
         from errors import AuthzProtectedRule, AuthzRuleNotFound  # noqa: PLC0415
 
+        for index, compiled in enumerate(self._locked_rules):
+            if compiled.raw.id == rule_id:
+                del self._locked_rules[index]
+                return
         if rule_id == DEFAULT_DENY_RULE_ID:
             raise AuthzProtectedRule(
                 rule_id=rule_id,
@@ -1674,7 +2063,7 @@ class RuleBasedAuthorizationProvider:
                 return
         raise AuthzRuleNotFound(
             rule_id=rule_id,
-            available_ids=[c.raw.id for c in self._rules],
+            available_ids=[c.raw.id for c in (*self._locked_rules, *self._rules)],
         )
 
     # -- Helpers --------------------------------------------------------

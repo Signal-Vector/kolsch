@@ -7,6 +7,10 @@ runtime API (`list_rules` / `add_rule` / `remove_rule` / `get_rule`)
 so the same rule-id scheme, default-deny protection, and atomicity
 discipline as the in-chat modal apply here too.
 
+Locked platform rules (`authorization.config.locked_rules`, deny-only,
+evaluated before every layer) are managed through the same commands:
+`add --locked`, and `list` / `show` / `remove` on `rl_locked_` ids.
+
 Atomic writes: `platform.yaml` is rewritten via temp + fsync +
 `os.replace`, the same pattern `llm_commands.py` uses for
 `platform.yaml` writes.
@@ -25,12 +29,14 @@ from errors import (
     AuthzProtectedRule,
     AuthzRuleInvalid,
     AuthzRuleNotFound,
+    PlatformError,
     WorkspaceNotInitialized,
 )
 from kolsch._yamlio import dump_preserving_trailing_comment_block, load
 from platform_runtime.workspace import workspace_is_initialized
 from providers import (
     DEFAULT_DENY_RULE_ID,
+    LOCKED_RULE_ID_PREFIX,
     Rule,
     RuleBasedAuthorizationProvider,
 )
@@ -96,6 +102,15 @@ def add_permissions_subparser(
         choices=("allow", "deny", "prompt"),
         help="Effect classification.",
     )
+    add.add_argument(
+        "--locked",
+        action="store_true",
+        help=(
+            "Add to `locked_rules` instead: a deny evaluated before every "
+            "workflow/agent/bundle layer that no layer allow can override. "
+            "Requires `--effect deny`; `--from` and positioning are refused."
+        ),
+    )
     pos = add.add_mutually_exclusive_group()
     pos.add_argument(
         "--before",
@@ -128,6 +143,11 @@ def add_permissions_subparser(
     return perms
 
 
+_LOCKED_SECTION_HEADER = (
+    "locked (evaluated before workflow/agent/bundle layers; cannot be overridden):"
+)
+
+
 # ---------------------------------------------------------------------------
 # Command handlers — called from cli.main._cmd_permissions
 # ---------------------------------------------------------------------------
@@ -156,6 +176,7 @@ async def cmd_permissions(
     provider = RuleBasedAuthorizationProvider(
         config=config,
         catalog=am.catalog(),
+        config_file=str(yaml_path),
     )
 
     op = args.permissions_command
@@ -181,6 +202,18 @@ async def _cmd_list(provider: RuleBasedAuthorizationProvider, *, out: TextIO) ->
     migration. New-shape rules render in the canonical
     `what / pattern / effect` form.
     """
+    locked = await provider.list_locked_rules()
+    if locked:
+        # Only when locked rules exist, so the output of a workspace
+        # without them is unchanged.
+        out.write(_LOCKED_SECTION_HEADER + "\n")
+        id_w = max(len(r.id) for r in locked)
+        for rule in locked:
+            out.write(
+                f"{rule.id:<{id_w}}  {rule.effect}  what={rule.what!r}  "
+                f"pattern={rule.pattern!r}  (locked)\n"
+            )
+        out.write("\nrules:\n")
     rules = await provider.list_rules()
     if not rules:
         out.write("(no rules)\n")
@@ -230,6 +263,10 @@ async def _cmd_show(
         out.write(f"what:   {rule.what!r}\n")
         out.write("        (legacy regex shape — please convert)\n")
     out.write(f"effect: {rule.effect}\n")
+    if rule.id.startswith(LOCKED_RULE_ID_PREFIX):
+        out.write(
+            "        (locked — evaluated before every layer; cannot be overridden)\n"
+        )
     if rule.id == DEFAULT_DENY_RULE_ID:
         out.write("        (protected — removal refused)\n")
     return 0
@@ -243,6 +280,10 @@ async def _cmd_add(
     out: TextIO,
     err: TextIO,
 ) -> int:
+    if getattr(args, "locked", False):
+        return await _cmd_add_locked(
+            provider, args, yaml_path=yaml_path, out=out, err=err
+        )
     new_rule = Rule(
         what=args.what,
         pattern=args.pattern,
@@ -270,6 +311,52 @@ async def _cmd_add(
     return 0
 
 
+async def _cmd_add_locked(
+    provider: RuleBasedAuthorizationProvider,
+    args: argparse.Namespace,
+    *,
+    yaml_path: Path,
+    out: TextIO,
+    err: TextIO,
+) -> int:
+    """`add --locked`: validate the flags, append to `locked_rules`, persist."""
+    if args.effect != "deny":
+        err.write(
+            f"error: --locked requires --effect deny (got {args.effect}); "
+            "locked rules are deny-only\n"
+        )
+        return 1
+    if args.from_ is not None:
+        err.write(
+            "error: --locked does not accept --from; the tool path passes "
+            "no caller chain yet, so a from-scoped locked deny would never fire\n"
+        )
+        return 1
+    if args.before or args.after or args.first:
+        err.write(
+            "error: --locked does not accept --before/--after/--first; "
+            "locked rules are appended to `locked_rules`\n"
+        )
+        return 1
+    try:
+        added = await provider.add_locked_rule(
+            Rule(what=args.what, pattern=args.pattern, effect="deny")
+        )
+    except PlatformError as exc:
+        err.write(f"error: {exc}\n")
+        return 1
+    _write_back(
+        yaml_path,
+        await provider.list_rules(),
+        locked_rules=await provider.list_locked_rules(),
+    )
+    out.write(
+        f"added locked rule {added.id}: what={added.what!r} "
+        f"pattern={added.pattern!r} effect={added.effect}\n"
+    )
+    return 0
+
+
 async def _cmd_remove(
     provider: RuleBasedAuthorizationProvider,
     rule_id: str,
@@ -278,6 +365,7 @@ async def _cmd_remove(
     out: TextIO,
     err: TextIO,
 ) -> int:
+    was_locked = any(r.id == rule_id for r in await provider.list_locked_rules())
     try:
         await provider.remove_rule(rule_id)
     except AuthzProtectedRule as exc:
@@ -286,7 +374,11 @@ async def _cmd_remove(
     except AuthzRuleNotFound as exc:
         err.write(f"error: {exc}\n")
         return 1
-    _write_back(yaml_path, await provider.list_rules())
+    _write_back(
+        yaml_path,
+        await provider.list_rules(),
+        locked_rules=await provider.list_locked_rules() if was_locked else None,
+    )
     out.write(f"removed rule {rule_id}\n")
     return 0
 
@@ -317,11 +409,19 @@ def _read_authz_config(yaml_path: Path) -> dict[str, Any]:
     return cfg
 
 
-def _write_back(yaml_path: Path, rules: list[Rule]) -> None:
+def _write_back(
+    yaml_path: Path,
+    rules: list[Rule],
+    *,
+    locked_rules: list[Rule] | None = None,
+) -> None:
     """Atomically rewrite platform.yaml's `authorization.config.rules`.
 
     Preserves every other section of the file verbatim — only the
-    rules list is replaced. Temp + fsync + `os.replace` for
+    rules list is replaced. `locked_rules`, when given, also replaces
+    `authorization.config.locked_rules` (the key is dropped when the
+    list is empty); when `None` (every `/perm` and modal write-back)
+    the on-disk locked list is left exactly as it was. Temp + fsync + `os.replace` for
     crash-safety.
 
     qol-133: uses `dump_preserving_trailing_comment_block` (not raw
@@ -347,6 +447,11 @@ def _write_back(yaml_path: Path, rules: list[Rule]) -> None:
         cfg = {}
         authz["config"] = cfg
     cfg["rules"] = [_rule_to_dict(r) for r in rules]
+    if locked_rules is not None:
+        if locked_rules:
+            cfg["locked_rules"] = [_rule_to_dict(r) for r in locked_rules]
+        else:
+            cfg.pop("locked_rules", None)
 
     serialized = dump_preserving_trailing_comment_block(previous_text, payload)
     temp = yaml_path.with_name(f"{yaml_path.name}.tmp.{os.getpid()}")

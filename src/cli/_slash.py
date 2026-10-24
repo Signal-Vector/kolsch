@@ -673,8 +673,16 @@ async def _handler_tools(arg_text: str, ctx: SlashContext) -> ControlSignal:
         return ControlSignal.CONTINUE
 
     rules: list[Rule] = []
+    locked: list[Rule] = []
     if ctx.authz is not None:
         rules = await ctx.authz.list_rules()
+        # Locked platform rules are evaluated before every layer, so a
+        # whole-tool locked deny governs the tool outright. Variants
+        # without the locked stage (the test allow-all) have no lister.
+        list_locked = getattr(ctx.authz, "list_locked_rules", None)
+        if list_locked is not None:
+            locked = await list_locked()
+    whole_tool_locks = [r for r in locked if r.pattern == "*"]
     principal = f"agent.{config.agent_id}"
     # The action namespace is the 3-seg catalog ref
     # (`<home_bundle>/tools/<name>`); `_governing_rule` builds it
@@ -685,6 +693,16 @@ async def _handler_tools(arg_text: str, ctx: SlashContext) -> ControlSignal:
 
     ctx.stdout.write("tools available to this agent:\n")
     for name, home_bundle in tool_entries:
+        lock = _governing_rule(
+            whole_tool_locks,
+            principal=principal,
+            tool_name=name,
+            home_bundle=home_bundle,
+            tool_ref_lookup=tool_ref_lookup,
+        )
+        if lock is not None:
+            ctx.stdout.write(f"  {name:<20}  {lock.id} (deny, locked)\n")
+            continue
         rule = _governing_rule(
             rules,
             principal=principal,
@@ -696,6 +714,23 @@ async def _handler_tools(arg_text: str, ctx: SlashContext) -> ControlSignal:
             descriptor = "(no matching rule — default deny)"
         else:
             descriptor = f"{rule.id} ({rule.effect})"
+        # A pattern-scoped locked deny doesn't govern the whole tool,
+        # but it overrides any allow for the targets it matches.
+        partial = [
+            r.pattern
+            for r in locked
+            if r.pattern != "*"
+            and _governing_rule(
+                [r],
+                principal=principal,
+                tool_name=name,
+                home_bundle=home_bundle,
+                tool_ref_lookup=tool_ref_lookup,
+            )
+            is not None
+        ]
+        if partial:
+            descriptor += f"  [locked deny for pattern {', '.join(map(repr, partial))}]"
         ctx.stdout.write(f"  {name:<20}  {descriptor}\n")
     return ControlSignal.CONTINUE
 
@@ -1065,6 +1100,18 @@ async def _perm_list(ctx: SlashContext) -> None:
     if not isinstance(authz, RuleBasedAuthorizationProvider):
         ctx.stdout.write("/perm: authz variant doesn't support listing rules.\n")
         return
+    locked = await authz.list_locked_rules()
+    if locked:
+        # Shown only when present so the listing is unchanged otherwise.
+        ctx.stdout.write(
+            "locked (evaluated before workflow/agent/bundle layers; "
+            "cannot be overridden):\n"
+        )
+        for rule in locked:
+            ctx.stdout.write(
+                f"  {rule.id}  what={rule.what!r:<22}  "
+                f"pattern={rule.pattern!r:<14}  effect={rule.effect}  (locked)\n",
+            )
     rules = await authz.list_rules()
     if not rules:
         ctx.stdout.write("(no rules)\n")

@@ -289,6 +289,15 @@ deny, or hand-edit `platform.yaml` to reorder. The slash commands
 intentionally don't reorder hand-arranged rules — you get to decide
 which intent wins.
 
+Two other reasons a `/perm` rule doesn't fire:
+
+- **A locked rule matches.** `/perm list` prints locked rules first.
+  They run before every layer and `/perm` can't override or remove
+  them — see [Locked rules](#locked-rules).
+- **A workflow, agent or bundle layer decides first.** Layer rules are
+  consulted before `platform.yaml`'s `rules` — see
+  [How the layers stack](#how-the-layers-stack).
+
 ---
 
 ## Debugging denials in chat — `/why` and `/reload`
@@ -343,7 +352,9 @@ The command atomically:
 
 Next authz decision uses the new rules. In-flight tool calls
 straddling a `/reload` are race-safe — they see the old provider
-consistently across all their decisions.
+consistently across all their decisions. A workflow run already in
+progress keeps the rules it started with; new runs and chat turns
+pick them up.
 
 Common `/why` → edit → `/reload` loop:
 
@@ -370,6 +381,7 @@ kolsch permissions add --what "kolsch/tools/bash" --pattern "*" --effect allow
 kolsch permissions add --what "kolsch/tools/bash" --pattern "find *" \
     --from "kolsch/agents/triage" --effect allow
 kolsch permissions remove <rule_id>        # by stable id
+kolsch permissions add --locked --what "kolsch/tools/bash" --effect deny
 ```
 
 `--what` is the qualified tool ref (or `agent.execute.*` /
@@ -386,6 +398,9 @@ The default-deny tail is **removal-protected**:
 hand edit that removes or moves the tail is **not** refused — the
 rule set loads with a warning (see
 [If your rule list has no default-deny tail](#if-your-rule-list-has-no-default-deny-tail)).
+
+`--locked` adds to `authorization.config.locked_rules` instead — a deny
+no layer can override (see [Locked rules](#locked-rules)).
 
 `kolsch permissions add` / `remove` rewrite `platform.yaml`: only a
 comment block at the very end of the file is preserved; comments
@@ -666,26 +681,165 @@ Same data; same evaluation order.
 
 ---
 
-## The four-level stack
+## How the layers stack
 
-The authz provider walks four layers, deepest first:
+Every authorization check walks these stages in order. The **first
+match at any stage ends the walk**:
 
 ```
-agent.yaml `permissions:`            ← most specific
-   ↑
-bundle.yaml `permissions:`           ← per-bundle
-   ↑
-platform.yaml `authorization.rules`  ← workspace default
-   ↑
-default: prompt-on-first-use (chat) / deny (non-chat)
+platform.yaml `authorization.config.locked_rules`   ← locked: deny-only, nothing below can override
+   ↓
+workflow `policy:`                                  ← only when a workflow builtin node fires the action
+   ↓
+agent.yaml `permissions:`                           ← the acting agent
+   ↓
+bundle.yaml `permissions:`                          ← the acting agent's home bundle
+   ↓
+platform.yaml `authorization.config.rules`          ← workspace rules (ends with the default-deny tail)
+   ↓
+no rule matched: prompt (chat) / deny (everywhere else)
 ```
 
-First-match-wins inside each layer; fall through if nothing
-matches. A narrower agent rule wins over the wider bundle rule
-which wins over the wider platform rule. Both the modal and
-`/perm` write to **`platform.yaml`** by default; to narrow,
-hand-edit the rule into `bundle.yaml` or the agent's
-own `permissions:` block.
+Within each stage, rules are first-match-wins top to bottom; if
+nothing in a stage matches, the walk falls through to the next one.
+
+**Layers can widen past the platform. This is intended.** A workflow,
+agent or bundle rule is consulted *before* `platform.yaml`'s `rules`,
+so a layer `allow` wins over a platform `deny` for the same action —
+including an explicit one, not just the default-deny tail. Layers can
+equally narrow (a layer `deny` beats a platform `allow`) or shift a
+`prompt` to `allow`. The layering is precedence, not enforced
+narrowing.
+
+One structural protection always holds: an **embedded agent never
+inherits its workflow's `policy:`**. When a workflow runs an `agent`
+node, that agent's tool calls are checked against the agent and bundle
+layers only, so a workflow can't hand its own permissions to the
+agents it calls.
+
+The in-tool check (`tools.permissions.check` / `require`, used by tool
+authors) walks locked rules, then the agent and bundle layers, then the
+platform rules and default deny — the same stack minus the workflow
+layer.
+
+Both the modal and `/perm` write to **`platform.yaml`**'s `rules`.
+To narrow for one agent or bundle, hand-edit the rule into its
+`permissions:` block.
+
+### Who can widen what
+
+A layer's rules are only as trustworthy as whoever can write its file:
+
+| Layer | File | Who can write it | What it reaches |
+|---|---|---|---|
+| Locked rules | `platform.yaml` → `authorization.config.locked_rules` | The operator, `kolsch permissions add --locked`, anyone who can edit `platform.yaml` | Every action, before every layer (deny only) |
+| Workflow `policy:` | `bundles/<b>/workflows/*.yaml` | Whoever can write `bundles/` | Builtin nodes of that workflow |
+| Agent `permissions:` | `bundles/<b>/agents/*.yaml` | Whoever can write `bundles/` | Every tool call that agent makes |
+| Bundle `permissions:` | `bundles/<b>/bundle.yaml` | Whoever can write `bundles/` | Every agent whose home bundle it is |
+| Platform rules | `platform.yaml` → `authorization.config.rules` | The operator, `kolsch permissions`, `/perm`, the approval modal | Whatever no locked rule or layer decided |
+
+!!! warning "Write access to `platform.yaml` and `bundles/` is the real boundary"
+    "Whoever can write `bundles/`" includes an **agent** whose
+    `write_file` rules reach that directory: it can author a workflow
+    whose `policy:` allows `bash`, and run it. An agent that can write
+    `platform.yaml` — or run `bash`, and so `kolsch permissions remove
+    <id>` — can delete a locked rule. No rule in this file defends
+    against that. Keep `write_file` (and `bash`) away from
+    `platform.yaml` and `bundles/` if you rely on locked rules or on
+    the platform list to contain your agents.
+
+---
+
+## Locked rules
+
+A **locked rule** is the one control no layer can override. Use it
+for "never, whatever any workflow, agent or bundle says":
+
+```yaml
+# platform.yaml
+authorization:
+  variant: rule_based
+  config:
+    locked_rules:
+      - { what: kolsch/tools/bash, pattern: "*", effect: deny }
+    rules:
+      - { what: agent.execute.*, pattern: "*", effect: allow }
+      # ...
+      - { what: "*", pattern: "*", effect: deny }
+```
+
+Locked rules live in their own list and are evaluated **before every
+layer**, first-match-wins. A matching locked rule always denies.
+
+The shape is deliberately narrow, and anything else fails at load
+(every `kolsch` command and `/reload` refuse the file, naming
+`locked_rules[<i>]` and the file (with the line where known), and
+the fix):
+
+- **Deny only.** `allow` and `prompt` are refused: a locked `allow`
+  would stop layers from narrowing, and a locked `prompt` would
+  persist "always" answers into the `rules` list it pre-empts.
+- **`{what, pattern, effect}` only.** No legacy `who`, no `id` (ids are
+  derived as `rl_locked_<hash>`), and no `from:` — the tool path
+  doesn't pass a caller chain yet, so a `from:`-scoped lock would never
+  fire.
+- **`what` is a full three-segment ref** (`kolsch/tools/bash`, not
+  `kolsch/bash` — the short form would load and never match) or a
+  system action like `agent.execute.<ref>`.
+- **Not the catch-all.** `{what: "*", pattern: "*"}` would deny
+  everything; keep it as the default-deny tail at the end of `rules`.
+- No duplicates.
+
+Manage them from the CLI:
+
+```bash
+kolsch permissions add --locked --what kolsch/tools/bash --effect deny
+kolsch permissions list            # locked section first, when there are any
+kolsch permissions show rl_locked_<hash>
+kolsch permissions remove rl_locked_<hash>
+```
+
+`--locked` requires `--effect deny` and refuses `--from`, `--before`,
+`--after` and `--first`. Locked rules are not removal-protected — they
+are yours. `/perm` and the approval modal never add, change or remove
+them. After a hand edit, `/reload` picks them up. A workflow run
+already in progress keeps the rules it started with; new runs and
+chat turns pick them up.
+
+**Lock whole tools.** Prefer `pattern: "*"`. Pattern locks are weaker
+than they look:
+
+- A pattern is a glob over the target *string* the tool receives, not a
+  sandbox. A locked `bash` deny on `rm *` is bypassed by `bash -c 'rm
+  …'`, `env rm …` and similar.
+- Path patterns match the path as written. A locked `write_file` deny
+  on `/etc/*` does not catch `/tmp/../etc/passwd` or a relative path.
+
+**What locked rules cannot do:**
+
+- Govern Python that runs without an authorization check — authored
+  `@node` compute nodes and the bodies of tool files under `bundles/`.
+  Anyone who can write those files can run code directly.
+- Protect themselves. See the warning in
+  [Who can widen what](#who-can-widen-what): they are only as strong
+  as write access to `platform.yaml`.
+- Prevent a lock-out. A locked deny on `agent.execute.*`, or on a tool
+  your chat agent needs, locks you out of chat too. Fix it from the
+  CLI (`kolsch permissions remove rl_locked_<hash>`) or by editing
+  `platform.yaml`.
+
+**How a locked denial looks in chat.** The failed tool block's hint
+names the rule and says it's locked:
+
+```
+denied by rl_locked_9d58f5ce (deny) at ~/kolsch/platform.yaml:52
+locked rule — workflow/agent/bundle allows can't override it; edit authorization.config.locked_rules in platform.yaml, then /reload
+```
+
+`/why` shows `layer locked`, `/tools` marks a whole-tool lock as
+`(deny, locked)`, and `/perm list` lists locked rules first. Outside
+chat, the `rl_locked_` id appears as `rule_id` in the run's
+`policy.decision.made` events and in `tool.failed`'s `matched_rule`.
 
 ---
 

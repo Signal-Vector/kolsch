@@ -1033,7 +1033,8 @@ permissions:
 ```
 
 The check walks the same four-level stack the dispatch-boundary
-check uses (agent → bundle → platform → default-deny per
+check uses, after any locked platform rules (locked → agent →
+bundle → platform → default-deny per
 qol-tool-permission-discovery-uniform-with-stacking.md). A
 PROMPT-effect match here always collapses to deny — the in-body
 check does NOT trigger the no-rule modal (mid-execution prompts

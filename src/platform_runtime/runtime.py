@@ -378,6 +378,8 @@ async def bootstrap_runtime(  # noqa: PLR0915 — linear runtime-assembly sequen
         config=authz_config,
         catalog=am.catalog(),
         source_map=authz_source_map,
+        locked_source_map=authorization_rule_source_map(root, list_key="locked_rules"),
+        config_file=str(root / "platform.yaml"),
     )
     _warn_if_default_deny_tail_missing(root, authz_config)
     path_policy = load_policy(file_access_cfg)
