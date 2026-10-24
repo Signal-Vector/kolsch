@@ -110,6 +110,8 @@ class WriteFileRunner:
             raise WorkflowFileAccessDenied(
                 path=rendered_path,
                 node=node_name,
+                reason=exc.detail.get("reason"),
+                matched_rule=exc.detail.get("matched_rule"),
             ) from exc
         return {"bytes_written": int(result["bytes_written"])}
 

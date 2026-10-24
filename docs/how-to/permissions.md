@@ -755,6 +755,103 @@ kolsch sessions events ses_<id> \
 
 ---
 
+## What agents can never change (and what they still can)
+
+Permission rules live in files. If an agent can write those files, it
+can change its own permissions. kolsch draws the line like this.
+
+### Never writable by agent file tools
+
+File tools can never write these paths, whatever your rules say:
+
+- `platform.yaml` (authorization rules, `file_access`, providers)
+- `.kolsch/` (setup's baseline and ledgers)
+- `.env` (secrets)
+- `.platform/` (the session store)
+
+This holds under an allow-all rule set, under a workflow `policy:` or
+agent `permissions:` allow, and under `kolsch chat --auto-approve`. It
+also holds for spelling tricks: `bundles/../platform.yaml`,
+`PLATFORM.YAML`, an absolute path, and a symlink that points at
+`platform.yaml` are all refused. The agent sees a `file_access.denied`
+error saying the path is protected. Reading `platform.yaml` still works.
+
+To change these files yourself, use `kolsch permissions`, the approval
+modal's "always allow", `/perm`, `kolsch connect` or `kolsch setup`, or
+edit them in an editor. There is no setting that lets agents write them.
+See [File Handling §4.8](../explanation/file-handling.md#48-the-protected-write-floor).
+
+### Still reachable, so decide deliberately
+
+- **`bash` can do anything.** The shell isn't path-checked and the
+  native sandbox doesn't isolate it. An `allow` rule for
+  `kolsch/tools/bash` lets an agent rewrite `platform.yaml` with a
+  shell command, so keep `bash` on `prompt`.
+- **Writing `bundles/**` is the same as running code.** An agent that
+  can write there can add a tool or `@node` file that runs inside
+  kolsch, edit a starter tool such as `bundles/kolsch/tools/write_file.py`,
+  or widen an agent's `permissions:`, a bundle's `permissions:` or a
+  workflow's `policy:`. A widened `policy:` applies on the workflow's
+  next run, without `/reload`. The author-workflow agent needs to write
+  `bundles/` to do its job, so this isn't blocked; keep `write_file` on
+  `prompt` so you see each write.
+- **`--auto-approve` turns every `prompt` into an allow.** With it,
+  `prompt` rules on `bash` or `write_file` no longer stop anything; only
+  the protected paths above stay out of reach.
+- **A `dir/*` pattern also matches `dir/../anything`.** Rule patterns
+  match the path exactly as the agent wrote it, before `..` is resolved.
+  So `{what: kolsch/tools/write_file, pattern: "data/*", effect: allow}`
+  also allows `data/../bundles/x/agents/y.yaml`. Prefer `prompt` for
+  `write_file` over a narrow-looking `allow`.
+- **Claude Code's own tools.** kolsch starts Claude Code with no tools
+  (text-only agents) or with `--allowedTools` listing only the kolsch
+  tools it bridges, which go through kolsch rules and this floor. But
+  Claude Code also loads your user settings (`~/.claude/settings.json`),
+  and any built-in tool those settings allow (`Write`, `Edit`, `Bash`)
+  is governed by Claude Code, not by kolsch rules or this floor.
+
+### Check your workspace
+
+`kolsch doctor` prints an **Agent write access** section. It lists the
+protected paths, then checks the `allow` rules in `platform.yaml` for
+three things:
+
+- an `allow` for `kolsch/tools/bash` (including `*` and
+  `kolsch/tools/*`);
+- an `allow` for `write_file` whose pattern points into `bundles/`:
+  `bundles/*`, `bundles/<name>/*`, a literal path under `bundles/`, the
+  same under the absolute workspace path, or `*`;
+- any other `allow` for `write_file` whose pattern uses a glob
+  character (`*`, `?` or `[`), such as `data/*`. Patterns match the
+  path as written, and each glob character also matches `/` and `.`,
+  so these reach `bundles/` too: `data/*` matches
+  `data/../bundles/…`, and `?undles/*` matches `bundles/…`.
+
+Matching rules are grouped into one line per kind, by position and the
+id `kolsch permissions list` shows. `prompt` and `deny` rules,
+literal paths outside `bundles/` (no glob characters), and rules for
+other tools are not flagged. Doctor doesn't consider rule order, so an `allow` that an
+earlier `deny` shadows is still reported. Agent, workflow and bundle
+`permissions:` / `policy:` layers aren't checked. The section is
+advisory: doctor's exit code doesn't change.
+
+```text
+Agent write access — advisory, exit code unchanged:
+  agent file tools can never write: platform.yaml, .kolsch/, .env, .platform/ (whatever the rules allow)
+  ! rules 1 (rl_4f188373), 2 (rl_d125ce8f) allow `write_file` under `bundles/` without asking: agents can change bundle code and permission YAML (equivalent to running code).
+  ! rule 3 (rl_cff8db4b) allow `write_file` on a glob pattern without asking: rule patterns match the path as the agent wrote it, and `*`, `?` and `[...]` also match `/` and `.`, so these rules can reach `bundles/` too (for example through `../`) until authz patterns are matched against normalized paths.
+  see these rules (by id) with `kolsch permissions list`.
+  note: `kolsch chat --auto-approve` turns every `prompt` rule into an allow.
+```
+
+With none of those rules, the section ends with:
+
+```text
+  ✓ no rule allows `bash`, and no rule allows `write_file` under `bundles/` or with a glob pattern (`*`, `?`, `[`), without asking
+```
+
+---
+
 ## What this does NOT cover
 
 - **Time-limited rules** ("allow this for 5 minutes"). Deferred.

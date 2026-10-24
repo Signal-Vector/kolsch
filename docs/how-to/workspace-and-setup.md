@@ -136,8 +136,17 @@ it somewhere other than last (or its `authorization` shape can't be
 read). See
 [If your rule list has no default-deny tail](permissions.md#if-your-rule-list-has-no-default-deny-tail).
 
+Always, an advisory **Agent write access** section: the paths agent
+file tools can never write (`platform.yaml`, `.kolsch/`, `.env`,
+`.platform/`), plus grouped warnings for platform `allow` rules for
+`bash`, `write_file` allows whose pattern points into `bundles/`, and
+other `write_file` allows whose pattern uses a glob character (`*`,
+`?`, `[`), which also matches `/` and `.`. See
+[What agents can never change](permissions.md#what-agents-can-never-change-and-what-they-still-can).
+
 Exit code is `0` when clean, `1` when any drift was found. The
-Authorization section never changes the exit code.
+Authorization and Agent write access sections never change the exit
+code.
 
 ## Repairing drift — `kolsch setup --sync-bundle`
 
