@@ -296,6 +296,8 @@ def test_bad_pattern_raises_pattern_invalid_naming_locked_rules() -> None:
             locked=[_LOCKED_BASH, {"what": _BASH, "pattern": "^rm", "effect": "deny"}]
         )
     assert excinfo.value.where == "authz.rule_based.locked_rules[1]"
+    assert str(excinfo.value).startswith("locked_rules[1]: ")
+    assert excinfo.value.code == "authz.pattern_invalid"
 
 
 def test_unknown_tool_ref_raises_with_catalog() -> None:
@@ -305,6 +307,8 @@ def test_unknown_tool_ref_raises_with_catalog() -> None:
             catalog=_catalog(("kolsch", "bash")),
         )
     assert excinfo.value.where == "authz.rule_based.locked_rules[0]"
+    assert str(excinfo.value).startswith("locked_rules[0]: ")
+    assert excinfo.value.code == "authz.tool_ref_unknown"
     # A catalogued ref is fine.
     _provider(locked=[_LOCKED_BASH], catalog=_catalog(("kolsch", "bash")))
 
@@ -417,3 +421,72 @@ async def test_add_locked_rule_shares_pattern_and_catalog_checks() -> None:
     with pytest.raises(AuthzToolRefUnknown):
         await authz.add_locked_rule(Rule(what="kolsch/tools/missing", effect="deny"))
     assert await authz.list_locked_rules() == []
+
+
+# ---------------------------------------------------------------------------
+# B1 — a non-3-segment `what` would load and never fire; rejected
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("with_catalog", [False, True])
+@pytest.mark.parametrize(
+    ("what", "needle"),
+    [
+        ("kolsch/bash", "did you mean 'kolsch/tools/bash'?"),
+        ("kolsch/*", "must be a 3-segment ref"),
+        ("a/tools/b/c", "must be a 3-segment ref"),
+        ("kolsch//bash", "must be a 3-segment ref"),
+    ],
+)
+def test_non_three_segment_what_rejected(
+    what: str, needle: str, *, with_catalog: bool
+) -> None:
+    catalog = _catalog(("kolsch", "bash")) if with_catalog else None
+    with pytest.raises(AuthzMalformedRule) as excinfo:
+        _provider(locked=[{"what": what, "effect": "deny"}], catalog=catalog)
+    message = str(excinfo.value)
+    assert "locked_rules[0]: " in message
+    assert needle in message
+
+
+async def test_two_segment_what_rejected_by_add_locked_rule() -> None:
+    authz = _provider(locked=[], catalog=_catalog(("kolsch", "bash")))
+    with pytest.raises(AuthzRuleInvalid) as excinfo:
+        await authz.add_locked_rule(Rule(what="kolsch/bash", effect="deny"))
+    assert "did you mean 'kolsch/tools/bash'?" in str(excinfo.value)
+    assert await authz.list_locked_rules() == []
+
+
+async def test_corrected_three_segment_lock_beats_agent_allow() -> None:
+    # The 2-seg spelling is refused; the canonical one the error
+    # suggests loads against a real catalog and beats an agent allow.
+    authz = _provider(
+        locked=[{"what": _BASH, "effect": "deny"}],
+        rules=_PLATFORM_RULES,
+        catalog=_catalog(
+            ("kolsch", "bash"), ("kolsch", "read_file"), ("kolsch", "write_file")
+        ),
+    )
+    result = await authz.allow(
+        "user.local",
+        _BASH,
+        target="rm -rf /tmp/x",
+        layers=(PermissionLayer(name="agent", rules=_ALLOW_BASH),),
+    )
+    _assert_locked_deny(result)
+
+
+# ---------------------------------------------------------------------------
+# N3 — the compile choke point refuses a non-deny outright
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("effect", ["allow", "prompt"])
+def test_compile_choke_point_refuses_non_deny(effect: str) -> None:
+    authz = _provider(locked=[])
+    with pytest.raises(
+        AuthzMalformedRule, match=r"locked_rules\[0\]: effect must be 'deny'"
+    ):
+        authz._compile_locked_fields(
+            0, {"what": _BASH, "pattern": "*", "effect": effect}, source=None
+        )
