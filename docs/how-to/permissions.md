@@ -227,7 +227,8 @@ named. Fix the rule and reload.
 
 ### Path targets
 
-For file tools (`read_file`, `write_file`, `list_files`, and the
+For file tools (`read_file`, `write_file`, `list_files`, the legacy
+`read` / `write` / `edit`, and the
 `kolsch/nodes/{read_file,write_file,list_files}` workflow nodes) the
 target is the tool's `path` argument, matched in **canonical form** —
 `..`, `./`, `//` and symlinks are resolved first, and a relative path
@@ -306,7 +307,8 @@ else. The full rules are in the
       a symlink is shown at its destination, which may be outside the
       workspace, such as `/etc/x`). Newly persisted "always" rules are
       therefore workspace-relative.
-    - **B8 — unresolvable paths** (an embedded NUL byte) fail with
+    - **B8 — unresolvable paths.** Any path that can't be resolved
+      (including one with an embedded NUL byte) fails closed with
       `file_access.denied` before any rule is consulted.
 
     Unchanged: every `pattern: "*"` rule (all `kolsch setup` defaults),
