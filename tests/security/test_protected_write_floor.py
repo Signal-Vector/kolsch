@@ -39,6 +39,7 @@ from files import PathPolicy, load_policy
 from providers import DotenvSecretsProvider, NativeSandboxProvider
 from providers.authz import RuleBasedAuthorizationProvider
 from schemas import AgentId, SessionId, ThreadId
+from schemas.caller_chain import CallerChain
 from tools.builtins import (
     EditArgs,
     WriteArgs,
@@ -172,6 +173,7 @@ def _ctx(root: Path, policy: PathPolicy) -> ToolContext:
         secrets={},
         workspace_root=root,
         path_policy=policy,
+        caller_chain=CallerChain.unattributed(),
     )
 
 

@@ -18,7 +18,12 @@ import pytest
 from pydantic import BaseModel
 
 from errors import ToolUnauthorized
-from providers.authz import AuthzEffect, Rule, RuleBasedAuthorizationProvider
+from providers.authz import (
+    AuthzEffect,
+    Rule,
+    RuleBasedAuthorizationProvider,
+    RulePersistRequest,
+)
 from schemas import AgentId, CallerChain, SessionId, ThreadId
 from tools.decorator import ToolContext, ToolDefinition
 from tools.dispatch import dispatch_tool
@@ -110,16 +115,20 @@ async def test_persisted_scoped_rule_allows_only_that_agent() -> None:
         }
     )
     callback = _ScopingCallback()
-    persisted: list[list[Rule]] = []
+    persisted: list[RulePersistRequest] = []
     provider.register_prompt_callback(callback, on_rule_added=persisted.append)
 
     # A's first call prompts; the callback sees A's real chain and
     # persists an A-scoped allow.
     assert await _dispatch(provider, _A) == "ok"
     assert callback.chains == [(_A,)]
-    (rules,) = persisted
-    scoped = [r for r in rules if r.from_ == _A]
-    assert [(r.what, r.effect) for r in scoped] == [(_ACTION, "allow")]
+    # bug-162: the hook gets the one rule to persist, not the whole list.
+    (request,) = persisted
+    assert (request.rule.what, request.rule.from_, request.rule.effect) == (
+        _ACTION,
+        _A,
+        "allow",
+    )
 
     # A's next call matches the persisted rule — no prompt.
     assert await _dispatch(provider, _A) == "ok"
