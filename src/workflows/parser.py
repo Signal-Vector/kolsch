@@ -49,7 +49,7 @@ from pydantic_core import PydanticCustomError
 from assets.refs import is_three_segment
 from kolsch._yamlio import YAMLError, load
 from providers.authz import Rule
-from schemas.config import IOSpec
+from schemas.config import IOSpec, reserved_rule_id_violation
 from workflows.catalog_node import (
     BUILTIN_TYPE_NAMES,
     CatalogNodeDef,
@@ -810,6 +810,22 @@ class Workflow(BaseModel):
             )
             raise WorkflowValidationError(msg)
         return data
+
+    @field_validator("policy")
+    @classmethod
+    def _reject_reserved_rule_ids(cls, policy: list[Rule]) -> list[Rule]:
+        """Refuse a `policy:` rule whose `id` spoofs the locked-rule prefix.
+
+        Only `platform.yaml`'s `locked_rules` may carry `rl_locked_` ids;
+        one here would make a workflow allow look like a locked rule in
+        denials and in `policy.decision.made`.
+        """
+        for index, rule in enumerate(policy):
+            reason = reserved_rule_id_violation(rule.id)
+            if reason is not None:
+                msg = f"policy[{index}]: {reason}"
+                raise WorkflowValidationError(msg)
+        return policy
 
     @property
     def kind(self) -> Literal["workflow", "node_library"]:

@@ -15,7 +15,7 @@ reports where (if anywhere) the tail sits.
 Ahead of every caller layer sits the opt-in `locked_rules` stage:
 deny-only platform rules no workflow, agent or bundle `allow` can
 override (ids prefixed
-[`LOCKED_RULE_ID_PREFIX`][providers.authz.LOCKED_RULE_ID_PREFIX]).
+[`LOCKED_RULE_ID_PREFIX`][schemas.config.LOCKED_RULE_ID_PREFIX]).
 The full walk is locked → caller layers → platform `rules` → no-rule
 prompt → default deny.
 
@@ -65,7 +65,11 @@ from errors import (
 )
 from errors.assets import AssetsAmbiguousShorthand
 from files.authz_target import path_pattern_matches
-from schemas.config import legacy_rule_scope_violation
+from schemas.config import LOCKED_RULE_ID_PREFIX as _RESERVED_LOCKED_PREFIX
+from schemas.config import (
+    legacy_rule_scope_violation,
+    reserved_rule_id_violation,
+)
 from workflows.errors import (
     WorkflowFromAssetTypeError,
     WorkflowFromNotFound,
@@ -391,16 +395,14 @@ def derive_rule_id(
     return f"rl_{digest}"
 
 
-LOCKED_RULE_ID_PREFIX = "rl_locked_"
-"""The id prefix every locked platform rule carries.
-
-Locked rules live in `authorization.config.locked_rules` and are
-evaluated before every layer. The prefix is how the CLI, the denial
-hint and the `/why` card recognise a locked rule from its id alone
-(`tool.failed`'s `matched_rule` and `policy.decision.made`'s
-`rule_id` carry no separate layer field). It can never collide with a
-[`derive_rule_id`][providers.authz.derive_rule_id] output, whose body
-after `rl_` is eight hex digits."""
+# The id prefix every locked platform rule carries (defined in
+# `schemas.config` so rule schemas can refuse it in author-written ids;
+# re-exported here as the provider's public name). The CLI, the denial
+# hint and the `/why` card recognise a locked rule by it, since
+# `tool.failed`'s `matched_rule` and `policy.decision.made`'s `rule_id`
+# carry no separate layer field. It never collides with a
+# `derive_rule_id` output, whose body after `rl_` is eight hex digits.
+LOCKED_RULE_ID_PREFIX: str = _RESERVED_LOCKED_PREFIX
 
 
 _LOCKED_RULE_KEYS: frozenset[str] = frozenset({"what", "pattern", "effect"})
@@ -410,7 +412,7 @@ def derive_locked_rule_id(what: str, pattern: str, effect: str) -> str:
     """Return the deterministic id of a locked platform rule.
 
     The id is
-    [`LOCKED_RULE_ID_PREFIX`][providers.authz.LOCKED_RULE_ID_PREFIX]
+    [`LOCKED_RULE_ID_PREFIX`][schemas.config.LOCKED_RULE_ID_PREFIX]
     followed by the first eight hex digits of
     `sha256("locked|" + what + "|" + pattern + "|" + effect)`. Unlike
     [`derive_rule_id`][providers.authz.derive_rule_id] it has no
@@ -1085,7 +1087,7 @@ class RuleBasedAuthorizationProvider:
     `what`/`pattern`/`effect`, a legacy `who`, an effect other than
     `deny`, a non-null `from:`, the catch-all, a duplicate). Locked
     ids carry
-    [`LOCKED_RULE_ID_PREFIX`][providers.authz.LOCKED_RULE_ID_PREFIX].
+    [`LOCKED_RULE_ID_PREFIX`][schemas.config.LOCKED_RULE_ID_PREFIX].
     They are exposed through
     [`list_locked_rules`][providers.authz.RuleBasedAuthorizationProvider.list_locked_rules]
     and
@@ -1362,6 +1364,9 @@ class RuleBasedAuthorizationProvider:
         # deterministically. This lets pre-existing rule lists
         # round-trip stably through `list_rules` + reload.
         supplied_id = entry.get("id")
+        reserved = reserved_rule_id_violation(supplied_id)
+        if reserved is not None:
+            raise AuthzMalformedRule(rule_index=index, error=reserved)
         rule_id = (
             supplied_id
             if isinstance(supplied_id, str) and supplied_id
@@ -2113,7 +2118,7 @@ class RuleBasedAuthorizationProvider:
         """Return the locked platform rules, in evaluation order.
 
         Every entry is a deny with an id starting
-        [`LOCKED_RULE_ID_PREFIX`][providers.authz.LOCKED_RULE_ID_PREFIX].
+        [`LOCKED_RULE_ID_PREFIX`][schemas.config.LOCKED_RULE_ID_PREFIX].
         Empty when `platform.yaml` has no `locked_rules`.
         """
         return [c.raw for c in self._locked_rules]
@@ -2456,8 +2461,15 @@ class RuleBasedAuthorizationProvider:
         constructed a `Rule`, and per call for agent / bundle /
         workflow layer rules. A legacy rule carrying `from_` or a
         non-`*` `pattern` raises `AuthzMalformedRule` (`rule_index=-1`)
-        before any caller mutates its rule list.
+        before any caller mutates its rule list, as does an `id` with
+        the reserved locked prefix (only the locked compile path, which
+        never comes through here, assigns those).
         """
+        reserved = reserved_rule_id_violation(rule.id)
+        if reserved is not None:
+            # `Rule` refuses such an id at construction; this catches a
+            # `model_construct` / `model_copy` bypass.
+            raise AuthzMalformedRule(rule_index=-1, error=reserved)
         if rule.is_legacy:
             assert rule.who is not None
             # `Rule`'s validator already refuses this; re-check for

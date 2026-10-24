@@ -1077,8 +1077,9 @@ the fix):
   would stop layers from narrowing, and a locked `prompt` would
   persist "always" answers into the `rules` list it pre-empts.
 - **`{what, pattern, effect}` only.** No legacy `who`, no `id` (ids are
-  derived as `rl_locked_<hash>`), and no `from:` — a locked rule
-  applies to every caller.
+  derived as `rl_locked_<hash>`, and that prefix is refused on any
+  other rule, so it always means "locked"), and no `from:` — a locked
+  rule applies to every caller.
 - **`what` is a full three-segment ref** (`kolsch/tools/bash`, not
   `kolsch/bash` — the short form would load and never match) or a
   system action like `agent.execute.<ref>`.

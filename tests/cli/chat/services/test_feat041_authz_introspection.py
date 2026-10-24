@@ -783,3 +783,18 @@ def test_why_card_layer_locked_from_rule_id() -> None:
         action="kolsch/tools/bash",
     )
     assert _assemble_card_data([cast("Any", plain)], cast("Any", plain)).layer is None
+
+
+def test_spoofed_locked_id_on_a_non_deny_is_not_reported_locked() -> None:
+    # A locked rule is always a deny; a prefixed id on another effect
+    # (only reachable by bypassing load-time validation) isn't "locked".
+    spoof = {**_locked_matched_rule(), "effect": "prompt"}
+    assert "locked rule" not in format_denial_hint(spoof)
+    tool_failed = _make_tool_failed_event(
+        tool_call_id="tc_3",
+        tool_name="bash",
+        matched_rule=spoof,
+        action="kolsch/tools/bash",
+    )
+    card = _assemble_card_data([cast("Any", tool_failed)], cast("Any", tool_failed))
+    assert card.layer is None

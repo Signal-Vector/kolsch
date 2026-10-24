@@ -1139,7 +1139,11 @@ message naming `locked_rules[<i>]` and, when the caller supplies it, the file (w
 `derive_rule_id` and never `rl_default_deny`. The id prefix
 (`LOCKED_RULE_ID_PREFIX`) is how surfaces recognise a locked rule: it
 travels as `rule_id` in `policy.decision.made` and as
-`matched_rule.id` in `tool.failed` (no event schema change).
+`matched_rule.id` in `tool.failed` (no event schema change). The prefix
+is reserved: an author-written `id` starting with it — on a legacy
+`platform.yaml` rule, a workflow `policy:` rule, an agent or bundle
+`permissions:` rule, or a rule handed to `add_rule` — is refused, so
+only the locked stage can produce one.
 
 **Provider API.** `list_locked_rules()` and `add_locked_rule(rule)`
 (same validation, raising `AuthzRuleInvalid`); `get_rule` and

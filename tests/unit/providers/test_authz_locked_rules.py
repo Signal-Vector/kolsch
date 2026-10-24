@@ -490,3 +490,72 @@ def test_compile_choke_point_refuses_non_deny(effect: str) -> None:
         authz._compile_locked_fields(
             0, {"what": _BASH, "pattern": "*", "effect": effect}, source=None
         )
+
+
+# ---------------------------------------------------------------------------
+# R1 — the `rl_locked_` prefix is reserved; author-written ids can't spoof it
+# ---------------------------------------------------------------------------
+
+_SPOOF = "rl_locked_deadbeef"
+
+
+def test_legacy_platform_rule_with_spoofed_id_fails_to_load() -> None:
+    with pytest.raises(AuthzMalformedRule) as excinfo:
+        _provider(rules=[{"id": _SPOOF, "who": ".*", "what": ".*", "effect": "allow"}])
+    assert "reserved prefix" in str(excinfo.value)
+    assert "authorization.config.locked_rules" in str(excinfo.value)
+
+
+async def test_new_shape_platform_rule_id_key_never_yields_a_locked_id() -> None:
+    authz = _provider(rules=[{"what": _BASH, "effect": "allow", "id": _SPOOF}])
+    [rule] = await authz.list_rules()
+    assert not rule.id.startswith(LOCKED_RULE_ID_PREFIX)
+    result = await authz.allow("user.local", _BASH, target="ls")
+    assert result.rule_id is not None
+    assert not result.rule_id.startswith(LOCKED_RULE_ID_PREFIX)
+
+
+def test_permission_rule_refuses_spoofed_id() -> None:
+    from pydantic import ValidationError
+
+    from schemas.config import PermissionRule
+
+    with pytest.raises(ValidationError, match="reserved prefix"):
+        PermissionRule(what=_BASH, effect="allow", id=_SPOOF)
+
+
+async def test_layer_or_added_rule_with_spoofed_id_is_refused() -> None:
+    # `Rule` itself can carry the id (locked rules are `Rule`s); every
+    # place an author-written rule is compiled refuses it.
+    spoofed = Rule(what=_BASH, pattern="*", effect="allow", id=_SPOOF)
+    authz = _provider(rules=_PLATFORM_RULES)
+    with pytest.raises(AuthzMalformedRule, match="reserved prefix"):
+        await authz.allow(
+            "user.local",
+            _BASH,
+            target="ls",
+            layers=(PermissionLayer(name="workflow", rules=(spoofed,)),),
+        )
+    with pytest.raises(AuthzMalformedRule, match="reserved prefix"):
+        await authz.add_rule(spoofed)
+
+
+def test_workflow_policy_with_spoofed_id_is_refused_at_parse(tmp_path: Any) -> None:
+    from pydantic import ValidationError
+
+    from workflows.errors import WorkflowValidationError
+    from workflows.parser import load_workflow
+
+    path = tmp_path / "spoof.yaml"
+    path.write_text(
+        "policy:\n"
+        f"  - {{what: kolsch/tools/bash, pattern: '*', effect: allow, id: {_SPOOF}}}\n"
+        "nodes:\n"
+        "  greet: {type: kolsch/nodes/bash, command: 'echo hi'}\n"
+        "graph:\n"
+        "  edges: []\n",
+        encoding="utf-8",
+    )
+    with pytest.raises((ValidationError, WorkflowValidationError)) as excinfo:
+        load_workflow(path)
+    assert "reserved prefix" in str(excinfo.value)

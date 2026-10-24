@@ -97,7 +97,7 @@ def format_denial_hint(matched_rule: dict[str, Any]) -> str:
         at_clause = "at (unknown source)"
     pattern = matched_rule.get("pattern") or matched_rule.get("what") or "*"
     line1 = f"denied by {rule_id} ({effect}) {at_clause}"
-    if _is_locked_rule_id(matched_rule.get("id")):
+    if _is_locked_denial(matched_rule):
         line2 = (
             "locked rule — workflow/agent/bundle allows can't override it; "
             "edit authorization.config.locked_rules in platform.yaml, then /reload"
@@ -107,11 +107,23 @@ def format_denial_hint(matched_rule: dict[str, Any]) -> str:
     return f"{line1}\n{line2}"
 
 
-def _is_locked_rule_id(rule_id: object) -> bool:
-    """Return True for a locked platform rule's id (`rl_locked_<hash>`)."""
+def _is_locked_denial(matched_rule: dict[str, Any]) -> bool:
+    """Return True when `matched_rule` is a locked platform rule's deny.
+
+    Keyed on the `rl_locked_<hash>` id, which only the locked stage
+    assigns (author-written ids with the prefix are refused at load),
+    and on `effect: deny`, the only effect a locked rule can have — so
+    a rule that somehow carried the prefix with another effect is not
+    reported as locked.
+    """
     from providers import LOCKED_RULE_ID_PREFIX  # noqa: PLC0415
 
-    return isinstance(rule_id, str) and rule_id.startswith(LOCKED_RULE_ID_PREFIX)
+    rule_id = matched_rule.get("id")
+    return (
+        isinstance(rule_id, str)
+        and rule_id.startswith(LOCKED_RULE_ID_PREFIX)
+        and matched_rule.get("effect") == "deny"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -473,7 +485,7 @@ def _assemble_card_data(
     )
     # A locked rule is identifiable from its id alone, so its layer is
     # known even though no reason string reaches this reader.
-    if layer is None and _is_locked_rule_id(matched_rule.get("id")):
+    if layer is None and _is_locked_denial(matched_rule):
         layer = "locked"
 
     # Target string — prefer the policy event (which normalises None
