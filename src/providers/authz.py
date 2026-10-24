@@ -1101,7 +1101,13 @@ class RuleBasedAuthorizationProvider:
         catalog: AssetCatalog | None = None,
         source_map: RuleSourceMap | None = None,
         locked_source_map: RuleSourceMap | None = None,
+        config_file: str | None = None,
     ) -> None:
+        # feat-160 — the file the config came from (`platform.yaml`),
+        # named in `locked_rules` load errors so a typo that stops every
+        # command points straight at its fix. `None` for programmatic
+        # construction.
+        self._config_file = config_file
         raw_rules = config.get("rules", []) or []
         if not isinstance(raw_rules, list):
             raise AuthzMalformedRule(
@@ -1113,9 +1119,10 @@ class RuleBasedAuthorizationProvider:
             raise AuthzMalformedRule(
                 rule_index=-1,
                 error=(
-                    "`locked_rules` must be a list of "
-                    "`{what, pattern, effect: deny}` mappings; got "
-                    f"{type(raw_locked).__name__}"
+                    "`locked_rules`"
+                    + (f" in {config_file}" if config_file else "")
+                    + " must be a list of `{what, pattern, effect: deny}` "
+                    f"mappings; got {type(raw_locked).__name__}"
                 ),
             )
         # The action-to-tool-ref bridge is gone for tools (the action
@@ -1160,7 +1167,7 @@ class RuleBasedAuthorizationProvider:
                     raise AuthzMalformedRule(
                         rule_index=index,
                         error=(
-                            f"locked_rules[{index}]: duplicate of "
+                            f"{self._locked_label(index)}: duplicate of "
                             f"locked_rules[{prior_index}] (same what/pattern/"
                             f"effect, id {compiled.raw.id}); remove one"
                         ),
@@ -1204,6 +1211,16 @@ class RuleBasedAuthorizationProvider:
             return self._compile_legacy(index, entry, source=source)
         return self._compile_new_shape(index, entry, source=source)
 
+    def _locked_label(self, index: int) -> str:
+        """Return `locked_rules[<index>]`, plus where it was authored when known."""
+        label = f"locked_rules[{index}]"
+        source = self._locked_source_map.get(index)
+        if source is not None:
+            return f"{label} ({source[0]}:{source[1]})"
+        if self._config_file:
+            return f"{label} in {self._config_file}"
+        return label
+
     def _compile_locked(self, index: int, entry: object) -> _CompiledRule:
         """Compile one `locked_rules` entry, rejecting anything not locked-legal.
 
@@ -1216,23 +1233,20 @@ class RuleBasedAuthorizationProvider:
         `authz.rule_based.locked_rules[<index>]`, so they are not
         mistaken for a `rules` entry at the same index.
         """
+        label = self._locked_label(index)
         if not isinstance(entry, dict):
             raise AuthzMalformedRule(
                 rule_index=index,
-                error=(
-                    f"locked_rules[{index}]: rule must be a mapping; got "
-                    f"{type(entry).__name__}"
-                ),
+                error=(f"{label}: rule must be a mapping; got {type(entry).__name__}"),
             )
         problem = _locked_rule_problem(entry)
         if problem is not None:
-            raise AuthzMalformedRule(
-                rule_index=index, error=f"locked_rules[{index}]: {problem}"
-            )
+            raise AuthzMalformedRule(rule_index=index, error=f"{label}: {problem}")
         return self._compile_locked_fields(
             index,
             {key: entry[key] for key in _LOCKED_RULE_KEYS if key in entry},
             source=self._locked_source_map.get(index),
+            label=label,
         )
 
     def _compile_locked_fields(
@@ -1241,6 +1255,7 @@ class RuleBasedAuthorizationProvider:
         fields: dict[str, Any],
         *,
         source: tuple[str, int] | None,
+        label: str | None = None,
     ) -> _CompiledRule:
         """Run the shared new-shape compile on pre-checked locked fields.
 
@@ -1248,20 +1263,21 @@ class RuleBasedAuthorizationProvider:
         the shared matcher inputs (so locked rules match exactly like
         platform rules) but carries the locked id. Typed errors from the
         shared checks keep their type and code, with the message
-        prefixed `locked_rules[<index>]: `.
+        prefixed `<label>: ` (default `locked_rules[<index>]`).
         """
         where = f"authz.rule_based.locked_rules[{index}]"
+        label = label or f"locked_rules[{index}]"
         try:
             compiled = self._compile_new_shape(index, fields, source=source)
         except AuthzMalformedRule as exc:
             error = str(exc.detail.get("error", exc))
             raise AuthzMalformedRule(
-                rule_index=index, error=f"locked_rules[{index}]: {error}"
+                rule_index=index, error=f"{label}: {error}"
             ) from exc
         except PlatformError as exc:
             # Keep the type, code and detail; prefix the message so an
             # operator reading it looks at `locked_rules`, not `rules`.
-            exc.args = (f"locked_rules[{index}]: {exc}",)
+            exc.args = (f"{label}: {exc}",)
             exc.where = where
             raise
         # The single choke point both `locked_rules` load and
@@ -1271,10 +1287,7 @@ class RuleBasedAuthorizationProvider:
         if compiled.effect != "deny":
             raise AuthzMalformedRule(
                 rule_index=index,
-                error=(
-                    f"locked_rules[{index}]: effect must be 'deny'; got "
-                    f"{compiled.effect!r}"
-                ),
+                error=(f"{label}: effect must be 'deny'; got {compiled.effect!r}"),
             )
         raw = compiled.raw.model_copy(
             update={
@@ -2086,6 +2099,15 @@ class RuleBasedAuthorizationProvider:
         entry's normalized fields and stable id.
         """
         return [c.raw for c in self._rules]
+
+    def locked_rules_snapshot(self) -> list[Rule]:
+        """Return the locked platform rules, in evaluation order (sync).
+
+        Synchronous twin of
+        [`list_locked_rules`][providers.authz.RuleBasedAuthorizationProvider.list_locked_rules]
+        for `cli.permissions.mutate_platform_rules`'s locked ops.
+        """
+        return [c.raw for c in self._locked_rules]
 
     async def list_locked_rules(self) -> list[Rule]:
         """Return the locked platform rules, in evaluation order.

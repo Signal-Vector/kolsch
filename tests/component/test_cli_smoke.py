@@ -362,6 +362,51 @@ def test_tc_cli_smoke_13_permissions_list(initialized_workspace: Path) -> None:
     assert "rl_default_deny" in result.stdout
 
 
+def test_tc_cli_smoke_13b_permissions_add_locked_round_trip(
+    initialized_workspace: Path, tmp_path: Path
+) -> None:
+    """TC-CLI-SMOKE-13b (feat-160): ``permissions add --locked`` parses and
+    dispatches in a fresh process; the lock lists first and removes
+    cleanly. Runs on a copy so the shared workspace stays untouched."""
+    import shutil
+
+    workspace = tmp_path / "ws"
+    shutil.copytree(initialized_workspace, workspace)
+    added = _run(
+        "permissions",
+        "add",
+        "--locked",
+        "--what",
+        "kolsch/tools/bash",
+        "--effect",
+        "deny",
+        workspace=workspace,
+    )
+    assert added.returncode == 0, added.stderr
+    _assert_no_traceback(added)
+    assert "added locked rule rl_locked_" in added.stdout
+    rule_id = added.stdout.split("added locked rule ", 1)[1].split(":", 1)[0]
+    listed = _run("permissions", "list", workspace=workspace)
+    assert listed.returncode == 0
+    assert listed.stdout.startswith("locked (")
+    refused = _run(
+        "permissions",
+        "add",
+        "--locked",
+        "--what",
+        "kolsch/tools/bash",
+        "--effect",
+        "allow",
+        workspace=workspace,
+    )
+    assert refused.returncode == 1
+    _assert_no_traceback(refused)
+    assert refused.stderr.startswith("error: ")
+    removed = _run("permissions", "remove", rule_id, workspace=workspace)
+    assert removed.returncode == 0, removed.stderr
+    assert "locked" not in _run("permissions", "list", workspace=workspace).stdout
+
+
 def test_tc_cli_smoke_14_missing_workspace_friendly_message(
     tmp_path: Path,
 ) -> None:
