@@ -26,7 +26,7 @@ git config --get core.hooksPath      # → .githooks
 | `post-commit` | `git commit` | Rebuilds the codanna index in the background |
 | `post-merge` | `git pull` / `git merge` | Same |
 | `post-checkout` | branch switch (skips file checkouts) | Same |
-| `pre-push` | `git push` to `refs/heads/main` | Runs the FULL local landing gate (`scripts/commit-gate`) and blocks the push if it fails |
+| `pre-push` | `git push` to `refs/heads/main` | Runs the FULL local landing gate (`scripts/commit-gate`) and blocks the push if it fails. **Dormant:** `main` is protected by a GitHub ruleset and only accepts changes through PRs, so direct pushes are rejected and this hook no longer fires in practice. Run `scripts/commit-gate` by hand before opening a PR (see `AGENTS.md` → "Landing a change"). |
 
 The three codanna `post-*` hooks use `codanna index -f` — the `-f`
 (force) flag is a

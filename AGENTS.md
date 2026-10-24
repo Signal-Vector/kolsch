@@ -93,9 +93,10 @@ podman-compose -f compose.dev.yml exec dev uv run pytest tests/golden
 #   Unexpected golden diff = your change altered emitted events.
 #   If intentional: ... uv run pytest --update-golden, then review the diff.
 
-# Full gate: clean rebuild + whole suite + coverage (the pre-push hook
-# runs this on a push to `main`). Do NOT trust the dev container for the
-# final check — rebuild clean. Easiest is the wrapper:
+# Full gate: clean rebuild + whole suite + coverage. Run it yourself
+# before opening a PR — nothing runs it automatically (see "Landing a
+# change" below). Do NOT trust the dev container for the final check —
+# rebuild clean. Easiest is the wrapper:
 scripts/commit-gate            # cached build
 scripts/commit-gate --clean    # pristine --no-cache rebuild
 # ...which is equivalent to:
@@ -105,6 +106,10 @@ podman-compose -f compose.test.yml up --abort-on-container-exit --exit-code-from
 
 # Commit using Conventional Commits (only after the gate passes):
 git commit -m "fix(store): correct parent_event_id under concurrent append"
+
+# Land it through a pull request (main is protected — no direct pushes):
+git push -u origin <branch>
+gh pr create --base main --fill
 ```
 
 The inner loop is fast because source is live-mounted — no rebuild for
@@ -119,43 +124,63 @@ The test gate is split into two scopes of the **same**
 chat-hex lint first, fail-fast), selected by `GATE_SCOPE`:
 
 - **`full`** (default) — the whole `tests/` tree WITH coverage and the
-  **85% floor**. This is the hard landing gate. It runs **locally** at
-  push-to-`main` via the `.githooks/pre-push` hook (which calls
-  `scripts/commit-gate`), and blocks the push on any failure. Run it by
-  hand anytime with `scripts/commit-gate` (cached) / `--clean` (pristine).
+  **85% floor**. This is the landing gate. It runs **locally only**:
+  run `scripts/commit-gate` (cached) / `--clean` (pristine) on your
+  branch before opening a PR, and say in the PR description that it
+  passed.
 - **`sanity`** — the whole tree **minus** the two heavy dirs
   (`tests/cli`, `tests/component`), **no** coverage. This is what
-  **GitHub CI** runs on every push (~3 min vs ~16 min). `tests/golden`
-  and `tests/security` DO run in sanity — only the two heavy tiers and
-  the coverage floor are dropped.
+  **GitHub CI** runs (job `gate (compose.test.yml)`, ~3 min vs ~16 min)
+  on every PR and every push to `main`. `tests/golden` and
+  `tests/security` DO run in sanity — only the two heavy tiers and the
+  coverage floor are dropped.
 
-Development reaches `main` via local `git merge` + `git push origin
-main`, so the pre-push hook is the enforcement point. One-time setup per
-clone is the same `git config core.hooksPath .githooks` documented in
-`.githooks/README.md` — without it, local pushes to `main` are ungated.
+### Landing a change: pull requests only
+
+`main` on GitHub is protected by the repository ruleset **"main
+protection"**:
+
+- **No direct pushes, force-pushes or deletion of `main`** — for
+  everyone, admins included. `git push origin main` is rejected.
+- **Every change lands through a pull request** that needs **1
+  approving review** and the **`gate (compose.test.yml)`** status check,
+  and must be up to date with `main`.
+- **Repository admins may merge their own PR without an approval** (the
+  ruleset's bypass is limited to pull requests). GitHub never lets a
+  PR's author approve their own PR, so this bypass is how a solo admin
+  lands work.
+
+The flow: branch → commit → `scripts/commit-gate` → push the branch →
+`gh pr create` → review → merge. Agents stop at "PR open and CI green"
+and hand the PR to a human to review and merge; they never merge, and
+never bypass the ruleset.
+
+The `.githooks/pre-push` hook still exists and would run the full gate
+on a push to `main`, but since direct pushes are rejected it no longer
+fires in practice. Run `git config core.hooksPath .githooks` once per
+clone anyway — the other hooks (codanna index refresh) still apply.
 
 ### Risks & Non-Guarantees (accepted)
 
-The full gate is **local-only** — there is deliberately **no GitHub
-backstop**. Known, accepted consequences:
+GitHub enforces the PR, the review and the **sanity** check; the
+**full** gate is still **local-only**. Known, accepted consequences:
 
-1. **`git push --no-verify` skips the full gate.** A `--no-verify` push
-   to `main` lands unvalidated. Intended escape hatch, not a bug.
-2. **A fresh clone / second machine has no enforcement** until
-   `git config core.hooksPath .githooks` is run. Until then, pushes to
-   `main` are ungated locally.
-3. **The 85% coverage floor and the two heavy tiers (`cli`,
-   `component`) are not on GitHub.** `golden` and `security` still run on
-   GitHub every push; the coverage floor and the two heavy tiers do not.
-   A coverage regression or a `cli`/`component` regression is invisible
-   on GitHub until the local full gate runs at push-to-`main`.
-4. **The `pull_request` trigger runs only the sanity subset.** If code
-   ever reaches `main` via a GitHub PR merge (rather than a local push),
-   the full gate never fires and no branch protection requires the hook.
-5. **CI green now means "sanity passed," not "full gate passed."** Do
-   not treat a green `ci` badge as "safe to build on."
+1. **Nothing enforces the full gate.** It runs only if the author runs
+   `scripts/commit-gate` before opening the PR. Reviewers should look for
+   "full gate passed" in the PR description.
+2. **The 85% coverage floor and the two heavy tiers (`cli`,
+   `component`) are not on GitHub.** `golden` and `security` run in the
+   required sanity check; the coverage floor and the two heavy tiers do
+   not. A coverage or `cli`/`component` regression is invisible on
+   GitHub if the author skipped the local gate.
+3. **The required check means "sanity passed," not "full gate
+   passed."** Do not treat a green `gate (compose.test.yml)` as "safe to
+   build on" on its own.
+4. **An admin can merge their own PR without a second reviewer** (the
+   ruleset's PR-only bypass). That's intentional for a small team; the
+   PR, CI and the full-gate note in the description are the safeguards.
 
-If the gate blocks a push, fix the issue rather than bypassing.
+If the gate fails, fix the issue rather than bypassing it.
 
 ---
 
