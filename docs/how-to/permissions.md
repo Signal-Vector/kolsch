@@ -1260,11 +1260,13 @@ See [File Handling §4.8](../explanation/file-handling.md#48-the-protected-write
 - **`--auto-approve` turns every `prompt` into an allow.** With it,
   `prompt` rules on `bash` or `write_file` no longer stop anything; only
   the protected paths above stay out of reach.
-- **A `dir/*` pattern also matches `dir/../anything`.** Rule patterns
-  match the path exactly as the agent wrote it, before `..` is resolved.
-  So `{what: kolsch/tools/write_file, pattern: "data/*", effect: allow}`
-  also allows `data/../bundles/x/agents/y.yaml`. Prefer `prompt` for
-  `write_file` over a narrow-looking `allow`.
+- **A glob reaches further than it reads.** File-tool patterns are
+  matched on the canonical path, so `..`, `./` and symlinks can't walk
+  out of an `allow` (see [Path targets](#path-targets)). But `*`, `?`
+  and `[...]` also match `/`: `data/*` allows anything under `data/` at
+  any depth, and `?undles/*` allows `bundles/…`. The protected paths
+  above stay refused whatever a pattern matches. Prefer `prompt` for
+  `write_file` over a broad-looking `allow`.
 - **Claude Code's own tools.** kolsch starts Claude Code with no tools
   (text-only agents) or with `--allowedTools` listing only the kolsch
   tools it bridges, which go through kolsch rules and this floor. But
@@ -1284,10 +1286,10 @@ three things:
   `bundles/*`, `bundles/<name>/*`, a literal path under `bundles/`, the
   same under the absolute workspace path, or `*`;
 - any other `allow` for `write_file` whose pattern uses a glob
-  character (`*`, `?` or `[`), such as `data/*`. Patterns match the
-  path as written, and each glob character also matches `/` and `.`,
-  so these reach `bundles/` too: `data/*` matches
-  `data/../bundles/…`, and `?undles/*` matches `bundles/…`.
+  character (`*`, `?` or `[`), such as `data/*`. Patterns are matched
+  on the canonical path, so `../` can't escape them, but each glob
+  character also matches `/` and `.`, so a glob can still reach further
+  than it reads: `?undles/*` matches `bundles/…`.
 
 Matching rules are grouped into one line per kind, by position and the
 id `kolsch permissions list` shows. `prompt` and `deny` rules,
@@ -1301,7 +1303,7 @@ advisory: doctor's exit code doesn't change.
 Agent write access — advisory, exit code unchanged:
   agent file tools can never write: platform.yaml, .kolsch/, .env, .platform/ (whatever the rules allow)
   ! rules 1 (rl_4f188373), 2 (rl_d125ce8f) allow `write_file` under `bundles/` without asking: agents can change bundle code and permission YAML (equivalent to running code).
-  ! rule 3 (rl_cff8db4b) allow `write_file` on a glob pattern without asking: rule patterns match the path as the agent wrote it, and `*`, `?` and `[...]` also match `/` and `.`, so these rules can reach `bundles/` too (for example through `../`) until authz patterns are matched against normalized paths.
+  ! rule 3 (rl_cff8db4b) allow `write_file` on a glob pattern without asking: glob characters `*`, `?` and `[...]` also match `/` and `.`, so these rules can reach further than they read (for example `?undles/*` matches `bundles/…`); patterns are matched on the canonical path, so `../` can't escape them.
   see these rules (by id) with `kolsch permissions list`.
   note: `kolsch chat --auto-approve` turns every `prompt` rule into an allow.
 ```
