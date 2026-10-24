@@ -10,6 +10,11 @@ Implements the file-access subsystem per
 - The platform bootstrap to load the policy via
   [`load_policy`][files.policy.load_policy] from the `file_access`
   section of `platform.yaml`.
+- Every write-capable file tool, via
+  [`assert_writable_destination`][files.policy.assert_writable_destination],
+  which refuses `content/` and the
+  [`PROTECTED_WRITE_PATHS`][files.policy.PROTECTED_WRITE_PATHS]
+  floor whatever authorization allows.
 
 The package is a top-level home rather than co-located in
 `src/tools/` because both tools and the engine consume it; routing
@@ -17,6 +22,7 @@ through `tools/` would force the engine to depend on tools.
 """
 
 from files.policy import (
+    PROTECTED_WRITE_PATHS,
     PathPolicy,
     assert_writable_destination,
     check_path_allowed,
@@ -26,6 +32,7 @@ from files.policy import (
 )
 
 __all__ = [
+    "PROTECTED_WRITE_PATHS",
     "PathPolicy",
     "assert_writable_destination",
     "check_path_allowed",
