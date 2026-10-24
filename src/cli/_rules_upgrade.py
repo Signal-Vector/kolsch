@@ -96,7 +96,7 @@ async def check_default_rules(
     Returns:
         A [`RulesCheck`][cli._rules_upgrade.RulesCheck].
     """
-    loaded = _load_rules(root / "platform.yaml")
+    loaded = _load_rules(root / "platform.yaml", _pending_rewrite(root))
     if isinstance(loaded, str):
         return RulesCheck(skipped=loaded)
     rules, locked = loaded
@@ -267,12 +267,32 @@ def _label(entry: StarterRule) -> str:
     return f"{entry.what} → {entry.effect} ({entry.rationale})"
 
 
-def _load_rules(yaml_path: Path) -> tuple[list[object], list[object]] | str:
-    """Return `(rules, locked_rules)` from `platform.yaml`, or why not."""
+def _pending_rewrite(root: Path) -> str | None:
+    """The migrator's pending `platform.yaml` rewrite, if any (read-only).
+
+    Sync applies it before the rule pass, so a dry run / the re-run
+    notice / doctor must plan against it too: a retired ref the migrator
+    renames (e.g. `fetch_website` → `fetch_url`) already covers the
+    renamed target.
+    """
+    from cli._migrations.tools import plan_platform_yaml_rewrite  # noqa: PLC0415
+
+    try:
+        return plan_platform_yaml_rewrite(root)
+    except Exception:  # noqa: BLE001 — fall back to the file as it is
+        return None
+
+
+def _load_rules(
+    yaml_path: Path, text: str | None = None
+) -> tuple[list[object], list[object]] | str:
+    """Return `(rules, locked_rules)` from `platform.yaml` (or `text`), or why not."""
     if not yaml_path.is_file():
         return "platform.yaml not found"
     try:
-        data: Any = _yaml_load(yaml_path.read_text(encoding="utf-8"))
+        data: Any = _yaml_load(
+            text if text is not None else yaml_path.read_text(encoding="utf-8")
+        )
     except (OSError, UnicodeDecodeError, YAMLError):
         return "platform.yaml couldn't be read or parsed"
     if not isinstance(data, dict):

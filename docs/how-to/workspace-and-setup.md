@@ -115,11 +115,23 @@ the [`--sync-bundle`](#repairing-drift-kolsch-setup-sync-bundle) flow
 right there, before setup's test run, so the test uses the upgraded
 bundle. `--non-interactive` only prints the notice. Nothing is written
 unless you say yes, and the notice disappears once the workspace is in
-sync. (Files that differ from source keep it showing until you resolve
-them with an interactive `--sync-bundle`: `[o]verwrite` or keep them.)
+sync. The notice counts everything sync would act on: files to copy,
+refresh or remove, retired tool refs to rewrite (in
+`bundles/kolsch/agents/*.yaml` and `platform.yaml`), files it would
+ask about, and missing default rules.
 
-The same counts come from `kolsch doctor` and
-`kolsch setup --sync-bundle --dry-run`; the three always agree.
+Files that differ from source are only cleared by an interactive
+`--sync-bundle`: `[o]verwrite` them, or `[k]eep` them. A keep is
+remembered in `.kolsch/bundle-kept.json` against that exact file and
+that exact shipped version, so sync doesn't ask again and the notice
+and `kolsch doctor`'s drift leave it out (doctor lists it under
+**Kept local**, informational) — until you edit the file or a kolsch
+upgrade changes the shipped version, when it's asked about again.
+`--yes` and `--no` keep files without remembering, so those runs keep
+exiting 1 and the files keep showing.
+
+`kolsch doctor`, `kolsch setup --sync-bundle --dry-run` and this notice
+are built from the same planners, so they agree on what sync would do.
 
 ## Diagnosing bundle drift — `kolsch doctor`
 
@@ -205,8 +217,11 @@ Sync classifies every file in `bundles/kolsch/` into four buckets:
   with the source copy.
 - **locally-modified** — differs from source, and sha256 differs from
   the baseline (or the baseline has no entry for it) → **prompt** per
-  file (`[k]eep local / [o]verwrite / [d]iff`). `--yes` and `--no`
-  keep the local file and exit non-zero as a partial-success signal.
+  file (`[k]eep local / [o]verwrite / [d]iff`). An interactive `[k]eep`
+  is remembered until the file or the shipped version changes (see
+  [Upgrading an existing workspace](#upgrading-an-existing-workspace)).
+  `--yes` and `--no` keep the local file without remembering and exit
+  non-zero as a partial-success signal.
 - **added-at-source** — new file in source → **copy in** (`--no`
   skips it).
 - **retired-at-source** — file in `bundles/kolsch/` that source
@@ -214,7 +229,8 @@ Sync classifies every file in `bundles/kolsch/` into four buckets:
   file kolsch shipped and later retired and a file you added yourself,
   so `--yes` deletes it only when the baseline proves kolsch shipped it
   and you never edited it (it has an entry and the sha256 matches);
-  anything else is kept. `--no` always keeps.
+  anything else is kept. `--no` always keeps. An interactive `[k]eep`
+  is remembered, as for modified files.
 
 When a run keeps anything, it ends with
 `N item(s) left unresolved — exit 1 (partial).` — under `--yes` /

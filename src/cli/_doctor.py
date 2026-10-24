@@ -62,6 +62,7 @@ from fnmatch import fnmatchcase
 from typing import TYPE_CHECKING
 
 from cli._bundle_baseline import read_baseline
+from cli._bundle_kept import read_kept
 from cli._bundle_sync import plan_bundle_files
 from cli._migrations.tools import (
     ToolsMigrationResult,
@@ -165,6 +166,9 @@ class _Report:
         # of them when there is no baseline): a local edit or an older
         # shipped version; sync can't tell which.
         self.unrecorded: list[str] = []
+        # bug-146 — files the user chose to keep (interactive sync);
+        # informational, not drift, until the file or source changes.
+        self.kept: list[str] = []
         self.retired_at_source: list[str] = []
         self.migration: ToolsMigrationResult = ToolsMigrationResult()
         self.no_baseline_note: bool = False
@@ -215,7 +219,9 @@ def _build_report(workspace_root: Path) -> _Report:
             source_dir,
             workspace_bundle,
             baseline.files if baseline is not None else None,
+            read_kept(workspace_root),
         )
+        report.kept = plan.kept
         recorded = baseline.files if baseline is not None else {}
         report.missing = plan.added
         report.modified = [r for r in plan.modified if r in recorded]
@@ -463,6 +469,7 @@ def _render(report: _Report, *, out: TextIO) -> None:
     """Print the five report sections; write nothing on a clean workspace."""
     if not report.has_drift and not report.no_baseline_note:
         out.write("✓ no drift detected — bundle in sync with source.\n")
+        _render_kept(report.kept, out=out)
         _render_default_rules(report.default_rules, out=out, quiet_when_clean=True)
         _render_authz_tail(report.authz_tail_note, out=out)
         _render_agent_write_access(report.agent_write_access, out=out)
@@ -479,6 +486,7 @@ def _render(report: _Report, *, out: TextIO) -> None:
         out=out,
     )
     _render_retired_at_source(report.retired_at_source, out=out)
+    _render_kept(report.kept, out=out)
     _render_parse_failures(report.migration, out=out)
     _render_kolsch_owned_rewrites(report.migration, out=out)
     _render_user_owned_hits(report.migration, out=out)
@@ -617,6 +625,20 @@ def _render_paths(paths: list[str], *, marker: str, out: TextIO) -> None:
         return
     for rel in paths:
         out.write(f"  {marker} {rel}\n")
+    out.write("\n")
+
+
+def _render_kept(kept: list[str], *, out: TextIO) -> None:
+    """Informational: files kept on purpose; never drift (bug-146)."""
+    if not kept:
+        return
+    out.write(
+        f"Kept local: {len(kept)} (you chose to keep these in an interactive "
+        "sync; listed as drift again if the file or the shipped version "
+        "changes) — informational:\n"
+    )
+    for rel in kept:
+        out.write(f"  · {rel}\n")
     out.write("\n")
 
 
