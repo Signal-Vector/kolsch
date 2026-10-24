@@ -435,7 +435,8 @@ async def test_perm_allow_scoped_reports_its_own_position(tmp_path: Path) -> Non
     await dispatch_slash(
         f'/perm allow kolsch/tools/bash "ls *" from:{_SCOPE}', _ctx(runtime, stdout)
     )
-    assert "position 1)" in stdout.getvalue()
+    # bug-162 reworded the position suffix; the number is what matters.
+    assert "position 1 in platform.yaml" in stdout.getvalue()
     assert _disk_rules(tmp_path) == [unscoped, unscoped | {"from": _SCOPE}, tail]
 
 

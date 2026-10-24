@@ -707,8 +707,8 @@ Notes:
   but is reported as "no default-deny tail". That errs on the safe
   side; use the canonical shape to clear the warning.
 - A catch-all deny scoped with `from:` is not a tail — it only
-  covers that caller. This applies to canonical-shape rules; legacy
-  `{who, what, effect}` rules currently ignore `from:` altogether.
+  covers that caller. (A legacy `{who, what, effect}` rule can't
+  carry `from:` at all — it is refused at load.)
 - `/reload` in chat does not re-check. A tail removed mid-session
   is reported by `kolsch doctor` or the next command that starts
   the runtime.

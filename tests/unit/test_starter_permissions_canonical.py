@@ -27,7 +27,9 @@ from schemas.config import PermissionRule
 
 _REPO = Path(__file__).resolve().parents[2]
 _STARTER = _REPO / "src" / "cli" / "_starter_bundle"
-_SHIPPED_ROOTS = (_STARTER, _REPO / "bundles")
+# The starter bundle is the single source of shipped rules (bug-153);
+# examples/ holds the tutorial bundles users copy.
+_SHIPPED_ROOTS = (_STARTER, _REPO / "examples")
 _AUTHOR_WORKFLOW = _STARTER / "kolsch" / "agents" / "author_workflow.yaml"
 
 
