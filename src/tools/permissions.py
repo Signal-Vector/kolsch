@@ -57,7 +57,8 @@ class PermissionsBinding:
     alongside `agent_permissions` so in-tool
     [`check`][tools.permissions.check] /
     [`require`][tools.permissions.require] walks the same four-level
-    stack (agent → bundle → platform → default) as the
+    stack (agent → bundle → platform → default, after any locked
+    platform rules) as the
     dispatch-boundary check — without the bundle layer the in-tool
     API would diverge silently from the pre-dispatch authz outcome.
     """
@@ -107,7 +108,8 @@ async def check(what: str) -> AuthzEffect:
 
     The lookup walks the same four-level stack as the
     dispatch-boundary check (agent → bundle → platform →
-    default-deny) so in-tool decisions match what the platform would
+    default-deny, after any locked platform rules) so in-tool
+    decisions match what the platform would
     have decided pre-dispatch.
 
     Args:

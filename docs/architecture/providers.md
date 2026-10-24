@@ -116,14 +116,24 @@ workflow node is firing the action), each agent's `permissions:`
 block, each bundle's `bundle.yaml` `permissions:` block, and the
 platform-wide `platform.yaml` `authorization.config.rules`. The
 authz provider walks them first-match-wins in that order —
-workflow first (when applicable), then agent, then bundle, then
-platform, then default-deny. Because matching stops at the first
+after any locked rules (below), workflow first (when applicable),
+then agent, then bundle, then platform, then default-deny. Because matching stops at the first
 rule that fires, an earlier-layer `allow` rule can grant access a
 later layer would have denied. The layering is precedence, not
 enforced narrowing: nothing in the code stops a bundle from
 effectively widening the platform policy. Workspace owners
 installing untrusted bundles have to audit each bundle's
 `permissions:` block themselves.
+
+**Locked rules — the operator-absolute exception.** The one control no
+layer can widen past is `platform.yaml`'s
+`authorization.config.locked_rules`: deny-only rules the provider
+evaluates *before* the workflow, agent and bundle layers, so a
+matching locked rule denies whatever any layer allows. They are
+opt-in (an absent list changes nothing), managed with
+`kolsch permissions add --locked`, and only as strong as write access
+to `platform.yaml` itself. See
+[Manage Permissions — Locked rules](../how-to/permissions.md#locked-rules).
 
 **Workflow-agent escalation guarantee.** When a workflow node
 invokes an embedded agent, the workflow layer is **omitted** from

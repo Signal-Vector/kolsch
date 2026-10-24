@@ -50,7 +50,10 @@ built-ins plus any authored `@node`s),
 `kolsch skills`, `kolsch sessions`, `kolsch permissions`,
 `kolsch workflows`, and `kolsch providers` are catalog and
 management commands — listing what's installed, what's been run, and
-what permissions are active. `kolsch connect` and `kolsch disconnect`
+what permissions are active. `kolsch permissions add --locked` adds a
+locked platform rule — a deny evaluated before every workflow, agent
+and bundle layer, which no layer allow can override. `kolsch connect`
+and `kolsch disconnect`
 wire LLM providers up to the workspace; `kolsch refresh` re-runs
 model discovery against the connected LLM providers.
 

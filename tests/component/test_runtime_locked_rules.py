@@ -198,3 +198,79 @@ async def test_tools_annotates_pattern_lock_and_is_unchanged_without(
     [row] = [line for line in stdout.getvalue().splitlines() if "bash" in line]
     [plain_row] = [line for line in plain_out.splitlines() if "bash" in line]
     assert row == plain_row + "  [locked deny for pattern 'rm *']"
+
+
+# ---------------------------------------------------------------------------
+# /reload rebinds the engine's provider (agent.execute.* pre-flight)
+# ---------------------------------------------------------------------------
+
+
+def _setup_workspace(root: Path) -> Path:
+    import os
+    import subprocess
+    import sys
+
+    env = {k: v for k, v in os.environ.items() if not k.startswith("KOLSCH_")}
+    env["KOLSCH_WORKSPACE"] = str(root)
+    result = subprocess.run(
+        [sys.executable, "-m", "cli", "setup", "--non-interactive"],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    return root
+
+
+def _set_locked(root: Path, locked: list[dict[str, Any]] | None) -> None:
+    path = root / "platform.yaml"
+    payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+    config = payload["authorization"]["config"]
+    if locked:
+        config["locked_rules"] = locked
+    else:
+        config.pop("locked_rules", None)
+    path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+
+async def _execute_helper(runtime: Any) -> Any:
+    from engine import ExecutionContext
+
+    config = await runtime.build_resolved_config("kolsch/agents/helper")
+    session = await runtime.store.create_session(
+        str(config.agent_id), name="feat160:preflight"
+    )
+    [thread] = await runtime.store.list_threads(session.session_id)
+    ctx = ExecutionContext(
+        thread_id=thread.thread_id,
+        trigger={"kind": "user_message", "content": "hi"},
+    )
+    return await runtime.engine.execute(config, ctx)
+
+
+async def test_reload_lock_and_unlock_reach_agent_preflight(tmp_path: Path) -> None:
+    from engine.context import AgentExecutionError
+    from errors import AgentUnauthorized
+
+    root = _setup_workspace(tmp_path / "ws")
+    runtime = await bootstrap_runtime(root=root)
+    await _execute_helper(runtime)  # baseline: the pre-flight allows
+
+    _set_locked(root, [{"what": "agent.execute.*", "effect": "deny"}])
+    result = await handle_reload(runtime)
+    assert result.error is None, result.error
+    assert runtime.engine._authz is runtime.authz
+    with pytest.raises(AgentExecutionError) as excinfo:
+        await _execute_helper(runtime)
+    # The pre-flight denial lands as the exchange's failed event.
+    failed = excinfo.value.failed_event.model_dump(mode="json")
+    error = failed["data"]["error"]
+    assert error["type"] == AgentUnauthorized.code
+    assert error["detail"]["matched_rule"]["id"].startswith(LOCKED_RULE_ID_PREFIX)
+
+    _set_locked(root, None)
+    result = await handle_reload(runtime)
+    assert result.error is None, result.error
+    await _execute_helper(runtime)  # unlocked again

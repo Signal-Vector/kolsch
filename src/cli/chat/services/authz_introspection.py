@@ -898,6 +898,17 @@ async def handle_reload(runtime: PlatformRuntime) -> ReloadResult:
 
     # Platform layer — the feat-041 swap.
     object.__setattr__(runtime, "authz", new_authz)
+    # The engine holds its own reference for the `agent.execute.*`
+    # pre-flight. Without this rebind a rule (or locked rule) added via
+    # /reload on that action would be reported as applied but not
+    # enforced until restart. Every other holder reads through
+    # `runtime.authz` or `tools_subsystem._authz` at use time: slash
+    # contexts are built per command, workflow executors per run (an
+    # in-flight run keeps the provider it started with), and the MCP
+    # tool bridge dispatches through the tools subsystem.
+    engine = getattr(runtime, "engine", None)
+    if engine is not None and hasattr(engine, "_authz"):
+        object.__setattr__(engine, "_authz", new_authz)
     tools_sub = getattr(runtime, "tools_subsystem", None)
     if tools_sub is not None:
         object.__setattr__(tools_sub, "_authz", new_authz)

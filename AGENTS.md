@@ -230,6 +230,10 @@ These are non-negotiable. Violating them blocks merges.
   covers asks for approval in chat (and is allowed without asking
   under `kolsch chat --auto-approve`) and is denied everywhere else;
   with the tail it is denied outright everywhere, chat included.
+  Layer rules (workflow `policy:`, agent/bundle `permissions:`) may
+  widen past `platform.yaml` by design; the only operator-absolute
+  control is `authorization.config.locked_rules` (deny-only, evaluated
+  before every layer).
   The `allow_all_test` variant is for tests only: it is registered
   unconditionally, but its constructor refuses unless
   `KOLSCH_TEST_BUILD=1`, and the runtime bootstrap always builds
