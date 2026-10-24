@@ -2,19 +2,20 @@
 
 Prints five bundle report sections plus an advisory Authorization
 section, and exits ``0`` clean / ``1`` drift.
-Writes nothing to disk. Complements ``kolsch setup``'s install path
-(which records ``.kolsch/bundle-baseline.json``) and precedes qol-093's
-``kolsch setup --sync-bundle`` (which will actually repair the drift
-this command surfaces).
+Writes nothing to disk. ``kolsch setup --sync-bundle`` (qol-093) repairs
+the drift this command surfaces; the report's closing hint points at it.
 
 Report sections:
 
 1. **Missing tool files** — present in the starter-bundle source but
    absent from the workspace's ``bundles/kolsch/`` (e.g. a new tool
    shipped after the workspace was installed).
-2. **Modified tool files** — sha256 mismatch vs the recorded baseline.
-   Skipped with a one-line note when no baseline exists (older
-   workspaces).
+2. **Modified tool files** — differ from source, and the sha256
+   doesn't match the recorded baseline (a file identical to source is
+   never listed). With no baseline (workspaces installed before
+   qol-089) every file that differs from source is listed, labelled
+   "modified vs source" — a local edit or an older shipped version;
+   ``--sync-bundle`` records the baseline (bug-146).
 3. **Retired-at-source tool files** — present in the workspace but no
    longer in source (e.g. ``fetch_website.py`` after the
    ``fetch_url``/``browse_url`` split).
@@ -38,8 +39,10 @@ without asking — the two routes around that floor. Never changes the
 exit code.
 
 qol-089 spec section §Acceptance Criteria (5) and (6) drive the
-contract. qol-093 will consume the same detection logic for its
-``--sync-bundle`` path.
+contract. The file classification is ``--sync-bundle``'s own
+:func:`cli._bundle_sync.plan_bundle_files`, over the shared
+:func:`cli._bundle_baseline.iter_bundle_files` walk, so the two
+commands always agree.
 """
 
 from __future__ import annotations
@@ -49,10 +52,8 @@ import re
 from fnmatch import fnmatchcase
 from typing import TYPE_CHECKING
 
-from cli._bundle_baseline import (
-    read_baseline,
-    sha256_file,
-)
+from cli._bundle_baseline import read_baseline
+from cli._bundle_sync import plan_bundle_files
 from cli._migrations.tools import (
     ToolsMigrationResult,
     migrate_tool_refs,
@@ -172,21 +173,16 @@ def _build_report(workspace_root: Path) -> _Report:
     workspace_bundle = workspace_root / "bundles" / "kolsch"
 
     if source_dir.is_dir() and workspace_bundle.is_dir():
-        source_files = _relative_files(source_dir)
-        workspace_files = _relative_files(workspace_bundle)
-
-        report.missing = sorted(source_files - workspace_files)
-        report.retired_at_source = sorted(workspace_files - source_files)
-
         baseline = read_baseline(workspace_root)
-        if baseline is None:
-            report.no_baseline_note = True
-        else:
-            report.modified = _diff_vs_baseline(
-                workspace_bundle,
-                shared_files=source_files & workspace_files,
-                baseline=baseline.files,
-            )
+        report.no_baseline_note = baseline is None
+        plan = plan_bundle_files(
+            source_dir,
+            workspace_bundle,
+            baseline.files if baseline is not None else None,
+        )
+        report.missing = plan.added
+        report.modified = plan.modified
+        report.retired_at_source = plan.retired
     elif source_dir.is_dir() and not workspace_bundle.is_dir():
         # Pre-`kolsch setup` workspace — flagged so the CLI can emit
         # the "run kolsch setup to install" hint rather than the full
@@ -420,40 +416,6 @@ def _legacy_what_covers(what: str, refs: tuple[str, ...]) -> bool:
     return any(compiled.fullmatch(ref) for ref in refs)
 
 
-def _relative_files(root: Path) -> set[str]:
-    """Return every non-directory file under ``root``, as relative POSIX paths."""
-    if not root.is_dir():
-        return set()
-    return {
-        str(path.relative_to(root))
-        for path in root.rglob("*")
-        if path.is_file() and "__pycache__" not in path.parts
-    }
-
-
-def _diff_vs_baseline(
-    bundle_dir: Path,
-    *,
-    shared_files: set[str],
-    baseline: dict[str, str],
-) -> list[str]:
-    """List shared files whose current sha256 differs from the baseline."""
-    modified: list[str] = []
-    for rel in sorted(shared_files):
-        recorded = baseline.get(rel)
-        if recorded is None:
-            # File exists in source + workspace but wasn't in the
-            # baseline snapshot (e.g. baseline predates this file's
-            # addition). Treated as "modified" so the operator sees
-            # it and can decide.
-            modified.append(rel)
-            continue
-        current = sha256_file(bundle_dir / rel)
-        if current != recorded:
-            modified.append(rel)
-    return modified
-
-
 # ---------------------------------------------------------------------------
 # Rendering
 # ---------------------------------------------------------------------------
@@ -479,9 +441,9 @@ def _render(report: _Report, *, out: TextIO) -> None:
 
     if report.has_drift:
         out.write(
-            "\nEdit the listed files by hand to repair. Automated "
-            "`kolsch setup --sync-bundle` support is planned in qol-093 "
-            "(not yet shipped).\n"
+            "\nRun `kolsch setup --sync-bundle` to review and repair "
+            "(`--dry-run` to preview). User-owned YAMLs are listed for "
+            "a manual fix; sync never rewrites them.\n"
         )
     _render_authz_tail(report.authz_tail_note, out=out)
     _render_agent_write_access(report.agent_write_access, out=out)
@@ -533,13 +495,17 @@ def _render_modified(
     no_baseline: bool,
     out: TextIO,
 ) -> None:
-    out.write("Modified vs baseline (sha256 mismatch):\n")
     if no_baseline:
         out.write(
-            "  · baseline not recorded — run `kolsch setup` to record "
-            "the current shipped file set.\n\n"
+            "Modified vs source (differs from the shipped file — "
+            "a local edit or an older shipped version):\n"
         )
-        return
+        out.write(
+            "  · baseline not recorded — compared against the current "
+            "source; `kolsch setup --sync-bundle` records one.\n"
+        )
+    else:
+        out.write("Modified vs baseline (sha256 mismatch):\n")
     if not modified:
         out.write("  ✓ none\n\n")
         return

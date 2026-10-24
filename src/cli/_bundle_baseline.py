@@ -1,10 +1,25 @@
-"""``.kolsch/bundle-baseline.json`` writer/reader (qol-089).
+"""``.kolsch/bundle-baseline.json`` writer/reader (qol-089, bug-146).
 
 Records the sha256 of every file ``kolsch setup`` ships out of
-``src/cli/_starter_bundle/kolsch/`` so a later ``kolsch doctor`` (and,
-in qol-093, ``kolsch setup --sync-bundle``) can classify each shipped
-file as ``unchanged`` / ``locally_modified`` / ``retired-at-source`` /
-``added-at-source``.
+``src/cli/_starter_bundle/kolsch/`` so ``kolsch doctor`` and
+``kolsch setup --sync-bundle`` can tell a shipped file the user never
+touched from one they edited.
+
+Two writers:
+
+- [`write_baseline`][cli._bundle_baseline.write_baseline] — the fresh
+  install: hashes the whole bundle just copied.
+- [`update_baseline_entries`][cli._bundle_baseline.update_baseline_entries]
+  — ``--sync-bundle``: merges one entry per file sync wrote or found
+  identical to source, even on a partial run, and creates the file on
+  a workspace that never had one (bug-146). Files sync left alone keep
+  their prior entry, or stay absent.
+
+Which files count is decided by one predicate,
+[`is_shipped_bundle_file`][cli._bundle_baseline.is_shipped_bundle_file]
+(skips ``__pycache__/`` and ``.DS_Store``), which the baseline writers,
+sync and doctor all walk with via
+[`iter_bundle_files`][cli._bundle_baseline.iter_bundle_files].
 
 Schema v1:
 
@@ -46,6 +61,11 @@ if TYPE_CHECKING:
 _BASELINE_REL = ".kolsch/bundle-baseline.json"
 _SCHEMA_VERSION = 1
 
+# bug-146 — never part of a shipped bundle: bytecode the importer writes
+# next to tool files, and macOS Finder metadata.
+_IGNORED_DIR_NAMES = frozenset({"__pycache__"})
+_IGNORED_FILE_NAMES = frozenset({".DS_Store"})
+
 
 @dataclass(frozen=True)
 class BundleBaseline:
@@ -72,6 +92,51 @@ def baseline_exists(workspace_root: Path) -> bool:
     return baseline_path(workspace_root).is_file()
 
 
+def is_shipped_bundle_file(path: Path, root: Path) -> bool:
+    """Return True when ``path`` is a bundle file kolsch ships and tracks.
+
+    ``path`` must lie under ``root`` (the bundle directory). Files under
+    a ``__pycache__/`` directory and ``.DS_Store`` files are not: they
+    are never in the packaged template, so counting them would show
+    them as "retired at source" (and ``--sync-bundle --yes`` would
+    delete them).
+
+    Args:
+        path: A path under ``root``.
+        root: The bundle directory (the template or ``bundles/kolsch/``).
+
+    Returns:
+        Whether ``path`` is a regular file that belongs to the bundle.
+    """
+    if not path.is_file():
+        return False
+    rel_parts = path.relative_to(root).parts
+    if any(part in _IGNORED_DIR_NAMES for part in rel_parts[:-1]):
+        return False
+    return path.name not in _IGNORED_FILE_NAMES
+
+
+def iter_bundle_files(root: Path) -> set[str]:
+    """Return every shipped bundle file under ``root``, as relative POSIX paths.
+
+    Applies [`is_shipped_bundle_file`][cli._bundle_baseline.is_shipped_bundle_file].
+    A missing ``root`` yields an empty set.
+
+    Args:
+        root: The bundle directory to walk.
+
+    Returns:
+        Paths relative to ``root`` (e.g. ``tools/bash.py``).
+    """
+    if not root.is_dir():
+        return set()
+    return {
+        path.relative_to(root).as_posix()
+        for path in root.rglob("*")
+        if is_shipped_bundle_file(path, root)
+    }
+
+
 def write_baseline(
     workspace_root: Path,
     *,
@@ -81,9 +146,10 @@ def write_baseline(
     """Compute sha256 for every file in ``bundle_dir`` and write the baseline.
 
     ``bundle_dir`` is the on-disk copy of ``bundles/kolsch/`` (i.e.
-    the destination ``shutil.copytree`` wrote to). Every non-directory
-    file under it is hashed; the resulting map is written atomically
-    to ``<workspace_root>/.kolsch/bundle-baseline.json``.
+    the destination ``shutil.copytree`` wrote to). Every file
+    [`iter_bundle_files`][cli._bundle_baseline.iter_bundle_files] yields is
+    hashed; the resulting map is written atomically to
+    ``<workspace_root>/.kolsch/bundle-baseline.json``.
 
     Args:
         workspace_root: Absolute workspace root.
@@ -94,17 +160,60 @@ def write_baseline(
     Returns:
         The parsed :class:`BundleBaseline` just written.
     """
-    files: dict[str, str] = {}
-    if bundle_dir.is_dir():
-        for path in sorted(bundle_dir.rglob("*")):
-            if not path.is_file():
-                continue
-            rel = str(path.relative_to(bundle_dir))
-            files[rel] = f"sha256:{_sha256_file(path)}"
-    stamp = shipped_at or datetime.now(UTC).isoformat()
+    files = {
+        rel: sha256_file(bundle_dir / rel)
+        for rel in sorted(iter_bundle_files(bundle_dir))
+    }
+    return _store(workspace_root, files=files, shipped_at=shipped_at)
+
+
+def update_baseline_entries(
+    workspace_root: Path,
+    entries: dict[str, str | None],
+) -> bool:
+    """Merge per-file entries into the baseline, creating it if absent.
+
+    ``--sync-bundle`` calls this after every non-dry-run pass, partial
+    or not, with one entry per file it copied, refreshed or overwrote
+    or found identical to source (``sha256:<hex>``), and ``None`` for
+    each file it deleted. Paths not in ``entries`` keep their recorded
+    hash — or stay unrecorded — so a locally modified file sync kept
+    is still "modified" next run.
+
+    Writes (atomically, stamping ``shipped_at`` and ``kolsch_version``
+    afresh) only when the merge changes the recorded files or no
+    readable baseline exists yet; a corrupt baseline is replaced.
+
+    Args:
+        workspace_root: Absolute workspace root.
+        entries: ``{relative bundle path: "sha256:<hex>" | None}``.
+
+    Returns:
+        True when the baseline file was written.
+    """
+    current = read_baseline(workspace_root)
+    files = dict(current.files) if current is not None else {}
+    for rel, digest in entries.items():
+        if digest is None:
+            files.pop(rel, None)
+        else:
+            files[rel] = digest
+    if current is not None and files == current.files:
+        return False
+    _store(workspace_root, files=dict(sorted(files.items())), shipped_at=None)
+    return True
+
+
+def _store(
+    workspace_root: Path,
+    *,
+    files: dict[str, str],
+    shipped_at: str | None,
+) -> BundleBaseline:
+    """Write ``files`` as the workspace's baseline and return it."""
     baseline = BundleBaseline(
         schema_version=_SCHEMA_VERSION,
-        shipped_at=stamp,
+        shipped_at=shipped_at or datetime.now(UTC).isoformat(),
         kolsch_version=_current_kolsch_version(),
         files=files,
     )
@@ -130,8 +239,9 @@ def read_baseline(workspace_root: Path) -> BundleBaseline | None:
 
     Malformed shapes (wrong schema version, non-dict payload, etc.)
     return ``None`` so callers can treat "no baseline" and "corrupt
-    baseline" identically — both surface as "run `kolsch setup` to
-    record".
+    baseline" identically — both mean "classify against the current
+    source", and the next ``kolsch setup --sync-bundle`` records a
+    fresh one.
     """
     path = baseline_path(workspace_root)
     if not path.is_file():

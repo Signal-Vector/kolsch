@@ -6,17 +6,23 @@ Sits on top of qol-089's shipped foundation:
   that returns rewrites for kolsch-owned YAMLs and reports user-owned
   hits (never writes user files).
 - :mod:`cli._bundle_baseline` — the sha256 baseline (``.kolsch/bundle-baseline.json``)
-  written on install; the oracle for "unmodified since last shipped".
+  written on install and updated per file by every sync; the oracle for
+  "unmodified since last shipped". Optional (bug-146): a workspace
+  installed before qol-089 has none, and sync records one.
 - :func:`cli._doctor._starter_bundle_dir` — locates the packaged
   source template so tests can monkeypatch it.
 
-Sync classifies every file in ``bundles/kolsch/`` into one of four
-buckets:
+Sync classifies every file in ``bundles/kolsch/`` (as
+:func:`cli._bundle_baseline.iter_bundle_files` walks it — no
+``__pycache__/`` or ``.DS_Store``) into one of four buckets, by
+:func:`plan_bundle_files`:
 
-- **unchanged** — present in source + workspace, sha256 matches
-  baseline → **safe to overwrite** with the source copy.
-- **locally_modified** — present in source + workspace, sha256
-  differs from baseline (or missing from baseline) → **prompt**
+- **unchanged** — present in source + workspace, and byte-identical to
+  the source copy, or sha256 matches the baseline entry → **safe to
+  overwrite** with the source copy.
+- **locally_modified** — present in source + workspace, differs from
+  source, and sha256 differs from the baseline entry or has none
+  (always the case without a baseline) → **prompt**
   (`[k]eep local / [o]verwrite / [d]iff`); non-interactive path
   defaults to keep-local + records a skip (partial-success exit).
 - **added_at_source** — present in source, absent from workspace →
@@ -27,9 +33,12 @@ buckets:
 
 After the file-level pass, applies the migrator's YAML rewrites for
 ``bundles/kolsch/agents/*.yaml`` and ``platform.yaml`` (if any) and
-refreshes the baseline. **Never writes outside ``bundles/kolsch/**``
-+ ``platform.yaml``** — the kolsch-owned boundary qol-089 established
-is a hard invariant here.
+updates the baseline — on every non-dry-run pass, partial or not — with
+an entry for each file sync copied, refreshed, overwrote, rewrote or
+found identical to source; a kept-local file keeps its prior entry (or none),
+so it is still "modified" next run. **Never writes outside
+``bundles/kolsch/**``, ``platform.yaml`` and ``.kolsch/``** — the
+kolsch-owned boundary qol-089 established is a hard invariant here.
 
 Exit contract: sync returns ``0`` when the workspace is fully in
 sync with source at exit (no skips, all rewrites applied). Any
@@ -46,9 +55,10 @@ from difflib import unified_diff
 from typing import TYPE_CHECKING
 
 from cli._bundle_baseline import (
+    iter_bundle_files,
     read_baseline,
     sha256_file,
-    write_baseline,
+    update_baseline_entries,
 )
 from cli._migrations.tools import (
     ToolsMigrationResult,
@@ -81,6 +91,10 @@ class _SyncReport:
     skipped: list[_SyncOutcome] = field(default_factory=list)
     parse_failures: list[str] = field(default_factory=list)
     user_owned_hits: list[str] = field(default_factory=list)
+    # bug-146 — `{bundle-relative path: "sha256:…" | None}` for every
+    # file this pass wrote or found identical to source (`None` =
+    # deleted). Merged into the baseline after a non-dry-run pass.
+    baseline_entries: dict[str, str | None] = field(default_factory=dict)
     baseline_refreshed: bool = False
     dry_run: bool = False
 
@@ -124,14 +138,16 @@ async def sync_kolsch_bundle(
 
     baseline = read_baseline(io.root)
     if baseline is None:
-        io.out.write(
-            "no `.kolsch/bundle-baseline.json` recorded — cannot classify "
-            "shipped files as unchanged-vs-modified. Delete `bundles/kolsch/` "
-            "and re-run `kolsch setup` to re-install with a fresh baseline.\n"
-        )
-        return 1
+        # bug-146 — pre-qol-089 workspaces (and a corrupt baseline)
+        # bootstrap: a file identical to source is unchanged, anything
+        # else prompts as modified; the pass then records a baseline.
+        io.out.write("no baseline recorded — classifying against current source.\n")
 
-    plan = _plan(source_dir, workspace_bundle, baseline.files)
+    plan = plan_bundle_files(
+        source_dir,
+        workspace_bundle,
+        baseline.files if baseline is not None else None,
+    )
     migration = migrate_tool_refs(io.root)
     # Migrator-owned files supersede the file-level modified/unchanged
     # pass — a helper.yaml with a retired ref will register as
@@ -145,14 +161,16 @@ async def sync_kolsch_bundle(
         workspace_bundle=workspace_bundle,
         plan=plan,
         migration=migration,
+        recorded=set(baseline.files) if baseline is not None else set(),
         dry_run=dry_run,
         yes=yes,
         no=no,
     )
 
-    if not dry_run and not report.is_partial() and _wrote_anything(report):
-        write_baseline(io.root, bundle_dir=workspace_bundle)
-        report.baseline_refreshed = True
+    if not dry_run:
+        report.baseline_refreshed = update_baseline_entries(
+            io.root, report.baseline_entries
+        )
 
     _render_report(report, out=io.out, dry_run=dry_run)
     return 0 if not report.is_partial() else 1
@@ -164,23 +182,52 @@ async def sync_kolsch_bundle(
 
 
 @dataclass(frozen=True)
-class _Plan:
-    """Sorted per-bucket relative-path lists — the sync loop's worklist."""
+class BundleFilePlan:
+    """Sorted per-bucket relative-path lists — the sync loop's worklist.
 
-    added: list[str]  # in source, not in workspace
-    modified: list[str]  # in both, sha256 mismatch vs baseline
-    retired: list[str]  # in workspace, not in source
-    unchanged: list[str]  # in both, sha256 matches baseline (safe overwrite)
+    Paths are relative to the bundle directory (e.g. ``tools/bash.py``).
+    Built by [`plan_bundle_files`][cli._bundle_sync.plan_bundle_files].
+
+    Attributes:
+        added: In source, not in the workspace.
+        modified: In both; differs from source, and the workspace hash
+            differs from its baseline entry or has none.
+        retired: In the workspace, not in source.
+        unchanged: In both; identical to source, or the workspace hash
+            matches its baseline entry (safe to overwrite from source).
+    """
+
+    added: list[str]
+    modified: list[str]
+    retired: list[str]
+    unchanged: list[str]
 
 
-def _plan(
+def plan_bundle_files(
     source_dir: Path,
     workspace_bundle: Path,
-    baseline_files: dict[str, str],
-) -> _Plan:
-    """Classify every file in ``source-vs-workspace`` into one of four buckets."""
-    source_files = _relative_files(source_dir)
-    workspace_files = _relative_files(workspace_bundle)
+    baseline_files: dict[str, str] | None,
+) -> BundleFilePlan:
+    """Classify every shipped file in source-vs-workspace into four buckets.
+
+    Read-only. A shared file byte-identical to its source copy is always
+    ``unchanged``, with or without a baseline entry (bug-146). Otherwise
+    it is ``unchanged`` only when its sha256 matches the baseline entry
+    (an older shipped version nobody edited), and ``modified`` when the
+    entry differs or is missing — always the case when
+    ``baseline_files`` is ``None`` (no baseline recorded).
+
+    Args:
+        source_dir: The packaged starter-bundle template.
+        workspace_bundle: The workspace's ``bundles/kolsch/``.
+        baseline_files: The baseline's ``files`` map, or ``None``.
+
+    Returns:
+        The [`BundleFilePlan`][cli._bundle_sync.BundleFilePlan].
+    """
+    source_files = iter_bundle_files(source_dir)
+    workspace_files = iter_bundle_files(workspace_bundle)
+    recorded_files = baseline_files or {}
 
     added = sorted(source_files - workspace_files)
     retired = sorted(workspace_files - source_files)
@@ -189,18 +236,25 @@ def _plan(
     modified: list[str] = []
     unchanged: list[str] = []
     for rel in sorted(shared):
-        recorded = baseline_files.get(rel)
         current = sha256_file(workspace_bundle / rel)
+        if current == sha256_file(source_dir / rel):
+            unchanged.append(rel)
+            continue
+        recorded = recorded_files.get(rel)
         if recorded is None or current != recorded:
             # No baseline entry OR sha256 mismatch → treated as
             # locally modified (safer: prompt before touching).
             modified.append(rel)
         else:
             unchanged.append(rel)
-    return _Plan(added=added, modified=modified, retired=retired, unchanged=unchanged)
+    return BundleFilePlan(
+        added=added, modified=modified, retired=retired, unchanged=unchanged
+    )
 
 
-def _defer_to_migrator(plan: _Plan, migration: ToolsMigrationResult) -> _Plan:
+def _defer_to_migrator(
+    plan: BundleFilePlan, migration: ToolsMigrationResult
+) -> BundleFilePlan:
     """Remove paths the migrator will rewrite from ``modified``/``unchanged``.
 
     Kolsch-owned YAMLs the migrator handles (``bundles/kolsch/agents/*.yaml``,
@@ -220,23 +274,12 @@ def _defer_to_migrator(plan: _Plan, migration: ToolsMigrationResult) -> _Plan:
         for p in migrator_paths
         if p.startswith("bundles/kolsch/")
     }
-    return _Plan(
+    return BundleFilePlan(
         added=plan.added,
         modified=[r for r in plan.modified if r not in migrator_bundle_paths],
         retired=plan.retired,
         unchanged=[r for r in plan.unchanged if r not in migrator_bundle_paths],
     )
-
-
-def _relative_files(root: Path) -> set[str]:
-    """Return every non-directory file under ``root``, as relative POSIX paths."""
-    if not root.is_dir():
-        return set()
-    return {
-        str(path.relative_to(root))
-        for path in root.rglob("*")
-        if path.is_file() and "__pycache__" not in path.parts
-    }
 
 
 # ---------------------------------------------------------------------------
@@ -249,13 +292,19 @@ async def _apply(
     io: _SetupIO,
     source_dir: Path,
     workspace_bundle: Path,
-    plan: _Plan,
+    plan: BundleFilePlan,
     migration: ToolsMigrationResult,
+    recorded: set[str],
     dry_run: bool,
     yes: bool,
     no: bool,
 ) -> _SyncReport:
-    """Walk the plan; write per decisions; return an aggregated report."""
+    """Walk the plan; write per decisions; return an aggregated report.
+
+    Every file written (copied, refreshed, overwritten, or rewritten by
+    the migrator), or left identical to source, is recorded in
+    ``report.baseline_entries`` (deleted files as ``None``).
+    """
     report = _SyncReport(dry_run=dry_run)
 
     for failure in migration.parse_failures:
@@ -274,8 +323,8 @@ async def _apply(
             no=no,
         )
 
-    # 2. Unchanged — overwrite silently to pick up any whitespace-only
-    #    re-flow in source. (Overwrite of an identical file is a no-op
+    # 2. Unchanged — overwrite silently to pick up an older shipped
+    #    version's changes. (Overwrite of an identical file is a no-op
     #    for content but refreshes the baseline entry.)
     for rel in plan.unchanged:
         _refresh_unchanged_file(
@@ -293,6 +342,7 @@ async def _apply(
             source_dir=source_dir,
             workspace_bundle=workspace_bundle,
             rel=rel,
+            in_baseline=rel in recorded,
             report=report,
             dry_run=dry_run,
             yes=yes,
@@ -317,6 +367,13 @@ async def _apply(
         target = io.root / rel
         if not dry_run:
             _write_atomic(target, body)
+            if rel.startswith("bundles/kolsch/"):
+                # The migrator's rewrite is the authoritative fix, so
+                # its output is the new baseline (as qol-093's
+                # whole-bundle refresh recorded it).
+                report.baseline_entries[rel.removeprefix("bundles/kolsch/")] = (
+                    sha256_file(target)
+                )
         report.applied.append(
             _SyncOutcome(rel=rel, action="rewrote", kind="yaml_rewrite")
         )
@@ -366,6 +423,7 @@ def _copy_source_file(
         target = workspace_bundle / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source_dir / rel, target)
+        report.baseline_entries[rel] = sha256_file(target)
     report.applied.append(
         _SyncOutcome(rel=rel, action="copied", kind="missing-from-workspace")
     )
@@ -388,9 +446,11 @@ def _refresh_unchanged_file(
     src = source_dir / rel
     dst = workspace_bundle / rel
     if src.read_bytes() == dst.read_bytes():
+        report.baseline_entries[rel] = sha256_file(dst)
         return
     if not dry_run:
         shutil.copy2(src, dst)
+        report.baseline_entries[rel] = sha256_file(dst)
     report.applied.append(
         _SyncOutcome(rel=rel, action="refreshed", kind="unchanged-vs-baseline")
     )
@@ -402,12 +462,17 @@ def _resolve_modified_file(
     source_dir: Path,
     workspace_bundle: Path,
     rel: str,
+    in_baseline: bool,
     report: _SyncReport,
     dry_run: bool,
     yes: bool,
     no: bool,
 ) -> None:
-    """Handle a locally-modified shipped file — prompt or use safe default."""
+    """Handle a locally-modified shipped file — prompt or use safe default.
+
+    ``in_baseline`` picks the prompt wording: without a baseline entry
+    sync can't tell a local edit from an older shipped version.
+    """
     if no or yes:
         # Safe default in non-interactive mode: keep local. Records
         # the skip so the partial-success signal fires.
@@ -415,10 +480,16 @@ def _resolve_modified_file(
             _SyncOutcome(rel=rel, action="kept-local", kind="modified")
         )
         return
+    question = (
+        f"[sync] {rel}: locally modified vs baseline."
+        if in_baseline
+        else f"[sync] {rel}: differs from source (no baseline entry — "
+        "a local edit or an older shipped version)."
+    )
     while True:
         answer = _prompt_choice(
             io.prompter,
-            question=f"[sync] {rel}: locally modified vs baseline.",
+            question=question,
             options=["[k]eep local", "[o]verwrite with source", "[d]iff"],
             default="k",
         )
@@ -429,6 +500,7 @@ def _resolve_modified_file(
     if answer == "o":
         if not dry_run:
             shutil.copy2(source_dir / rel, workspace_bundle / rel)
+            report.baseline_entries[rel] = sha256_file(workspace_bundle / rel)
         report.applied.append(
             _SyncOutcome(rel=rel, action="overwrote", kind="modified")
         )
@@ -457,6 +529,7 @@ def _resolve_retired_file(
     if yes:
         if not dry_run:
             (workspace_bundle / rel).unlink(missing_ok=True)
+            report.baseline_entries[rel] = None
         report.applied.append(
             _SyncOutcome(rel=rel, action="deleted", kind="retired-at-source")
         )
@@ -475,6 +548,7 @@ def _resolve_retired_file(
     if answer == "d":
         if not dry_run:
             (workspace_bundle / rel).unlink(missing_ok=True)
+            report.baseline_entries[rel] = None
         report.applied.append(
             _SyncOutcome(rel=rel, action="deleted", kind="retired-at-source")
         )
@@ -533,11 +607,6 @@ def _write_atomic(path: Path, text: str) -> None:
     finally:
         if tmp.exists():
             tmp.unlink(missing_ok=True)
-
-
-def _wrote_anything(report: _SyncReport) -> bool:
-    """True when the sync applied any change (used to gate baseline refresh)."""
-    return bool(report.applied)
 
 
 # ---------------------------------------------------------------------------

@@ -667,8 +667,9 @@ def _copy_kolsch_bundle(root: Path) -> None:
     every shipped file — the oracle a later `kolsch doctor` uses to
     classify drift. If the workspace bundle already exists, this is
     still idempotent: no copy, no baseline overwrite. Drift *repair*
-    is the concern of qol-093 (`kolsch setup --sync-bundle`); this
-    function is the install-only path.
+    — including recording a baseline for a workspace that has none —
+    is the concern of `kolsch setup --sync-bundle`; this function is
+    the install-only path.
     """
     target = root / "bundles" / _STARTER_BUNDLE
     if target.exists():
@@ -684,7 +685,13 @@ def _copy_kolsch_bundle(root: Path) -> None:
         )
         raise RuntimeError(msg)
 
-    shutil.copytree(_STARTER_BUNDLE_TEMPLATE_DIR, target)
+    # bug-146 — a dev checkout's template carries `__pycache__/` (and
+    # maybe Finder's `.DS_Store`); neither is a shipped file.
+    shutil.copytree(
+        _STARTER_BUNDLE_TEMPLATE_DIR,
+        target,
+        ignore=shutil.ignore_patterns("__pycache__", ".DS_Store"),
+    )
     # qol-089 — record what we just shipped so `kolsch doctor` can
     # detect drift later. Import lazily so `cli.main` doesn't pay the
     # module-load cost on every subcommand.

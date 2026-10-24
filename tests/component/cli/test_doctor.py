@@ -12,12 +12,12 @@ Covers acceptance criteria 4, 5, 6, 7 (spec §Acceptance Criteria):
   + retired-at-source file + user-owned retired ref → doctor exits 1
   and names all three; the workspace is byte-identical after.
 - Test 4 (:func:`test_doctor_without_baseline`) — older workspace
-  with no baseline → doctor still runs, skips modified-vs-baseline
-  section with a one-line note.
+  with no baseline → doctor still runs, compares shared files against
+  the current source instead, with a one-line note (bug-146).
 
-qol-093 will layer the *repair* half (`kolsch setup --sync-bundle`)
-on top of this detection foundation; those component tests live in
-that qol's shipment.
+qol-093 layers the *repair* half (`kolsch setup --sync-bundle`) on top
+of this detection foundation; its tests live in
+``test_setup_sync_bundle.py``.
 """
 
 from __future__ import annotations
@@ -249,11 +249,11 @@ async def test_doctor_reports_drift(
 async def test_doctor_without_baseline(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """qol-089 AC-6: older workspace w/o baseline → skip section (b), note it.
+    """qol-089 AC-6: older workspace w/o baseline → note it, still clean.
 
     Sim: install, then delete ``.kolsch/bundle-baseline.json``. Doctor
-    should still run, skip the modified-vs-baseline section with a
-    one-line note, run the other sections normally.
+    should still run, note the missing baseline (bug-146: section (b)
+    compares against source instead), run the other sections normally.
     """
     await _run_install(tmp_path, monkeypatch)
     (tmp_path / ".kolsch" / "bundle-baseline.json").unlink()
@@ -295,14 +295,14 @@ async def test_doctor_on_pre_setup_workspace_hints_run_setup(
     assert "--sync-bundle" not in text
 
 
-async def test_doctor_exit_hint_does_not_reference_unshipped_flag(
+async def test_doctor_exit_hint_points_at_sync_bundle(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """qol-089 Reviewer #2 finding #2: no exit-hint pointer at unshipped flag.
+    """bug-146 AC-11: the exit hint names the shipped repair command.
 
-    The pre-fix hint said "Run `kolsch setup --sync-bundle` to
-    repair"; the flag doesn't exist yet (qol-093). Reworded to make
-    the not-yet-shipped state explicit.
+    Contract change: qol-089's hint said `--sync-bundle` was "planned in
+    qol-093 (not yet shipped)"; qol-093 shipped, so the hint now points
+    at it (and `--dry-run`).
     """
     await _run_install(tmp_path, monkeypatch)
     # Induce one drift so the exit hint fires at all.
@@ -313,11 +313,74 @@ async def test_doctor_exit_hint_does_not_reference_unshipped_flag(
     rc = await cmd_doctor(argparse.Namespace(), out=out, root=tmp_path)
     assert rc == 1
     text = out.getvalue()
-    # The hint MUST mention qol-093 as the future automation home;
-    # it MUST NOT tell the user to run an unshipped flag as the
-    # primary action.
-    assert "qol-093" in text
-    assert "not yet shipped" in text
+    assert "Run `kolsch setup --sync-bundle` to review and repair" in text
+    assert "--dry-run" in text
+    assert "not yet shipped" not in text
+    assert "qol-093" not in text
+
+
+async def test_doctor_without_baseline_lists_modified_vs_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """bug-146 AC-11 (Test 2): no baseline → files that differ from source are listed.
+
+    Mirrors the owner's pre-qol-089 workspace: no baseline, a missing
+    shipped tool, one edited shipped file, plus `__pycache__/` and
+    `.DS_Store` junk (which must not show as "retired at source").
+    Doctor stays read-only.
+    """
+    await _run_install(tmp_path, monkeypatch)
+    bundle = tmp_path / "bundles" / "kolsch"
+    (tmp_path / ".kolsch" / "bundle-baseline.json").unlink()
+    (bundle / "tools" / "jev_decide.py").unlink()
+    helper = bundle / "agents" / "helper.yaml"
+    helper.write_text("# note\n" + helper.read_text(encoding="utf-8"), encoding="utf-8")
+    (bundle / "tools" / "__pycache__").mkdir()
+    (bundle / "tools" / "__pycache__" / "bash.cpython-313.pyc").write_bytes(b"x")
+    (bundle / ".DS_Store").write_bytes(b"x")
+    before = {
+        str(p.relative_to(tmp_path)): _sha256(p)
+        for p in tmp_path.rglob("*")
+        if p.is_file()
+    }
+
+    out = io.StringIO()
+    rc = await cmd_doctor(argparse.Namespace(), out=out, root=tmp_path)
+    text = out.getvalue()
+    assert rc == 1, text
+    assert "Modified vs source" in text
+    assert "  ~ agents/helper.yaml" in text
+    # Identical-to-source files are never listed as modified.
+    assert "~ tools/bash.py" not in text
+    assert "  + tools/jev_decide.py" in text
+    assert ".DS_Store" not in text
+    assert "__pycache__" not in text
+    assert "kolsch setup --sync-bundle" in text
+    assert "run `kolsch setup` to record" not in text
+    assert "not yet shipped" not in text
+
+    after = {
+        str(p.relative_to(tmp_path)): _sha256(p)
+        for p in tmp_path.rglob("*")
+        if p.is_file()
+    }
+    assert before == after, "doctor must be strictly read-only"
+
+
+async def test_doctor_identical_file_without_baseline_entry_is_not_modified(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """bug-146 AC-2: a baseline that lacks an entry doesn't make the file "modified"."""
+    await _run_install(tmp_path, monkeypatch)
+    baseline = tmp_path / ".kolsch" / "bundle-baseline.json"
+    payload = json.loads(baseline.read_text(encoding="utf-8"))
+    del payload["files"]["tools/bash.py"]
+    baseline.write_text(json.dumps(payload), encoding="utf-8")
+
+    out = io.StringIO()
+    rc = await cmd_doctor(argparse.Namespace(), out=out, root=tmp_path)
+    assert rc == 0, out.getvalue()
+    assert "no drift detected" in out.getvalue()
 
 
 async def test_doctor_surfaces_malformed_yaml_as_report_line(

@@ -116,9 +116,13 @@ Prints up to five sections:
 
 1. **Missing tool files** — present in current source, absent from
    your workspace.
-2. **Modified tool files** — sha256 differs from the recorded
-   `.kolsch/bundle-baseline.json`. Skipped with a one-line note when
-   no baseline exists (older workspaces installed before qol-089).
+2. **Modified tool files** — differ from the current source, and the
+   sha256 differs from the recorded `.kolsch/bundle-baseline.json`. A
+   file identical to source is never listed. With no baseline
+   (workspaces installed before qol-089) the section is labelled
+   **Modified vs source** and lists every shipped file that differs
+   from the current source: a local edit or an older shipped version.
+   The next `kolsch setup --sync-bundle` records the baseline.
 3. **Retired-at-source tool files** — present in your workspace but
    no longer in source (e.g. `fetch_website.py` after the
    `fetch_url` / `browse_url` split).
@@ -144,9 +148,14 @@ other `write_file` allows whose pattern uses a glob character (`*`,
 `?`, `[`), which also matches `/` and `.`. See
 [What agents can never change](permissions.md#what-agents-can-never-change-and-what-they-still-can).
 
+`__pycache__/` directories and `.DS_Store` files are ignored
+everywhere: they are never shipped, so they are not reported as
+retired.
+
 Exit code is `0` when clean, `1` when any drift was found. The
 Authorization and Agent write access sections never change the exit
-code.
+code. When there is drift, the report ends by pointing at
+`kolsch setup --sync-bundle`.
 
 ## Repairing drift — `kolsch setup --sync-bundle`
 
@@ -160,26 +169,35 @@ kolsch setup --sync-bundle --dry-run  # preview only; write nothing
 
 Sync classifies every file in `bundles/kolsch/` into four buckets:
 
-- **unchanged** — sha256 matches baseline → **overwrite** with the
-  source copy.
-- **locally-modified** — sha256 differs from baseline → **prompt**
-  per file (`[k]eep local / [o]verwrite / [d]iff`). Non-interactive
-  runs default to keep-local and exit non-zero as a partial-success
-  signal.
-- **added-at-source** — new file in source → **copy in**.
+- **unchanged** — identical to the source copy, or sha256 matches the
+  baseline (an older shipped version you never edited) → **overwrite**
+  with the source copy.
+- **locally-modified** — differs from source, and sha256 differs from
+  the baseline (or the baseline has no entry for it) → **prompt** per
+  file (`[k]eep local / [o]verwrite / [d]iff`). `--yes` and `--no`
+  keep the local file and exit non-zero as a partial-success signal.
+- **added-at-source** — new file in source → **copy in** (`--no`
+  skips it).
 - **retired-at-source** — file in workspace no longer in source →
-  **prompt** (`[k]eep / [d]elete`). Non-interactive default is
-  keep + skip.
+  **prompt** (`[k]eep / [d]elete`). `--yes` deletes it; `--no`
+  keeps it and exits non-zero.
+
+**No baseline?** Workspaces installed before qol-089 have no
+`.kolsch/bundle-baseline.json`. Sync still runs: it prints
+`no baseline recorded — classifying against current source.`, treats
+every file identical to source as unchanged and every other shipped
+file as locally modified (so it asks before touching it), then
+records a baseline.
 
 After the file-level pass, the migrator's YAML rewrites are applied
-to `bundles/kolsch/agents/*.yaml` and `platform.yaml`. `.kolsch/bundle-baseline.json`
-is refreshed. Files under `bundles/<your-bundle>/**` are **never
-written** — the `kolsch doctor` report is where user-owned drift
-gets surfaced.
-
-`--yes` and `--no` are symmetric knobs for scripting — both use the
-safe-default answers (keep-local for modified, keep for
-retired-at-source). Use whichever reads better in your automation.
+to `bundles/kolsch/agents/*.yaml` and `platform.yaml`. Then
+`.kolsch/bundle-baseline.json` is updated — even when the run was
+partial — with an entry for every file sync copied, overwrote,
+rewrote or found identical to source. A file you kept local keeps its
+old entry (or stays unrecorded), so the next sync asks about it
+again and nothing else. Files under `bundles/<your-bundle>/**` are
+**never written** — the `kolsch doctor` report is where user-owned
+drift gets surfaced.
 
 ## When the workspace doesn't exist
 
