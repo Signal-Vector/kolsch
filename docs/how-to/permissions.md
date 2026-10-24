@@ -459,8 +459,9 @@ The command atomically:
 
 Next authz decision uses the new rules. In-flight tool calls
 straddling a `/reload` are race-safe — they see the old provider
-consistently across all their decisions. Approval prompts keep
-working after a `/reload`.
+consistently across all their decisions. A workflow run already in
+progress keeps the rules it started with; new runs and chat turns
+pick them up. Approval prompts keep working after a `/reload`.
 
 `/reload` is the **only** way a running chat starts enforcing rule
 edits made on disk — by hand, by `kolsch permissions`, by `kolsch
@@ -1067,7 +1068,8 @@ layer**, first-match-wins. A matching locked rule always denies.
 
 The shape is deliberately narrow, and anything else fails at load
 (every `kolsch` command and `/reload` refuse the file, naming
-`locked_rules[<i>]`, the file and line, and the fix):
+`locked_rules[<i>]` and the file (with the line where known), and
+the fix):
 
 - **Deny only.** `allow` and `prompt` are refused: a locked `allow`
   would stop layers from narrowing, and a locked `prompt` would
@@ -1095,7 +1097,9 @@ kolsch permissions remove rl_locked_<hash>
 `--locked` requires `--effect deny` and refuses `--from`, `--before`,
 `--after` and `--first`. Locked rules are not removal-protected — they
 are yours. `/perm` and the approval modal never add, change or remove
-them. After a hand edit, `/reload` picks them up.
+them. After a hand edit, `/reload` picks them up. A workflow run
+already in progress keeps the rules it started with; new runs and
+chat turns pick them up.
 
 **Lock whole tools.** Prefer `pattern: "*"`. Pattern locks are weaker
 than they look:
