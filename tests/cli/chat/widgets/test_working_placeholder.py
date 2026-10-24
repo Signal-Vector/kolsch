@@ -24,11 +24,15 @@ starts. The integration tests below drive a real ``ChatApp`` (same
 scaffolding as
 ``tests/cli/chat/test_composer_submitted_exit_verbs.py``) against a
 fake engine whose ``execute_stream`` yields a real ``USER_MESSAGE``
-first (matching production), then sleeps before yielding its next
-(and only other) event, and assert the placeholder is mounted in
+first (matching production), then blocks on an ``asyncio.Event`` gate
+the test releases explicitly before yielding its next (and only
+other) event, and assert the placeholder is mounted in
 ``#transcript`` immediately after that ``USER_MESSAGE`` is processed —
 i.e. before the *subsequent* event is ever processed, and below the
-``UserChatbox`` the ``USER_MESSAGE`` itself mounted.
+``UserChatbox`` the ``USER_MESSAGE`` itself mounted. The gate makes
+that happens-before hold by construction rather than by a wall-clock
+delay (qol-164), and every "after the event" wait is a bounded
+``_pump_until`` on a predicate, never a sleep.
 """
 
 from __future__ import annotations
@@ -63,6 +67,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from textual.app import App
+    from textual.pilot import Pilot
     from textual.widget import Widget
 
 
@@ -378,8 +383,16 @@ def test_working_glyph_present_under_no_color_construction() -> None:
 @pytest.mark.asyncio
 async def test_working_glyph_matches_across_color_and_no_color(
     mock_app_factory: Callable[[Widget], App[None]],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The initial working-state glyph is identical between color + NO_COLOR."""
+    """The initial working-state glyph is identical between color + NO_COLOR.
+
+    The spinner animation is frozen for both runs so the read is the
+    *initial* glyph however long each mount takes (qol-164: with the
+    0.08s interval live, one run could advance a frame before its read
+    and the other not).
+    """
+    monkeypatch.setattr(WorkingPlaceholder, "_advance_spinner", lambda self: None)
     env_no_color = dict(os.environ, NO_COLOR="1")
     env_color = {k: v for k, v in os.environ.items() if k != "NO_COLOR"}
 
@@ -395,8 +408,7 @@ async def test_working_glyph_matches_across_color_and_no_color(
         await pilot.pause()
         mono_glyph = _glyph_text(w_mono)
 
-    assert color_glyph == mono_glyph
-    assert color_glyph in SPINNER_FRAMES
+    assert color_glyph == mono_glyph == SPINNER_FRAMES[0]
 
 
 @pytest.mark.asyncio
@@ -477,19 +489,53 @@ async def test_widget_mounts_standalone_with_no_wiring(
 #
 # Scaffolding mirrors `tests/cli/chat/test_composer_submitted_exit_verbs.py`
 # — a real `ChatApp` wired against a mock runtime/engine, driven through
-# `app.run_test()`. `_MockEngine.execute_stream` here is a *delayed*
-# async generator (sleeps before yielding its one event) so the test can
-# assert the placeholder is mounted in `#transcript` strictly before
-# that first event is ever handed to `EventAdapter.handle`.
+# `app.run_test()`. `_MockEngine.execute_stream` here is a *gated*
+# async generator: after `USER_MESSAGE` it blocks on an `asyncio.Event`
+# the test releases explicitly (`gate.set()`), so the test can assert
+# the placeholder is mounted in `#transcript` strictly before the next
+# event is ever handed to `EventAdapter.handle` — by construction, not
+# by racing a wall-clock delay (qol-164). A gate that is never set
+# leaves the stream parked until app teardown cancels the worker
+# (`Event.wait()` is cancellable exactly as `asyncio.sleep` is).
 
-_FIRST_EVENT_DELAY_SECONDS = 0.15
-"""Delay before the fake stream yields its first event.
 
-Long enough that a broken implementation (mount happening only after
-the first event, or not at all before iteration) would reliably fail
-`test_placeholder_mounted_before_first_event_processed` on any
-reasonable CI/dev machine, short enough to keep the test fast.
-"""
+async def _pump_until(
+    pilot: Pilot[Any],
+    predicate: Callable[[], bool],
+    *,
+    what: str,
+    max_pauses: int = 200,
+) -> None:
+    """Pump the event loop with `pilot.pause()` until `predicate()` holds.
+
+    Bounded by an iteration count, not a duration, and never sleeps:
+    host load slows each pause down but cannot make the predicate
+    false. Fails naming `what` once `max_pauses` is exhausted.
+    """
+    for _ in range(max_pauses):
+        if predicate():
+            return
+        await pilot.pause()
+    assert predicate(), f"timed out after {max_pauses} pauses waiting for {what}"
+
+
+def _placeholder_mounted(app: ChatApp) -> bool:
+    """The turn's `WorkingPlaceholder` is stashed and attached to the DOM."""
+    placeholder = app._working_placeholder
+    return placeholder is not None and placeholder.is_mounted
+
+
+def _running_block_mounted(app: ChatApp) -> bool:
+    """A `TOOL_CALLED` running `ToolCallBlock` is pending and attached."""
+    block = app._pending_tool_call_block
+    return block is not None and block.is_mounted
+
+
+def _prose_contains(app: ChatApp, text: str) -> bool:
+    """Some mounted `AssistantProse` already carries `text`."""
+    return any(
+        prose.is_mounted and text in prose.source for prose in app.query(AssistantProse)
+    )
 
 
 class _MockAuthzStep2:
@@ -569,16 +615,17 @@ def _make_user_message_event(thread_id: str, *, text: str = "hi") -> Event:
 def _make_delayed_event_stream(
     thread_id: str,
     events_seen: list[Event],
+    gate: asyncio.Event,
 ) -> Callable[..., AsyncGenerator[Event, None]]:
-    """Build a fake ``engine.execute_stream`` that delays its first event.
+    """Build a fake ``engine.execute_stream`` that holds back its next event.
 
     Yields a real ``USER_MESSAGE`` first (matching the engine's actual
-    ordering — see ``_make_user_message_event``), then delays before
-    yielding the "interesting" ``AGENT_MESSAGE``. Only the
+    ordering — see ``_make_user_message_event``), then waits on
+    ``gate`` before yielding the "interesting" ``AGENT_MESSAGE``. Only the
     ``AGENT_MESSAGE`` is appended to ``events_seen`` — callers use that
     list to assert "placeholder mounted" happened-before "first
     [interesting] event recorded" without needing to inspect
-    `EventAdapter` internals, and the delay/assertions in those tests
+    `EventAdapter` internals, and the gate/assertions in those tests
     are keyed off the AGENT_MESSAGE specifically, not the immediate
     USER_MESSAGE that now precedes it.
     """
@@ -587,7 +634,7 @@ def _make_delayed_event_stream(
         *_args: Any, **_kwargs: Any
     ) -> AsyncGenerator[Event, None]:
         yield _make_user_message_event(thread_id)
-        await asyncio.sleep(_FIRST_EVENT_DELAY_SECONDS)
+        await gate.wait()
         event = _make_canonical_agent_message_event(thread_id)
         events_seen.append(event)
         yield event
@@ -596,15 +643,19 @@ def _make_delayed_event_stream(
 
 
 class _MockEngineStep2:
-    def __init__(self, thread_id: str, events_seen: list[Event]) -> None:
-        self.execute_stream = _make_delayed_event_stream(thread_id, events_seen)
+    def __init__(
+        self, thread_id: str, events_seen: list[Event], gate: asyncio.Event
+    ) -> None:
+        self.execute_stream = _make_delayed_event_stream(thread_id, events_seen, gate)
 
 
 class _MockRuntimeStep2:
-    def __init__(self, thread_id: str, events_seen: list[Event]) -> None:
+    def __init__(
+        self, thread_id: str, events_seen: list[Event], gate: asyncio.Event
+    ) -> None:
         self.store = _MockStoreStep2()
         self.authz = _MockAuthzStep2()
-        self.engine = _MockEngineStep2(thread_id, events_seen)
+        self.engine = _MockEngineStep2(thread_id, events_seen, gate)
 
 
 @dataclass
@@ -626,7 +677,14 @@ class _MockBundleStep2:
     is_resume: bool
 
 
-def _make_app_step2(tmp_path: Path, events_seen: list[Event]) -> ChatApp:
+def _make_app_step2(
+    tmp_path: Path,
+    events_seen: list[Event],
+    gate: asyncio.Event | None = None,
+) -> ChatApp:
+    # `gate` defaults to a fresh, never-set event: the stream parks
+    # after `USER_MESSAGE` until app teardown cancels the worker.
+    #
     # `_run_exchange` (unlike the spied version in
     # test_composer_submitted_exit_verbs.py) really constructs an
     # `ExecutionContext`, whose `thread_id` is a `ThreadId` — validated
@@ -634,7 +692,9 @@ def _make_app_step2(tmp_path: Path, events_seen: list[Event]) -> ChatApp:
     # validation; use a real uuid4 body instead.
     thread_id = f"th_{uuid4()}"
     bundle = _MockBundleStep2(
-        runtime=_MockRuntimeStep2(thread_id, events_seen),
+        runtime=_MockRuntimeStep2(
+            thread_id, events_seen, gate if gate is not None else asyncio.Event()
+        ),
         config=_MockConfigStep2(),
         session_id="ses_test",
         thread_id=thread_id,
@@ -656,9 +716,9 @@ async def test_placeholder_mounted_at_turn_start(tmp_path: Path) -> None:
 
     Drives a real turn through the app's normal `_run_exchange` worker
     (not a spy) against a fake engine whose stream yields a real
-    `USER_MESSAGE` first, then delays before yielding its next event,
-    and asserts the placeholder is mounted before that delay elapses —
-    i.e. right after the `USER_MESSAGE` event has been processed (one
+    `USER_MESSAGE` first, then holds its next event behind a gate the
+    test never releases, and asserts the placeholder is mounted while
+    the stream is still held — i.e. right after the `USER_MESSAGE` event has been processed (one
     event in), not before any event has been processed.
     """
     events_seen: list[Event] = []
@@ -667,15 +727,16 @@ async def test_placeholder_mounted_at_turn_start(tmp_path: Path) -> None:
         await pilot.pause()
 
         app._run_exchange("hello there")
-        # Pump the loop just enough for the worker to start and mount
-        # the placeholder, but well short of `_FIRST_EVENT_DELAY_SECONDS`
-        # — the fake stream has not yielded anything yet.
-        await pilot.pause()
-        await pilot.pause()
+        # Pump until the worker has started and mounted the
+        # placeholder. The gate is never set, so the fake stream
+        # cannot yield its next event however long this takes.
+        await _pump_until(
+            pilot, lambda: _placeholder_mounted(app), what="placeholder mount"
+        )
 
         assert events_seen == [], (
-            "the fake stream's first event fired before the assertion — "
-            "the delay is too short for this to be a meaningful check"
+            "the fake stream's gated event fired before the assertion — "
+            "the gate did not hold"
         )
         placeholders = app.query(WorkingPlaceholder)
         assert len(placeholders) == 1
@@ -703,8 +764,9 @@ async def test_placeholder_reference_stashed_for_later_steps(
         await pilot.pause()
 
         app._run_exchange("hello there")
-        await pilot.pause()
-        await pilot.pause()
+        await _pump_until(
+            pilot, lambda: _placeholder_mounted(app), what="placeholder mount"
+        )
 
         placeholder = app._working_placeholder
         assert placeholder is not None
@@ -731,8 +793,9 @@ async def test_placeholder_mounts_below_user_chatbox_not_above_it(
     before the loop started landed it ABOVE the user's own message
     every time.
 
-    Uses the same delayed-stream shape Step 2's tests use (`USER_MESSAGE`
-    immediately, then a delay before a non-terminal `AGENT_MESSAGE`) so
+    Uses the same gated-stream shape Step 2's tests use (`USER_MESSAGE`
+    immediately, then a never-released gate before a non-terminal
+    `AGENT_MESSAGE`) so
     the placeholder is mounted and still visible (not yet morphed away)
     at the point this test inspects `#transcript` — both widgets must
     be present, with `UserChatbox` at a LOWER child index than
@@ -744,17 +807,17 @@ async def test_placeholder_mounts_below_user_chatbox_not_above_it(
         await pilot.pause()
 
         app._run_exchange("hello there")
-        # Pump just enough for USER_MESSAGE to be processed (mounting
-        # UserChatbox) and the placeholder to mount in response, but
-        # well short of `_FIRST_EVENT_DELAY_SECONDS` so the fake
-        # stream's AGENT_MESSAGE (which would morph the placeholder
-        # away) has not fired yet.
-        await pilot.pause()
-        await pilot.pause()
+        # Pump until USER_MESSAGE has been processed (mounting
+        # UserChatbox) and the placeholder has mounted in response. The
+        # gate is never set, so the fake stream's AGENT_MESSAGE (which
+        # would morph the placeholder away) cannot fire.
+        await _pump_until(
+            pilot, lambda: _placeholder_mounted(app), what="placeholder mount"
+        )
 
         assert events_seen == [], (
             "the fake stream's AGENT_MESSAGE fired before the assertion — "
-            "the delay is too short for this to be a meaningful check"
+            "the gate did not hold"
         )
 
         transcript = app.query_one("#transcript", VerticalScroll)
@@ -828,7 +891,7 @@ def _make_streaming_event_stream(
     *,
     deltas: list[str],
     call_id: str = "call-1",
-    delay_first_seconds: float = 0.0,
+    gate_first: asyncio.Event | None = None,
 ) -> Callable[..., AsyncGenerator[Event, None]]:
     """Build a fake ``engine.execute_stream`` yielding N streaming-token events.
 
@@ -836,20 +899,20 @@ def _make_streaming_event_stream(
     ordering), which is what triggers the placeholder mount. Each entry
     in ``deltas`` becomes one ``MODEL_STREAMING_TOKEN`` event for the
     same ``call_id`` — i.e. one turn, N incremental tokens, matching
-    how a real streamed reply arrives. When ``delay_first_seconds`` is
-    nonzero, the stream sleeps (AFTER yielding ``USER_MESSAGE``, before
-    the first streaming-token event) — same delayed-stream trick Step
-    2's tests use — so a test can pump the loop just enough to observe
-    the placeholder mounted (in response to ``USER_MESSAGE``) but not
-    yet morphed before the first token arrives.
+    how a real streamed reply arrives. When ``gate_first`` is given,
+    the stream waits on it (AFTER yielding ``USER_MESSAGE``, before the
+    first streaming-token event) — same gated-stream shape Step 2's
+    tests use — so a test can observe the placeholder mounted (in
+    response to ``USER_MESSAGE``) but not yet morphed, then release the
+    gate to let the first token arrive.
     """
 
     async def _streaming_stream(
         *_args: Any, **_kwargs: Any
     ) -> AsyncGenerator[Event, None]:
         yield _make_user_message_event(thread_id)
-        if delay_first_seconds:
-            await asyncio.sleep(delay_first_seconds)
+        if gate_first is not None:
+            await gate_first.wait()
         for delta in deltas:
             event = _make_streaming_token_event(
                 thread_id,
@@ -869,13 +932,13 @@ class _MockEngineStep3:
         events_seen: list[Event],
         *,
         deltas: list[str],
-        delay_first_seconds: float = 0.0,
+        gate_first: asyncio.Event | None = None,
     ) -> None:
         self.execute_stream = _make_streaming_event_stream(
             thread_id,
             events_seen,
             deltas=deltas,
-            delay_first_seconds=delay_first_seconds,
+            gate_first=gate_first,
         )
 
 
@@ -886,7 +949,7 @@ class _MockRuntimeStep3:
         events_seen: list[Event],
         *,
         deltas: list[str],
-        delay_first_seconds: float = 0.0,
+        gate_first: asyncio.Event | None = None,
     ) -> None:
         self.store = _MockStoreStep2()
         self.authz = _MockAuthzStep2()
@@ -894,7 +957,7 @@ class _MockRuntimeStep3:
             thread_id,
             events_seen,
             deltas=deltas,
-            delay_first_seconds=delay_first_seconds,
+            gate_first=gate_first,
         )
 
 
@@ -903,7 +966,7 @@ def _make_app_step3(
     events_seen: list[Event],
     *,
     deltas: list[str],
-    delay_first_seconds: float = 0.0,
+    gate_first: asyncio.Event | None = None,
 ) -> ChatApp:
     thread_id = f"th_{uuid4()}"
     bundle = _MockBundleStep2(
@@ -911,7 +974,7 @@ def _make_app_step3(
             thread_id,
             events_seen,
             deltas=deltas,
-            delay_first_seconds=delay_first_seconds,
+            gate_first=gate_first,
         ),
         config=_MockConfigStep2(),
         session_id="ses_test",
@@ -947,9 +1010,9 @@ async def test_first_streaming_token_removes_placeholder_and_mounts_prose(
         await pilot.pause()
 
         app._run_exchange("hi")
-        await pilot.pause()
-        await pilot.pause()
-        await pilot.pause()
+        await _pump_until(
+            pilot, lambda: _prose_contains(app, "hello"), what="streamed prose"
+        )
 
         assert len(events_seen) == 1, "expected exactly one streaming-token event"
 
@@ -975,17 +1038,18 @@ async def test_first_streaming_token_prose_lands_in_placeholder_position(
     `#transcript` for this turn beyond those two), so remove-then-mount
     should land `AssistantProse` at the same index the placeholder
     held — verified directly against `#transcript`'s child list, not
-    just "is mounted somewhere." Uses a first-event delay (same trick
-    as Step 2's `test_placeholder_mounted_at_turn_start`) so the
-    placeholder's mounted-but-not-yet-morphed position can be reliably
-    observed before the morph fires.
+    just "is mounted somewhere." Gates the first token (same gated
+    stream as Step 2's `test_placeholder_mounted_at_turn_start`) so the
+    placeholder's mounted-but-not-yet-morphed position is observed
+    before the test releases the morph.
     """
     events_seen: list[Event] = []
+    gate = asyncio.Event()
     app = _make_app_step3(
         tmp_path,
         events_seen,
         deltas=["hello"],
-        delay_first_seconds=_FIRST_EVENT_DELAY_SECONDS,
+        gate_first=gate,
     )
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -994,15 +1058,15 @@ async def test_first_streaming_token_prose_lands_in_placeholder_position(
         children_before = list(transcript.children)
 
         app._run_exchange("hi")
-        # Pump well short of the delay so the stream has not yielded
-        # its first (interesting) event yet, but USER_MESSAGE has been
-        # processed (mounting UserChatbox) and the placeholder mount
-        # has landed.
-        await pilot.pause()
-        await pilot.pause()
+        # Pump until USER_MESSAGE has been processed (mounting
+        # UserChatbox) and the placeholder mount has landed. The gate
+        # holds the stream's first (interesting) event back.
+        await _pump_until(
+            pilot, lambda: _placeholder_mounted(app), what="placeholder mount"
+        )
         assert events_seen == [], (
             "the fake stream's first event fired before the assertion — "
-            "the delay is too short for this to be a meaningful check"
+            "the gate did not hold"
         )
         placeholder_index = next(
             (
@@ -1017,11 +1081,14 @@ async def test_first_streaming_token_prose_lands_in_placeholder_position(
             "invalid, can't verify position"
         )
 
-        # Pump past the delay so the first token arrives and the morph
-        # (remove placeholder, mount prose) completes.
-        await asyncio.sleep(_FIRST_EVENT_DELAY_SECONDS)
-        await pilot.pause()
-        await pilot.pause()
+        # Release the gate so the first token arrives, and pump until
+        # the morph (remove placeholder, mount prose) completes.
+        gate.set()
+        await _pump_until(
+            pilot,
+            lambda: _prose_contains(app, "hello") and not _placeholder_mounted(app),
+            what="placeholder -> prose morph",
+        )
 
         children_after = list(transcript.children)
         assert len(children_after) == len(children_before) + 2, (
@@ -1063,10 +1130,11 @@ async def test_second_streaming_token_appends_not_second_morph(
         await pilot.pause()
 
         app._run_exchange("hi")
-        await pilot.pause()
-        await pilot.pause()
-        await pilot.pause()
-        await pilot.pause()
+        await _pump_until(
+            pilot,
+            lambda: len(events_seen) == 2 and _prose_contains(app, "world"),
+            what="both streamed tokens appended",
+        )
 
         assert len(events_seen) == 2, "expected exactly two streaming-token events"
 
@@ -1124,7 +1192,7 @@ def _make_complete_response_event_stream(
     *,
     text: str,
     call_id: str = "call-1",
-    delay_first_seconds: float = 0.0,
+    gate_first: asyncio.Event | None = None,
 ) -> Callable[..., AsyncGenerator[Event, None]]:
     """Build a fake ``engine.execute_stream`` yielding one complete ``AGENT_MESSAGE``.
 
@@ -1132,19 +1200,18 @@ def _make_complete_response_event_stream(
     ordering; triggers the placeholder mount). No
     ``MODEL_STREAMING_TOKEN`` precedes the ``AGENT_MESSAGE`` — the full
     text is present on the single event, matching a non-streamed
-    reply. When ``delay_first_seconds`` is nonzero, the stream sleeps
-    (after ``USER_MESSAGE``, before the complete response) mirroring
-    Steps 2-3's delayed-stream trick so a test can observe the
-    placeholder mounted-but-not-yet-morphed before the response
-    arrives.
+    reply. When ``gate_first`` is given, the stream waits on it (after
+    ``USER_MESSAGE``, before the complete response) mirroring Steps
+    2-3's gated stream so a test can observe the placeholder
+    mounted-but-not-yet-morphed before releasing the response.
     """
 
     async def _complete_stream(
         *_args: Any, **_kwargs: Any
     ) -> AsyncGenerator[Event, None]:
         yield _make_user_message_event(thread_id)
-        if delay_first_seconds:
-            await asyncio.sleep(delay_first_seconds)
+        if gate_first is not None:
+            await gate_first.wait()
         event = _make_agent_message_event(thread_id, call_id=call_id, text=text)
         events_seen.append(event)
         yield event
@@ -1159,13 +1226,13 @@ class _MockEngineStep4:
         events_seen: list[Event],
         *,
         text: str,
-        delay_first_seconds: float = 0.0,
+        gate_first: asyncio.Event | None = None,
     ) -> None:
         self.execute_stream = _make_complete_response_event_stream(
             thread_id,
             events_seen,
             text=text,
-            delay_first_seconds=delay_first_seconds,
+            gate_first=gate_first,
         )
 
 
@@ -1176,7 +1243,7 @@ class _MockRuntimeStep4:
         events_seen: list[Event],
         *,
         text: str,
-        delay_first_seconds: float = 0.0,
+        gate_first: asyncio.Event | None = None,
     ) -> None:
         self.store = _MockStoreStep2()
         self.authz = _MockAuthzStep2()
@@ -1184,7 +1251,7 @@ class _MockRuntimeStep4:
             thread_id,
             events_seen,
             text=text,
-            delay_first_seconds=delay_first_seconds,
+            gate_first=gate_first,
         )
 
 
@@ -1193,7 +1260,7 @@ def _make_app_step4(
     events_seen: list[Event],
     *,
     text: str,
-    delay_first_seconds: float = 0.0,
+    gate_first: asyncio.Event | None = None,
 ) -> ChatApp:
     thread_id = f"th_{uuid4()}"
     bundle = _MockBundleStep2(
@@ -1201,7 +1268,7 @@ def _make_app_step4(
             thread_id,
             events_seen,
             text=text,
-            delay_first_seconds=delay_first_seconds,
+            gate_first=gate_first,
         ),
         config=_MockConfigStep2(),
         session_id="ses_test",
@@ -1237,9 +1304,11 @@ async def test_complete_agent_message_removes_placeholder_and_mounts_full_prose(
         await pilot.pause()
 
         app._run_exchange("hi")
-        await pilot.pause()
-        await pilot.pause()
-        await pilot.pause()
+        await _pump_until(
+            pilot,
+            lambda: _prose_contains(app, "the complete answer"),
+            what="complete-response prose",
+        )
 
         assert len(events_seen) == 1, "expected exactly one AGENT_MESSAGE event"
         assert events_seen[0].type == EventType.AGENT_MESSAGE
@@ -1267,17 +1336,18 @@ async def test_complete_agent_message_prose_lands_in_placeholder_position(
     (which mounts its own `UserChatbox` first — nothing else added to
     `#transcript` for this turn beyond those two), so remove-then-mount
     should land `AssistantProse` at the same index the placeholder
-    held — verified directly against `#transcript`'s child list. Uses a
-    first-event delay (same trick as Steps 2-3) so the placeholder's
-    mounted-but-not-yet-morphed position can be reliably observed
-    before the morph fires.
+    held — verified directly against `#transcript`'s child list. Gates
+    the response (same gated stream as Steps 2-3) so the placeholder's
+    mounted-but-not-yet-morphed position is observed before the test
+    releases the morph.
     """
     events_seen: list[Event] = []
+    gate = asyncio.Event()
     app = _make_app_step4(
         tmp_path,
         events_seen,
         text="the complete answer",
-        delay_first_seconds=_FIRST_EVENT_DELAY_SECONDS,
+        gate_first=gate,
     )
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -1286,15 +1356,14 @@ async def test_complete_agent_message_prose_lands_in_placeholder_position(
         children_before = list(transcript.children)
 
         app._run_exchange("hi")
-        # Pump well short of the delay so the stream has not yielded
-        # its (interesting) event yet, but USER_MESSAGE has been
-        # processed (mounting UserChatbox) and the placeholder mount
-        # has landed.
-        await pilot.pause()
-        await pilot.pause()
+        # Pump until USER_MESSAGE has been processed (mounting
+        # UserChatbox) and the placeholder mount has landed. The gate
+        # holds the stream's (interesting) event back.
+        await _pump_until(
+            pilot, lambda: _placeholder_mounted(app), what="placeholder mount"
+        )
         assert events_seen == [], (
-            "the fake stream's event fired before the assertion — "
-            "the delay is too short for this to be a meaningful check"
+            "the fake stream's event fired before the assertion — the gate did not hold"
         )
         placeholder_index = next(
             (
@@ -1309,11 +1378,18 @@ async def test_complete_agent_message_prose_lands_in_placeholder_position(
             "invalid, can't verify position"
         )
 
-        # Pump past the delay so the complete response arrives and the
-        # morph (remove placeholder, mount full prose) completes.
-        await asyncio.sleep(_FIRST_EVENT_DELAY_SECONDS)
-        await pilot.pause()
-        await pilot.pause()
+        # Release the gate so the complete response arrives, and pump
+        # until the morph (remove placeholder, mount full prose)
+        # completes.
+        gate.set()
+        await _pump_until(
+            pilot,
+            lambda: (
+                _prose_contains(app, "the complete answer")
+                and not _placeholder_mounted(app)
+            ),
+            what="placeholder -> prose morph",
+        )
 
         children_after = list(transcript.children)
         assert len(children_after) == len(children_before) + 2, (
@@ -1354,9 +1430,13 @@ async def test_complete_response_path_no_empty_then_fill(tmp_path: Path) -> None
         await pilot.pause()
 
         app._run_exchange("hi")
-        await pilot.pause()
-        await pilot.pause()
-        await pilot.pause()
+        # Stop at the first observation where ANY AssistantProse
+        # exists — the assertion below then checks it is already full.
+        await _pump_until(
+            pilot,
+            lambda: len(app.query(AssistantProse)) > 0,
+            what="first AssistantProse mount",
+        )
 
         prose_widgets = app.query(AssistantProse)
         assert len(prose_widgets) == 1
@@ -1389,10 +1469,15 @@ async def test_streaming_and_complete_response_paths_do_not_interfere(
     async with streaming_app.run_test() as pilot:
         await pilot.pause()
         streaming_app._run_exchange("hi")
-        await pilot.pause()
-        await pilot.pause()
-        await pilot.pause()
-        await pilot.pause()
+        await _pump_until(
+            pilot,
+            lambda: (
+                len(streaming_events) == 2
+                and _prose_contains(streaming_app, "world")
+                and streaming_app._working_placeholder is None
+            ),
+            what="streaming turn complete",
+        )
 
         streaming_prose = streaming_app.query(AssistantProse)
         assert len(streaming_prose) == 1
@@ -1408,9 +1493,14 @@ async def test_streaming_and_complete_response_paths_do_not_interfere(
     async with complete_app.run_test() as pilot:
         await pilot.pause()
         complete_app._run_exchange("hi")
-        await pilot.pause()
-        await pilot.pause()
-        await pilot.pause()
+        await _pump_until(
+            pilot,
+            lambda: (
+                _prose_contains(complete_app, "a complete reply")
+                and complete_app._working_placeholder is None
+            ),
+            what="complete-response turn complete",
+        )
 
         complete_prose = complete_app.query(AssistantProse)
         assert len(complete_prose) == 1
@@ -1495,19 +1585,19 @@ def _make_tool_call_event_stream(
     tool_name: str = "read_file",
     arguments: dict[str, Any] | None = None,
     result: dict[str, Any] | None = None,
-    delay_first_seconds: float = 0.0,
-    delay_between_seconds: float = 0.0,
+    gate_first: asyncio.Event | None = None,
+    gate_between: asyncio.Event | None = None,
 ) -> Callable[..., AsyncGenerator[Event, None]]:
     """Build a fake ``engine.execute_stream`` yielding TOOL_CALLED then TOOL_RESULT.
 
     Yields a real ``USER_MESSAGE`` first (matching the engine's actual
     ordering; triggers the placeholder mount). One tool call, two
     events, same ``tool_call_id`` — matching how a real tool invocation
-    arrives. ``delay_first_seconds`` (after ``USER_MESSAGE``, before
-    TOOL_CALLED) and ``delay_between_seconds`` (between TOOL_CALLED and
-    TOOL_RESULT) reuse the delayed-stream trick from Steps 2-4 so a
-    test can pump the loop just enough to observe an intermediate
-    mount state before the next event lands.
+    arrives. ``gate_first`` (after ``USER_MESSAGE``, before
+    TOOL_CALLED) and ``gate_between`` (between TOOL_CALLED and
+    TOOL_RESULT) reuse the gated stream from Steps 2-4 so a test can
+    observe an intermediate mount state, then release the gate to let
+    the next event land.
     """
     args = arguments if arguments is not None else {"path": "/tmp/x"}
     res = result if result is not None else {"content": "file contents here"}
@@ -1516,8 +1606,8 @@ def _make_tool_call_event_stream(
         *_args: Any, **_kwargs: Any
     ) -> AsyncGenerator[Event, None]:
         yield _make_user_message_event(thread_id)
-        if delay_first_seconds:
-            await asyncio.sleep(delay_first_seconds)
+        if gate_first is not None:
+            await gate_first.wait()
         called = _make_tool_called_event(
             thread_id,
             tool_call_id=tool_call_id,
@@ -1526,8 +1616,8 @@ def _make_tool_call_event_stream(
         )
         events_seen.append(called)
         yield called
-        if delay_between_seconds:
-            await asyncio.sleep(delay_between_seconds)
+        if gate_between is not None:
+            await gate_between.wait()
         result_event = _make_tool_result_event(
             thread_id,
             tool_call_id=tool_call_id,
@@ -1550,8 +1640,8 @@ class _MockEngineStep5:
         tool_name: str = "read_file",
         arguments: dict[str, Any] | None = None,
         result: dict[str, Any] | None = None,
-        delay_first_seconds: float = 0.0,
-        delay_between_seconds: float = 0.0,
+        gate_first: asyncio.Event | None = None,
+        gate_between: asyncio.Event | None = None,
     ) -> None:
         self.execute_stream = _make_tool_call_event_stream(
             thread_id,
@@ -1560,8 +1650,8 @@ class _MockEngineStep5:
             tool_name=tool_name,
             arguments=arguments,
             result=result,
-            delay_first_seconds=delay_first_seconds,
-            delay_between_seconds=delay_between_seconds,
+            gate_first=gate_first,
+            gate_between=gate_between,
         )
 
 
@@ -1575,8 +1665,8 @@ class _MockRuntimeStep5:
         tool_name: str = "read_file",
         arguments: dict[str, Any] | None = None,
         result: dict[str, Any] | None = None,
-        delay_first_seconds: float = 0.0,
-        delay_between_seconds: float = 0.0,
+        gate_first: asyncio.Event | None = None,
+        gate_between: asyncio.Event | None = None,
     ) -> None:
         self.store = _MockStoreStep2()
         self.authz = _MockAuthzStep2()
@@ -1587,8 +1677,8 @@ class _MockRuntimeStep5:
             tool_name=tool_name,
             arguments=arguments,
             result=result,
-            delay_first_seconds=delay_first_seconds,
-            delay_between_seconds=delay_between_seconds,
+            gate_first=gate_first,
+            gate_between=gate_between,
         )
 
 
@@ -1600,8 +1690,8 @@ def _make_app_step5(
     tool_name: str = "read_file",
     arguments: dict[str, Any] | None = None,
     result: dict[str, Any] | None = None,
-    delay_first_seconds: float = 0.0,
-    delay_between_seconds: float = 0.0,
+    gate_first: asyncio.Event | None = None,
+    gate_between: asyncio.Event | None = None,
 ) -> ChatApp:
     thread_id = f"th_{uuid4()}"
     bundle = _MockBundleStep2(
@@ -1612,8 +1702,8 @@ def _make_app_step5(
             tool_name=tool_name,
             arguments=arguments,
             result=result,
-            delay_first_seconds=delay_first_seconds,
-            delay_between_seconds=delay_between_seconds,
+            gate_first=gate_first,
+            gate_between=gate_between,
         ),
         config=_MockConfigStep2(),
         session_id="ses_test",
@@ -1636,8 +1726,8 @@ async def test_tool_called_removes_placeholder_and_mounts_running_block(
 ) -> None:
     """`TOOL_CALLED` removes the placeholder and mounts a running `ToolCallBlock`.
 
-    Uses a delay between TOOL_CALLED and TOOL_RESULT so the running,
-    not-yet-filled state can be observed directly: placeholder gone,
+    Gates TOOL_RESULT behind an event the test never releases, so the
+    running, not-yet-filled state can be observed directly: placeholder gone,
     exactly one `ToolCallBlock` mounted, empty body (the running-state
     signal — matches `WorkflowNodeRow.mount_tool_call`'s "empty body
     == running" rule), and `ChatApp._working_placeholder` cleared.
@@ -1648,15 +1738,17 @@ async def test_tool_called_removes_placeholder_and_mounts_running_block(
         events_seen,
         tool_name="read_file",
         arguments={"path": "/tmp/x"},
-        delay_between_seconds=_FIRST_EVENT_DELAY_SECONDS,
+        gate_between=asyncio.Event(),
     )
     async with app.run_test() as pilot:
         await pilot.pause()
 
         app._run_exchange("read a file for me")
-        await pilot.pause()
-        await pilot.pause()
-        await pilot.pause()
+        await _pump_until(
+            pilot,
+            lambda: _running_block_mounted(app),
+            what="running ToolCallBlock mount",
+        )
 
         assert len(events_seen) == 1, "expected only TOOL_CALLED to have fired yet"
         assert events_seen[0].type == EventType.TOOL_CALLED
@@ -1686,23 +1778,25 @@ async def test_tool_result_fills_the_same_block_identity(tmp_path: Path) -> None
     not just an equality/count check.
     """
     events_seen: list[Event] = []
+    gate = asyncio.Event()
     app = _make_app_step5(
         tmp_path,
         events_seen,
         tool_name="read_file",
         arguments={"path": "/tmp/x"},
         result={"content": "the file's contents"},
-        delay_between_seconds=_FIRST_EVENT_DELAY_SECONDS,
+        gate_between=gate,
     )
     async with app.run_test() as pilot:
         await pilot.pause()
 
         app._run_exchange("read a file for me")
-        # Pump past TOOL_CALLED but short of the delay before
-        # TOOL_RESULT.
-        await pilot.pause()
-        await pilot.pause()
-        await pilot.pause()
+        # Pump past TOOL_CALLED; the gate holds TOOL_RESULT back.
+        await _pump_until(
+            pilot,
+            lambda: _running_block_mounted(app),
+            what="running ToolCallBlock mount",
+        )
         assert len(events_seen) == 1, "expected only TOOL_CALLED to have fired yet"
 
         running_blocks = app.query(ToolCallBlock)
@@ -1710,11 +1804,17 @@ async def test_tool_result_fills_the_same_block_identity(tmp_path: Path) -> None
         running_block = running_blocks.first()
         assert _tool_body_text(running_block) == ""
 
-        # Pump past the delay so TOOL_RESULT arrives and fills the
-        # block in place.
-        await asyncio.sleep(_FIRST_EVENT_DELAY_SECONDS)
-        await pilot.pause()
-        await pilot.pause()
+        # Release the gate so TOOL_RESULT arrives, and pump until it
+        # has filled the block in place.
+        gate.set()
+        await _pump_until(
+            pilot,
+            lambda: (
+                len(events_seen) == 2
+                and "the file's contents" in _tool_body_text(running_block)
+            ),
+            what="TOOL_RESULT fill",
+        )
 
         assert len(events_seen) == 2
         assert events_seen[1].type == EventType.TOOL_RESULT
@@ -1743,10 +1843,11 @@ async def test_tool_call_running_block_lands_in_placeholder_position(
     count includes that extra widget too.
     """
     events_seen: list[Event] = []
+    gate = asyncio.Event()
     app = _make_app_step5(
         tmp_path,
         events_seen,
-        delay_first_seconds=_FIRST_EVENT_DELAY_SECONDS,
+        gate_first=gate,
     )
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -1755,11 +1856,12 @@ async def test_tool_call_running_block_lands_in_placeholder_position(
         children_before = list(transcript.children)
 
         app._run_exchange("read a file for me")
-        await pilot.pause()
-        await pilot.pause()
+        await _pump_until(
+            pilot, lambda: _placeholder_mounted(app), what="placeholder mount"
+        )
         assert events_seen == [], (
             "the fake stream's first event fired before the assertion — "
-            "the delay is too short for this to be a meaningful check"
+            "the gate did not hold"
         )
         placeholder_index = next(
             (
@@ -1774,9 +1876,19 @@ async def test_tool_call_running_block_lands_in_placeholder_position(
             "invalid, can't verify position"
         )
 
-        await asyncio.sleep(_FIRST_EVENT_DELAY_SECONDS)
-        await pilot.pause()
-        await pilot.pause()
+        # Release the gate and pump until the whole TOOL_CALLED ->
+        # TOOL_RESULT sequence has landed (the result arrives ungated,
+        # so the running block is filled in place by then).
+        gate.set()
+        await _pump_until(
+            pilot,
+            lambda: (
+                len(events_seen) == 2
+                and app._pending_tool_call_block is None
+                and len(app.query(ToolCallBlock)) > 0
+            ),
+            what="placeholder -> ToolCallBlock morph and fill",
+        )
 
         children_after = list(transcript.children)
         assert len(children_after) == len(children_before) + 2, (
@@ -1820,10 +1932,17 @@ async def test_tool_call_result_never_produces_a_second_mount(
         await pilot.pause()
 
         app._run_exchange("list files")
-        await pilot.pause()
-        await pilot.pause()
-        await pilot.pause()
-        await pilot.pause()
+        await _pump_until(
+            pilot,
+            lambda: (
+                len(events_seen) == 2
+                and any(
+                    "file1.txt" in _tool_body_text(block)
+                    for block in app.query(ToolCallBlock)
+                )
+            ),
+            what="TOOL_CALLED -> TOOL_RESULT fill",
+        )
 
         assert len(events_seen) == 2
         assert [e.type for e in events_seen] == [
@@ -3359,9 +3478,11 @@ async def test_mount_time_failure_now_produces_exchange_failed_notice(
         await pilot.pause()
 
         app._run_exchange("hello")
-        await pilot.pause()
-        await pilot.pause()
-        await pilot.pause()
+        await _pump_until(
+            pilot,
+            lambda: len(app.query(".error")) > 0,
+            what="exchange-failed notice",
+        )
 
         # No placeholder was ever mounted (the mount call raised before
         # producing one) — nothing to flip, nothing orphaned either.
@@ -3382,7 +3503,7 @@ async def test_mount_time_failure_now_produces_exchange_failed_notice(
 
         # The fake stream's AGENT_MESSAGE event never fired — the mount
         # failure short-circuited right after USER_MESSAGE, before the
-        # delay/second event was ever reached.
+        # gate/second event was ever reached.
         assert events_seen == []
 
         # The app is still alive and responsive — the worker's raise

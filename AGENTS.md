@@ -87,6 +87,7 @@ podman-compose -f compose.dev.yml exec dev uv run mypy .
 podman-compose -f compose.dev.yml exec dev uv run pytest tests/unit          # seconds
 podman-compose -f compose.dev.yml exec dev uv run pytest tests/component     # ~1 min
 podman-compose -f compose.dev.yml exec dev uv run pytest tests/integration   # minutes (Mock LLM + real CrewAI)
+podman-compose -f compose.dev.yml exec dev uv run pytest -m perf  # wall-clock budgets; run deliberately, not in either gate scope
 
 # If you changed engine behavior, check golden diffs:
 podman-compose -f compose.dev.yml exec dev uv run pytest tests/golden

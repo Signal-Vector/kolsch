@@ -1,18 +1,23 @@
 """spec-007 Test 2 — `MarkdownRenderer` 100ms flush coalescing.
 
-Three passes:
+The coalescing property is "one underlying `Markdown.append` per
+flush tick, however many chunks arrived since the last tick". These
+tests drive the ticks by hand (the widget's interval timer is paused
+right after mount and `_flush_buffer()` is called explicitly), so the
+result never depends on elapsed wall time (qol-164):
 
-1. Feed 40 `card.appended` events over 1s (40 Hz). Underlying
-   `Markdown.append` invoked at most ~10 times (100ms flush).
-2. `KOLSCH_CARD_MARKDOWN_FLUSH_MS=30`; flush ratio scales
-   accordingly (~33Hz cadence).
+1. 40 chunks in 10 batches of 4, one tick per batch → exactly 10
+   `append` calls / flushes; an empty-buffer tick is a no-op.
+2. `KOLSCH_CARD_MARKDOWN_FLUSH_MS=30` → the timer is installed at a
+   30ms interval (the coalescing logic is interval-independent and
+   covered by 1).
 3. Final rendered content equals the concatenation of all chunks
-   (buffering doesn't lose data).
+   (buffering doesn't lose data), plus one live-timer check that the
+   real `set_interval` path drains the buffer on its own.
 """
 
 from __future__ import annotations
 
-import asyncio
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -23,6 +28,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from textual.app import App
+    from textual.pilot import Pilot
     from textual.widget import Widget
 
 
@@ -34,12 +40,8 @@ class _MockEvent:
         self.payload = payload
 
 
-async def _feed_40hz(widget: MarkdownRenderer, chunks: list[str]) -> None:
-    """Feed one chunk every 25ms (40Hz) via `apply_event`.
-
-    Between chunks we `asyncio.sleep(0.025)` so the widget's
-    interval timer can fire on its own cadence in parallel.
-    """
+def _feed(widget: MarkdownRenderer, chunks: list[str]) -> None:
+    """Feed `chunks` through `apply_event` with no tick in between."""
     for chunk in chunks:
         widget.apply_event(
             _MockEvent(
@@ -47,7 +49,36 @@ async def _feed_40hz(widget: MarkdownRenderer, chunks: list[str]) -> None:
                 {"chunk": chunk},
             )
         )
-        await asyncio.sleep(0.025)
+
+
+def _pause_flush_timer(widget: MarkdownRenderer) -> None:
+    """Assert `on_mount` installed the flush timer, then pause it.
+
+    With the timer paused the test owns every tick; nothing drains the
+    buffer behind its back however slow the host is.
+    """
+    handle = widget._interval_handle
+    assert handle is not None, "on_mount did not install the flush interval"
+    assert handle._interval == widget._FLUSH_MS / 1000, (
+        f"flush interval {handle._interval!r} != _FLUSH_MS/1000 "
+        f"({widget._FLUSH_MS / 1000!r})"
+    )
+    handle.pause()
+
+
+async def _pump_until(
+    pilot: Pilot[Any],
+    predicate: Callable[[], bool],
+    *,
+    what: str,
+    max_pauses: int = 200,
+) -> None:
+    """Pump the event loop until `predicate()` holds, or fail naming `what`."""
+    for _ in range(max_pauses):
+        if predicate():
+            return
+        await pilot.pause()
+    assert predicate(), f"timed out after {max_pauses} pauses waiting for {what}"
 
 
 @pytest.mark.asyncio
@@ -55,28 +86,52 @@ async def test_40hz_flush_ratio_bounded(
     mock_app_factory: Callable[[Widget], App[None]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """40Hz input → ≤10 underlying `Markdown.append` calls per second.
+    """One underlying `Markdown.append` per flush tick, whatever the
+    chunk count.
 
-    The `MarkdownRenderer._flush_count` counter increments on every
-    real `_flush_buffer` invocation that drained a non-empty buffer.
+    40 chunks arrive in 10 bursts of 4 (the 40Hz-input / 100ms-tick
+    ratio); each tick drains its whole burst into exactly one
+    `append`. The `MarkdownRenderer._flush_count` counter increments
+    on every `_flush_buffer` invocation that drained a non-empty
+    buffer.
     """
     monkeypatch.setenv("KOLSCH_CARD_MARKDOWN_FLUSH_MS", "100")
     widget = MarkdownRenderer()
     app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
+        assert widget._FLUSH_MS / 1000 == 0.1
+        _pause_flush_timer(widget)
+
+        appended: list[str] = []
+        real_append = widget.append
+
+        def _spy_append(markdown: str) -> Any:
+            appended.append(markdown)
+            return real_append(markdown)
+
+        monkeypatch.setattr(widget, "append", _spy_append)
+
         chunks = [f"c{i} " for i in range(40)]
-        await _feed_40hz(widget, chunks)
-        # Ensure the last flush fires.
-        await pilot.pause(0.15)
-        # ≤10 flushes in ~1s (100ms cadence). Generous upper bound
-        # to absorb scheduling jitter; the invariant is
-        # "coalesced, not per-append".
-        assert widget._flush_count <= 12, (
-            f"Expected ≤12 flushes for 40 chunks at 100ms; got {widget._flush_count}"
+        batches = [chunks[i : i + 4] for i in range(0, 40, 4)]
+        for batch in batches:
+            _feed(widget, batch)
+            widget._flush_buffer()
+
+        assert widget._flush_count == 10, (
+            f"Expected exactly 10 flushes for 10 ticks; got {widget._flush_count}"
         )
-        # But at least one flush fired — buffer drained.
-        assert widget._flush_count >= 1
+        assert appended == ["".join(batch) for batch in batches], (
+            f"Expected one append per tick carrying its whole burst; got {appended!r}"
+        )
+
+        # A tick on an empty buffer is a no-op.
+        widget._flush_buffer()
+        assert widget._flush_count == 10
+        assert len(appended) == 10
+
+        await pilot.pause()
+        assert widget.source == "".join(chunks)
 
 
 @pytest.mark.asyncio
@@ -84,10 +139,11 @@ async def test_flush_ms_env_override(
     mock_app_factory: Callable[[Widget], App[None]],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`KOLSCH_CARD_MARKDOWN_FLUSH_MS=30` → higher flush cadence.
+    """`KOLSCH_CARD_MARKDOWN_FLUSH_MS=30` → the flush timer ticks every 30ms.
 
-    Under a 30ms interval the same 40Hz input drains more often —
-    the counter should be higher than the 100ms case.
+    The coalescing per tick is interval-independent (see
+    `test_40hz_flush_ratio_bounded`); what the env var controls is the
+    interval the timer is installed with.
     """
     monkeypatch.setenv("KOLSCH_CARD_MARKDOWN_FLUSH_MS", "30")
     widget = MarkdownRenderer()
@@ -95,13 +151,9 @@ async def test_flush_ms_env_override(
     async with app.run_test() as pilot:
         await pilot.pause()
         assert widget._FLUSH_MS == 30
-        chunks = [f"c{i} " for i in range(40)]
-        await _feed_40hz(widget, chunks)
-        await pilot.pause(0.05)
-        # 30ms cadence over ~1s → up to ~33 flushes. Under-bound the
-        # assertion so scheduling jitter doesn't flake — the point
-        # is "more flushes than the 100ms case".
-        assert widget._flush_count >= 5
+        assert widget._interval_handle is not None
+        assert widget._interval_handle._interval == 0.03
+        _pause_flush_timer(widget)
 
 
 @pytest.mark.asyncio
@@ -118,16 +170,36 @@ async def test_no_data_loss_under_streaming(
     app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
+        _pause_flush_timer(widget)
         chunks = [f"chunk{i}\n" for i in range(20)]
-        for chunk in chunks:
-            widget.apply_event(
-                _MockEvent(
-                    "kolsch.card.appended",
-                    {"chunk": chunk},
-                )
-            )
-        # Give the interval enough time to drain remaining chunks.
-        await pilot.pause(0.3)
+        _feed(widget, chunks)
+        widget._flush_buffer()
+        await pilot.pause()
         source = widget.source
         for i in range(20):
             assert f"chunk{i}" in source, f"chunk{i} missing from source={source!r}"
+
+
+@pytest.mark.asyncio
+async def test_live_flush_timer_drains_buffer(
+    mock_app_factory: Callable[[Widget], App[None]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The real `set_interval` path drains the buffer without a manual tick.
+
+    Lower-bound only (`>= 1` flush): host load can delay the tick but
+    never prevent it, so the bounded pump cannot be flaked by a slow
+    box.
+    """
+    monkeypatch.setenv("KOLSCH_CARD_MARKDOWN_FLUSH_MS", "100")
+    widget = MarkdownRenderer()
+    app = mock_app_factory(widget)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        _feed(widget, ["live-chunk\n"])
+        await _pump_until(
+            pilot,
+            lambda: widget._flush_count >= 1,
+            what="the live flush timer to drain the buffer",
+        )
+        assert "live-chunk" in widget.source

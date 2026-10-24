@@ -267,6 +267,7 @@ async def _seed(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.perf
 @pytest.mark.asyncio
 async def test_replay_history_completes_under_five_seconds_on_large_session(
     store_env: dict[str, Any],
@@ -276,6 +277,10 @@ async def test_replay_history_completes_under_five_seconds_on_large_session(
     Seeds 250 turns (500 events) — enough that the pre-batch behaviour
     (37 handlers, each firing a fresh Textual layout pass per mount)
     would be visibly slow, but the test stays fast.
+
+    Opt-in `perf` tier (qol-164): run with `pytest -m perf`. The gate's
+    deterministic guard for the same fix is
+    `test_replay_dispatch_runs_inside_transcript_batch`.
     """
     events = _synthesize_events(
         store_env["session_id"],
@@ -312,6 +317,71 @@ async def test_replay_history_completes_under_five_seconds_on_large_session(
             f"replay took {elapsed:.2f}s; expected < 5.0s "
             f"(target < 2.0s per three-engineer prediction)"
         )
+
+
+@pytest.mark.asyncio
+async def test_replay_dispatch_runs_inside_transcript_batch(
+    store_env: dict[str, Any],
+) -> None:
+    """Every replayed event is dispatched inside `transcript.batch()`.
+
+    The deterministic guard for the bug-058 Part A mechanism: the
+    per-event `event_adapter.handle` loop in `ChatApp._replay_history`
+    runs under its own `App.batch_update()`, so N per-widget layout
+    passes collapse into one. Asserts the mechanism rather than a
+    wall-clock budget, so host load cannot flake it; the budget itself
+    lives in the opt-in `perf` tier
+    (`test_replay_history_completes_under_five_seconds_on_large_session`).
+
+    Measured relative to `app._batch_count` at `_replay_history` entry,
+    not against `>= 1`: Textual's own startup `batch_update()` (around
+    compose/mount in `App._process_messages`) can already be open when
+    `on_mount` replays, so an absolute `>= 1` would pass even with the
+    `transcript.batch()` wrap removed.
+    """
+    events = _synthesize_events(
+        store_env["session_id"],
+        store_env["thread_id"],
+        turns=20,
+    )
+    await _seed(store_env["store"], store_env["thread_id"], events)
+
+    bundle = _mk_bundle(store_env, is_resume=True)
+    app = ChatApp(
+        session=bundle,
+        engine=bundle.runtime.engine,
+        full_history=True,
+    )
+    seeded_ids = {ev.event_id for ev in events}
+    entry_counts: list[int] = []
+    batch_counts: list[int] = []
+    real_handle = app.event_adapter.handle
+    real_replay = app._replay_history
+
+    async def _spy_replay() -> None:
+        entry_counts.append(app._batch_count)
+        await real_replay()
+
+    async def _spy_handle(event: Event) -> None:
+        if event.event_id in seeded_ids:
+            batch_counts.append(app._batch_count)
+        await real_handle(event)
+
+    app.event_adapter.handle = _spy_handle  # type: ignore[method-assign]
+    app._replay_history = _spy_replay  # type: ignore[method-assign]
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+    assert len(batch_counts) == len(events) == 40, (
+        f"expected all {len(events)} seeded events replayed; got {len(batch_counts)}"
+    )
+    assert len(entry_counts) == 1, f"_replay_history ran {len(entry_counts)} times"
+    assert min(batch_counts) >= entry_counts[0] + 1, (
+        "a replayed event was dispatched outside transcript.batch() "
+        f"(_batch_count at replay entry: {entry_counts[0]}; "
+        f"per-call: {batch_counts!r})"
+    )
 
 
 # ---------------------------------------------------------------------------

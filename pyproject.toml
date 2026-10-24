@@ -776,8 +776,11 @@ addopts = [
     # tokens, need real LLM keys, and run on a separate (nightly /
     # pre-release) schedule per + compose.test.yml.
     # Run explicitly via `pytest -m e2e` (which OVERRIDES this).
+    # Also exclude `perf` wall-clock budgets (qol-164): on a loaded host
+    # they measure the host, not the code, so neither gate scope runs
+    # them. Run deliberately via `pytest -m perf` (also an override).
     "-m",
-    "not e2e",
+    "not e2e and not perf",
 ]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
@@ -788,6 +791,7 @@ markers = [
     "e2e: whole platform, real infrastructure, real LLM",
     "golden: golden event-sequence comparison",
     "slow: long-running tests",
+    "perf: wall-clock performance budgets; excluded by default and from both gate scopes; run deliberately with -m perf",
 ]
 filterwarnings = [
     "error",
