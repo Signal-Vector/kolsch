@@ -429,10 +429,11 @@ existing workspaces are covered without re-syncing), the
 workflow `kolsch/nodes/write_file` node. The check runs **after**
 authorization, so no authz outcome reaches these paths: not an
 allow-all rule set, not a workflow `policy:` or agent / bundle
-`permissions:` allow, not `kolsch chat --auto-approve`, and not a
-`write_file` allow with a `dir/*` pattern (which also matches
-`dir/../platform.yaml`, because rule patterns match the raw path
-argument). The target is resolved first (symlinks and `..` followed)
+`permissions:` allow, and not `kolsch chat --auto-approve`. (Authz
+itself no longer lets a `dir/*` allow match `dir/../platform.yaml`:
+path targets are matched in canonical form — see
+[authz contract §3.2.7](secrets-sandbox-authz-contract.md#327-path-targets);
+the floor holds regardless.) The target is resolved first (symlinks and `..` followed)
 and compared casefolded per component; an existing target that is the
 same file as a protected one (a hard link) is refused too. A refusal
 is `file_access.denied` with `matched_rule.type ==
