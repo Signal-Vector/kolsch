@@ -97,8 +97,21 @@ def format_denial_hint(matched_rule: dict[str, Any]) -> str:
         at_clause = "at (unknown source)"
     pattern = matched_rule.get("pattern") or matched_rule.get("what") or "*"
     line1 = f"denied by {rule_id} ({effect}) {at_clause}"
-    line2 = f"pattern {pattern} — /reload to reapply after editing"
+    if _is_locked_rule_id(matched_rule.get("id")):
+        line2 = (
+            "locked rule — workflow/agent/bundle allows can't override it; "
+            "edit authorization.config.locked_rules in platform.yaml, then /reload"
+        )
+    else:
+        line2 = f"pattern {pattern} — /reload to reapply after editing"
     return f"{line1}\n{line2}"
+
+
+def _is_locked_rule_id(rule_id: object) -> bool:
+    """Return True for a locked platform rule's id (`rl_locked_<hash>`)."""
+    from providers import LOCKED_RULE_ID_PREFIX  # noqa: PLC0415
+
+    return isinstance(rule_id, str) and rule_id.startswith(LOCKED_RULE_ID_PREFIX)
 
 
 # ---------------------------------------------------------------------------
@@ -458,6 +471,10 @@ def _assemble_card_data(
     layer = _extract_layer_from_reason(
         matched_rule.get("reason") or policy_payload.get("reason") or "",
     )
+    # A locked rule is identifiable from its id alone, so its layer is
+    # known even though no reason string reaches this reader.
+    if layer is None and _is_locked_rule_id(matched_rule.get("id")):
+        layer = "locked"
 
     # Target string — prefer the policy event (which normalises None
     # → the empty string) so the card shows what the matcher saw.
@@ -857,6 +874,10 @@ async def handle_reload(runtime: PlatformRuntime) -> ReloadResult:
             config=authz_cfg.get("config", {}),
             catalog=fresh_catalog,
             source_map=source_map,
+            locked_source_map=authorization_rule_source_map(
+                root, list_key="locked_rules"
+            ),
+            config_file=str(root / "platform.yaml"),
         )
     except Exception as exc:  # noqa: BLE001 — surface any construction error
         return ReloadResult(

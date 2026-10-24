@@ -353,12 +353,15 @@ def is_known_section(name: str) -> bool:
     return name in _KNOWN_SECTIONS
 
 
-def authorization_rule_source_map(root: Path) -> dict[int, tuple[str, int]]:  # noqa: PLR0911 — one early-return per graceful-fallback path (§Design)
+def authorization_rule_source_map(  # noqa: PLR0911 — one early-return per graceful-fallback path (§Design)
+    root: Path, *, list_key: str = "rules"
+) -> dict[int, tuple[str, int]]:
     """Return `{rule_index: (source_file, source_line)}` for the platform's rules.
 
     Re-reads `platform.yaml` via `load_with_positions` and walks the
-    `authorization.config.rules` list, recording each rule's YAML line
-    (1-indexed) alongside the absolute source path.
+    `authorization.config.<list_key>` list (`rules` by default;
+    `locked_rules` for the locked platform rules), recording each
+    rule's YAML line (1-indexed) alongside the absolute source path.
 
     feat-041 uses this to tag every rule the
     `RuleBasedAuthorizationProvider` compiles so `/why` +
@@ -393,7 +396,7 @@ def authorization_rule_source_map(root: Path) -> dict[int, tuple[str, int]]:  # 
     config = authorization.get("config")
     if not isinstance(config, dict):
         return {}
-    rules = config.get("rules")
+    rules = config.get(list_key)
     if rules is None:
         return {}
     # `rules` is a `CommentedSeq` from ruamel; its `.lc.data` maps
