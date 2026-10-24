@@ -1036,12 +1036,14 @@ A layer's rules are only as trustworthy as whoever can write its file:
 !!! warning "Write access to `platform.yaml` and `bundles/` is the real boundary"
     "Whoever can write `bundles/`" includes an **agent** whose
     `write_file` rules reach that directory: it can author a workflow
-    whose `policy:` allows `bash`, and run it. An agent that can write
-    `platform.yaml` — or run `bash`, and so `kolsch permissions remove
-    <id>` — can delete a locked rule. No rule in this file defends
-    against that. Keep `write_file` (and `bash`) away from
-    `platform.yaml` and `bundles/` if you rely on locked rules or on
-    the platform list to contain your agents.
+    whose `policy:` allows `bash`, and run it. Agent file tools can
+    never write `platform.yaml` (see
+    [What agents can never change](#what-agents-can-never-change-and-what-they-still-can)),
+    but an agent that can run `bash` can edit it, or run `kolsch
+    permissions remove <id>`, and so delete a locked rule. No rule in
+    this file defends against that. Keep `bash` on `prompt`, and keep
+    `write_file` on `prompt` for `bundles/`, if you rely on locked rules
+    or on the platform list to contain your agents.
 
 ---
 
@@ -1075,9 +1077,8 @@ the fix):
   would stop layers from narrowing, and a locked `prompt` would
   persist "always" answers into the `rules` list it pre-empts.
 - **`{what, pattern, effect}` only.** No legacy `who`, no `id` (ids are
-  derived as `rl_locked_<hash>`), and no `from:` — the tool path
-  doesn't pass a caller chain yet, so a `from:`-scoped lock would never
-  fire.
+  derived as `rl_locked_<hash>`), and no `from:` — a locked rule
+  applies to every caller.
 - **`what` is a full three-segment ref** (`kolsch/tools/bash`, not
   `kolsch/bash` — the short form would load and never match) or a
   system action like `agent.execute.<ref>`.
@@ -1101,14 +1102,17 @@ them. After a hand edit, `/reload` picks them up. A workflow run
 already in progress keeps the rules it started with; new runs and
 chat turns pick them up.
 
-**Lock whole tools.** Prefer `pattern: "*"`. Pattern locks are weaker
-than they look:
+**Path locks are spelling-proof; command locks are not.**
 
-- A pattern is a glob over the target *string* the tool receives, not a
-  sandbox. A locked `bash` deny on `rm *` is bypassed by `bash -c 'rm
-  …'`, `env rm …` and similar.
-- Path patterns match the path as written. A locked `write_file` deny
-  on `/etc/*` does not catch `/tmp/../etc/passwd` or a relative path.
+- For file tools, a locked `pattern` matches the
+  [canonical path](#path-targets), generously, like every `deny`: a
+  locked `write_file` deny on `data/secret/*` also catches
+  `./data/secret/k`, `bundles/../data/secret/k`, an absolute spelling,
+  and a different case on a case-insensitive disk.
+- For every other tool, a pattern is a glob over the target *string*
+  the tool receives, not a sandbox. A locked `bash` deny on `rm *` is
+  bypassed by `bash -c 'rm …'`, `env rm …` and similar. Lock `bash`
+  (and similar tools) whole, with `pattern: "*"`.
 
 **What locked rules cannot do:**
 
@@ -1117,7 +1121,8 @@ than they look:
   Anyone who can write those files can run code directly.
 - Protect themselves. See the warning in
   [Who can widen what](#who-can-widen-what): they are only as strong
-  as write access to `platform.yaml`.
+  as write access to `platform.yaml`, which agent file tools never
+  have but `bash` does.
 - Prevent a lock-out. A locked deny on `agent.execute.*`, or on a tool
   your chat agent needs, locks you out of chat too. Fix it from the
   CLI (`kolsch permissions remove rl_locked_<hash>`) or by editing

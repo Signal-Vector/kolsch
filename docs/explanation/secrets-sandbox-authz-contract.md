@@ -1150,15 +1150,19 @@ persists — so those paths never touch `locked_rules`.
 
 **Non-goals.** No locked `allow` (it would stop layers from
 narrowing), no locked `prompt` (an "always" answer would be persisted
-into the `rules` list the locked stage pre-empts), and no `from:` (the
-tool path passes no caller chain yet, so a scoped lock would never
-fire).
+into the `rules` list the locked stage pre-empts), and no `from:` in
+this version (a locked rule applies to every caller chain; scoped locks
+are a possible follow-up now that every call site passes a typed caller
+chain).
 
 **Boundary.** Locked rules are only as strong as write access to
-`platform.yaml`: anything that can edit it — or run `kolsch permissions
-remove` — can remove a lock. They also cannot govern code that runs
-without an `allow()` call (authored Python nodes and tool bodies), and
-a `pattern` is a glob over the target string, not a sandbox.
+`platform.yaml`: agent file tools can never write it (the protected
+write floor), but anything that can run a shell can edit it or run
+`kolsch permissions remove`, and so remove a lock. They also cannot
+govern code that runs without an `allow()` call (authored Python nodes
+and tool bodies). File-tool path patterns match the canonical path
+(loosely, as for every deny); any other `pattern` is a glob over the
+target string, not a sandbox.
 
 ---
 

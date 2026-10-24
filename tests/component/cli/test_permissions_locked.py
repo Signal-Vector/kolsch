@@ -283,3 +283,114 @@ async def test_perm_list_shows_locked_section_only_when_present(
     assert _LOCKED_BASH_ID in locked_out
     assert "locked" not in plain_out
     assert locked_out.endswith(plain_out)
+
+
+# ---------------------------------------------------------------------------
+# mutate_platform_rules locked ops — structural, lock-guarded writes
+# ---------------------------------------------------------------------------
+
+
+_COMMENTED_PLATFORM = """\
+# operator notes at the top
+authorization:
+  variant: rule_based
+  config:
+    rules:
+      # let agents run
+      - {what: agent.execute.*, pattern: '*', effect: allow}
+      - {what: '*', pattern: '*', effect: deny}  # tail
+storage:
+  backend: sqlite
+"""
+
+
+def test_locked_insert_then_remove_is_structural(tmp_path: Path) -> None:
+    from cli.permissions import (
+        InsertLockedRule,
+        RemoveLockedRule,
+        mutate_platform_rules,
+    )
+    from providers import Rule
+
+    (tmp_path / ".platform").mkdir()
+    path = tmp_path / "platform.yaml"
+    path.write_text(_COMMENTED_PLATFORM, encoding="utf-8")
+    added = mutate_platform_rules(
+        path, InsertLockedRule(Rule(what=_BASH, effect="deny")), catalog=None
+    )
+    assert added.rule.id == _LOCKED_BASH_ID
+    assert added.position == 0
+    text = path.read_text(encoding="utf-8")
+    # Comments and the rules list survive verbatim; only the key is new.
+    for line in _COMMENTED_PLATFORM.splitlines():
+        assert line in text
+    assert _config(tmp_path)["locked_rules"] == [
+        {"what": _BASH, "pattern": "*", "effect": "deny"}
+    ]
+    removed = mutate_platform_rules(
+        path, RemoveLockedRule(rule_id=_LOCKED_BASH_ID), catalog=None
+    )
+    assert removed.rule.id == _LOCKED_BASH_ID
+    assert path.read_text(encoding="utf-8") == _COMMENTED_PLATFORM
+
+
+def test_locked_ops_refuse_invalid_disk_list_and_unknown_ids(tmp_path: Path) -> None:
+    from cli.permissions import (
+        InsertLockedRule,
+        RemoveLockedRule,
+        mutate_platform_rules,
+    )
+    from errors import AuthzRuleNotFound, AuthzRulesPersistFailed
+    from providers import Rule
+
+    (tmp_path / ".platform").mkdir()
+    path = tmp_path / "platform.yaml"
+    path.write_text(
+        _COMMENTED_PLATFORM.replace(
+            "storage:",
+            "    locked_rules:\n      - {what: kolsch/bash, effect: deny}\nstorage:",
+        ),
+        encoding="utf-8",
+    )
+    original = path.read_bytes()
+    with pytest.raises(AuthzRulesPersistFailed):
+        mutate_platform_rules(
+            path, InsertLockedRule(Rule(what=_READ, effect="deny")), catalog=None
+        )
+    assert path.read_bytes() == original
+    path.write_text(_COMMENTED_PLATFORM, encoding="utf-8")
+    with pytest.raises(AuthzRuleNotFound):
+        mutate_platform_rules(
+            path, RemoveLockedRule(rule_id=_LOCKED_BASH_ID), catalog=None
+        )
+    assert path.read_text(encoding="utf-8") == _COMMENTED_PLATFORM
+
+
+async def test_stale_chat_and_locked_add_clobber_neither_list(tmp_path: Path) -> None:
+    """A chat holding a stale `rules` list and a CLI locked add interleave safely.
+
+    The chat loads first; the CLI then adds a lock on disk; the chat's
+    `/perm` writes (computed on the disk list, not its stale copy) keep
+    the lock, and a later locked add keeps the chat's rule.
+    """
+    root = _workspace(tmp_path)
+    runtime = await bootstrap_runtime(root=root)  # the chat's view, now stale
+    rc, _, err = await _run(root, "add", what=_BASH, effect="deny", locked=True)
+    assert rc == 0, err
+    stdout = io.StringIO()
+    ctx = _slash_ctx(runtime, stdout)
+    await dispatch_slash('/perm allow kolsch/tools/read_file "/etc/*"', ctx)
+    cfg = _config(root)
+    assert cfg["locked_rules"] == [{"what": _BASH, "pattern": "*", "effect": "deny"}]
+    assert any(r.get("pattern") == "/etc/*" for r in cfg["rules"])
+    rc, _, err = await _run(
+        root, "add", what=_READ, pattern="/etc/shadow", effect="deny", locked=True
+    )
+    assert rc == 0, err
+    cfg = _config(root)
+    assert [r["what"] for r in cfg["locked_rules"]] == [_BASH, _READ]
+    assert any(r.get("pattern") == "/etc/*" for r in cfg["rules"])
+    await dispatch_slash('/perm remove kolsch/tools/read_file "/etc/*"', ctx)
+    cfg = _config(root)
+    assert len(cfg["locked_rules"]) == 2
+    assert not any(r.get("pattern") == "/etc/*" for r in cfg["rules"])

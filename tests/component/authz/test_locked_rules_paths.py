@@ -25,6 +25,7 @@ from errors import ToolUnauthorized
 from providers import (
     LOCKED_RULE_ID_PREFIX,
     AuthzEffect,
+    PermissionLayer,
     Rule,
     RuleBasedAuthorizationProvider,
     derive_locked_rule_id,
@@ -338,3 +339,54 @@ async def test_workflow_node_denied_by_lock_despite_policy_allow(
         effect="deny",
         rule_id=derive_locked_rule_id(_BASH, "*", "deny"),
     )
+
+
+# ---------------------------------------------------------------------------
+# Locked path denies match canonically (loose, like every deny)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("raw", "case_insensitive"),
+    [
+        ("data/secret/k", False),
+        ("./data/secret/k", False),
+        ("bundles/../data/secret/k", False),
+        ("./DATA/secret/k", True),
+    ],
+)
+async def test_locked_path_deny_matches_canonical_spellings(
+    tmp_path: Path, raw: str, *, case_insensitive: bool
+) -> None:
+    from files.authz_target import normalise_path_target
+
+    write = "kolsch/tools/write_file"
+    root = (tmp_path / "ws").resolve()
+    (root / "data" / "secret").mkdir(parents=True)
+    authz = RuleBasedAuthorizationProvider(
+        config={
+            "rules": [{"what": write, "pattern": "*", "effect": "allow"}],
+            "locked_rules": [
+                {"what": write, "pattern": "data/secret/*", "effect": "deny"}
+            ],
+        }
+    )
+    allow_write = (
+        PermissionLayer(name="agent", rules=(Rule(what=write, effect="allow"),)),
+    )
+    target = normalise_path_target(raw, root=root, case_insensitive=case_insensitive)
+    result = await authz.allow(
+        "user.local",
+        write,
+        target=target.display,
+        path_target=target,
+        layers=allow_write,
+    )
+    assert result.effect is AuthzEffect.DENY, result.reason
+    assert result.reason.endswith("(who_chain=locked)")
+    # A path outside the locked pattern still reaches the agent allow.
+    other = normalise_path_target("data/notes.md", root=root, case_insensitive=False)
+    result = await authz.allow(
+        "user.local", write, target=other.display, path_target=other, layers=allow_write
+    )
+    assert result.allowed is True

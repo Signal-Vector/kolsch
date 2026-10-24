@@ -438,9 +438,8 @@ def _locked_key_problem(key: str, value: object) -> str | None:
         if value is None:
             return None
         return (
-            "`from:` is not supported on locked rules: the tool path "
-            "does not pass a caller chain yet, so a `from:`-scoped "
-            "locked deny would never fire; lock the whole action instead"
+            "`from:` is not supported on locked rules: a locked rule "
+            "applies to every caller chain; lock the whole action instead"
         )
     if key == "id":
         return (
