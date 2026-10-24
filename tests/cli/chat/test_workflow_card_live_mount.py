@@ -21,7 +21,6 @@ scaffolding, the fix is not complete (D-010 gate).
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -37,8 +36,8 @@ from tests.cli.chat.services.mocks import (
     MockExecutorSpec,
     install_mock_executor_factory,
 )
+from tests.fixtures.bundle_paths import STARTER_TOOLS_DIR, load_bundle_tool
 from tools.decorator import ToolContext, get_tool_definition
-from tools.discovery import discover_tools_in_file
 from tools.dispatch import _invoke_tool
 from workflows.events import (
     WorkflowNodeStartedEvent,
@@ -49,22 +48,12 @@ from workflows.ids import InvocationId, TraceId, WorkflowRunId
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
-
-_BUNDLE_TOOLS_DIR = Path(__file__).resolve().parents[3] / "bundles" / "kolsch" / "tools"
-
-
-def _load_tool(filename: str, tool_name: str) -> Callable[..., Awaitable[Any]]:
-    path = _BUNDLE_TOOLS_DIR / filename
-    for fn in discover_tools_in_file(path):
-        if get_tool_definition(fn).name == tool_name:
-            return fn
-    msg = f"tool {tool_name!r} not found in {path}"
-    raise LookupError(msg)
+    from pathlib import Path
 
 
 @pytest.fixture
 def run_workflow_tool() -> Callable[..., Awaitable[Any]]:
-    return _load_tool("run_workflow.py", "run_workflow")
+    return load_bundle_tool(STARTER_TOOLS_DIR, "run_workflow.py", "run_workflow")
 
 
 # ---------------------------------------------------------------------------

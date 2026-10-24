@@ -1,8 +1,11 @@
-name: kolsch
+name: card_examples
 version: "0.1"
 description: |
-  Example tools bundle demonstrating the four v1 card kinds and the
-  Prompts service. Ships three tools under `tools/`:
+  feat-009 tutorial example bundle — not shipped (it is not part of
+  the wheel and `kolsch setup` never copies it). Copy this directory
+  into your workspace's `bundles/` to try it. It demonstrates the four
+  v1 card kinds and the Prompts service with three tools under
+  `tools/`:
 
   - `hello_card` — streaming markdown card.
   - `download_with_progress` — determinate progress bar.

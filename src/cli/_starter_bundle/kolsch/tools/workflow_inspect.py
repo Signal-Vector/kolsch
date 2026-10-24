@@ -13,15 +13,23 @@ Contract:
 - Returns: ``{ref, description, required_inputs, optional_inputs,
   example_call}``.
 - Unknown ref: raises ``WrappedError`` with a helpful "workflow not
-  found; available refs: ..." message.
+  found; available refs: ..." message (uses the duck-typed
+  ``list_workflow_refs`` seam when present; falls back to a generic
+  message otherwise).
 
-bug-028: when per-workflow virtual tools are registered (default),
-``example_call`` uses the virtual tool name and typed args shape.
-Falls back to bug-027's ``run_workflow(ref=..., inputs={...})``
-shape when ``KOLSCH_VIRTUAL_WORKFLOW_TOOLS=0``.
+bug-028: when the per-workflow virtual tool
+(``run_workflow_<bundle>_workflows_<name>``) has been registered for
+this agent, ``example_call`` uses that name so the model sees a
+copy-pasteable typed-arg invocation. Falls back to bug-027's
+``run_workflow(ref=..., inputs={...})`` shape when the virtuals are
+disabled via ``KOLSCH_VIRTUAL_WORKFLOW_TOOLS=0`` — the generic tool
+stays registered for that path.
 
-Reuses ``scan_inputs`` from ``src/workflows/inputs_scan.py``
-(bug-025's walker, extracted for this bug per AC #13).
+Reuses ``extract_required_inputs`` + ``scan_inputs`` from
+``src/workflows/inputs_scan.py`` (bug-025's walker, extracted for
+this bug per AC #13). Requires the ``workflows`` service so it can
+resolve YAML through the same seam ``run_workflow`` uses — no
+direct catalog reach-through from the tool.
 """
 
 from __future__ import annotations
@@ -49,7 +57,13 @@ class WorkflowInspectArgs(BaseModel):
 
 
 def _virtuals_enabled() -> bool:
-    """Mirror ``ToolsSubsystem._virtual_tools_enabled`` — env-only kill switch."""
+    """Mirror ``ToolsSubsystem._virtual_tools_enabled`` — env-only kill switch.
+
+    bug-028: kept in-tool (rather than reading from a passed-through
+    services flag) so the example-call shape stays symmetric with
+    the actual registration behaviour. Both sites read the same env
+    var so an operator can trivially disable both with one setting.
+    """
     raw = os.environ.get("KOLSCH_VIRTUAL_WORKFLOW_TOOLS", "1")
     return raw.strip().lower() not in {"0", "false", "no", "off", ""}
 
@@ -62,10 +76,17 @@ def _build_example_call(
 ) -> str:
     """Return a copy-pasteable invocation string for the model.
 
-    bug-028: prefers the per-workflow virtual tool shape
-    (``run_workflow_<bundle>_<name>(url="<value>")``) when
-    ``prefer_virtual=True``; falls back to bug-027's
-    ``run_workflow(ref="...", inputs={...})`` shape otherwise.
+    When the workflow has required inputs, each name maps to a
+    ``"<value from user request>"`` placeholder — matches the
+    ``run_workflow`` error message shape (bug-027 FIX-D) so the model
+    can copy either surface into a valid call.
+
+    bug-028: when ``prefer_virtual=True`` (the virtuals are
+    registered), returns the per-workflow tool shape
+    ``run_workflow_<bundle>_<name>(url="<value>")`` so the model
+    sees a copy-pasteable TYPED-ARG call. When ``False`` (virtuals
+    disabled), falls back to bug-027's
+    ``run_workflow(ref="...", inputs={...})`` shape.
     """
     if prefer_virtual:
         tool_name = virtual_tool_name(ref)
@@ -95,7 +116,8 @@ def _build_example_call(
         "`example_call` is a ready-to-copy `run_workflow(...)` "
         "invocation. Read-only — safe to call before every "
         "`run_workflow` when you're unsure which inputs the target "
-        "workflow needs."
+        "workflow needs. Prefer this over the `bash` tool for "
+        "workflow introspection."
     ),
     args_schema=WorkflowInspectArgs,
     requires=["workflows"],
@@ -104,7 +126,15 @@ async def workflow_inspect(
     args: WorkflowInspectArgs,
     ctx: ToolContext,
 ) -> dict[str, object]:
-    """Return the workflow's inputs contract + a copy-pasteable example."""
+    """Return the workflow's inputs contract + a copy-pasteable example.
+
+    Uses the duck-typed ``resolve_workflow_yaml`` seam
+    ``run_workflow`` already relies on. On an unknown ref, raises
+    ``WrappedError`` (Diagnostic) so the model sees ``is_error=true``
+    with an actionable message + a list of available refs (via the
+    parallel ``list_workflow_refs`` seam) — matching the error-
+    surface shape bug-025 established for ``run_workflow``.
+    """
     services = require_services(ctx, ["workflows"])
     assert services.workflows is not None  # noqa: S101 — type-narrowing after require_services
 
@@ -116,6 +146,10 @@ async def workflow_inspect(
             yaml_source = raw
 
     if yaml_source is None:
+        # bug-027: helpful not-found — surface the available refs via
+        # the parallel duck-typed seam so the model sees what it
+        # could have called instead. Falls back to a generic message
+        # when the impl doesn't expose the lister.
         list_refs = getattr(services.workflows, "list_workflow_refs", None)
         available: list[str] = []
         if list_refs is not None:
@@ -175,7 +209,13 @@ async def workflow_inspect(
 
 
 def _extract_description(yaml_source: str) -> str:
-    """Return the workflow's top-level ``description:`` field, or ``""``."""
+    """Return the workflow's top-level ``description:`` field, or ``""``.
+
+    Best-effort — bad YAML or missing field returns the empty string
+    rather than raising. The parser surfaces malformed YAML on the
+    explicit ``kolsch workflows validate`` path; this tool is a
+    probe, not a validator.
+    """
     from kolsch._yamlio import load  # noqa: PLC0415
 
     try:

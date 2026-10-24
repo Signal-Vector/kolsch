@@ -203,12 +203,21 @@ These are non-negotiable. Violating them blocks merges.
   no declared level silently defaults to "no fallback", which
   is wrong-by-default for any genuinely transient condition.
 
-- **Tools shipped by the platform live in `bundles/kolsch/tools/`
-  as plain Python files.** Never embed a "builtin tool" in the
-  engine or runtime; the file IS the tool, and users can read it,
-  copy it as a template, or swap it. The Tools subsystem catalog
-  discovers them via the same scan path that finds any
-  bundle-supplied declared tool. If you find yourself adding a
+- **Tools shipped by the platform live in the starter bundle,
+  `src/cli/_starter_bundle/kolsch/tools/`, as plain Python files.**
+  That tree is the single source of truth: it ships in the wheel and
+  `kolsch setup` copies it to `<workspace>/bundles/kolsch/tools/`.
+  There is no other copy in the repo (repo-root `bundles/` is a
+  git-ignored workspace artefact, never a source tree). New tests
+  should load shipped tools via `tests/fixtures/bundle_paths.py`.
+  The feat-009 tutorial tools live separately in
+  `examples/bundles/card_examples/` (never shipped).
+  `tests/unit/test_bundle_single_source.py` fails if the trees
+  overlap or a repo-root copy comes back. Never embed a "builtin
+  tool" in the engine or runtime; the file IS the tool, and users
+  can read it, copy it as a template, or swap it. The Tools
+  subsystem catalog discovers them via the same scan path that
+  finds any bundle-supplied declared tool. If you find yourself adding a
   case branch like `if tool_name == "read_file": …` inside
   `src/engine/` or `src/tools/`, you have violated this rule —
   add the tool file instead.

@@ -21,8 +21,6 @@ service that exposes ``resolve_workflow_yaml`` + optional
 
 from __future__ import annotations
 
-import importlib.util
-from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -30,6 +28,7 @@ import pytest
 
 from errors import PlatformError
 from schemas.identifiers import AgentId, SessionId, ThreadId
+from tests.fixtures.bundle_paths import STARTER_TOOLS_DIR, load_bundle_tool
 from tools.decorator import ToolContext
 
 # ----------------------------------------------------------------------
@@ -37,20 +36,11 @@ from tools.decorator import ToolContext
 # ----------------------------------------------------------------------
 
 
-_REPO = Path(__file__).resolve().parents[4]
-_TOOL_PATH = _REPO / "bundles" / "kolsch" / "tools" / "workflow_inspect.py"
-
-
 def _load_workflow_inspect() -> Any:
-    spec = importlib.util.spec_from_file_location(
-        "bundles.kolsch.tools.workflow_inspect_probe",
-        _TOOL_PATH,
+    """Load the shipped ``workflow_inspect`` tool from the starter bundle."""
+    return load_bundle_tool(
+        STARTER_TOOLS_DIR, "workflow_inspect.py", "workflow_inspect"
     )
-    assert spec is not None
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    return module.workflow_inspect
 
 
 # ----------------------------------------------------------------------

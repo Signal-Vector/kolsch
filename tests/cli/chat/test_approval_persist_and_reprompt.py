@@ -37,7 +37,6 @@ Composition covered:
 from __future__ import annotations
 
 import asyncio
-import importlib.util
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -55,6 +54,7 @@ from schemas.events import EventType
 from schemas.identifiers import AgentId, SessionId, ThreadId
 from schemas.wire_kinds import WIRE_PROMPT_REQUESTED
 from store import SessionStore, SqliteBackend
+from tests.fixtures.bundle_paths import STARTER_TOOLS_DIR, load_bundle_tool
 from tools.decorator import ToolContext
 
 if TYPE_CHECKING:
@@ -459,22 +459,9 @@ async def test_run_workflow_input_validation_surfaces_error() -> None:
     """
     from errors import PlatformError
 
-    _tool_path = (
-        Path(__file__).resolve().parents[3]
-        / "bundles"
-        / "kolsch"
-        / "tools"
-        / "run_workflow.py"
+    run_workflow = load_bundle_tool(
+        STARTER_TOOLS_DIR, "run_workflow.py", "run_workflow"
     )
-    spec = importlib.util.spec_from_file_location(
-        "bundles.kolsch.tools.run_workflow_flagship_probe",
-        _tool_path,
-    )
-    assert spec is not None
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    run_workflow = module.run_workflow
 
     class _MockCard:
         def __init__(self) -> None:

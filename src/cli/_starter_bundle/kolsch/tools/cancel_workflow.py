@@ -55,6 +55,10 @@ async def cancel_workflow(
     bug-025: when the target run is already terminal, the return
     payload also carries ``phase`` and ``reason`` so the model sees
     a structured no-op instead of a silent ``cancelled=false``.
+    ``reason`` mirrors :attr:`WorkflowRunStatusView.error_message`
+    when available (the failure's diagnostic); falls back to
+    ``"already terminal"``. Fixes the "cancel returns false; model
+    keeps retrying" symptom from session ses_629b626e.
     """
     services = require_services(ctx, ["workflows"])
     assert services.workflows is not None  # noqa: S101 — type-narrowing after require_services
@@ -66,6 +70,9 @@ async def cancel_workflow(
         "cascade": args.cascade,
     }
     if not fired:
+        # bug-025: enrich the no-op response with the terminal reason.
+        # `status()` is sync + non-blocking; on a fully unknown run it
+        # returns `phase="unknown"` and both diagnostic fields `None`.
         try:
             view = services.workflows.status(run_id)
         except Exception:  # noqa: BLE001 — best-effort enrichment

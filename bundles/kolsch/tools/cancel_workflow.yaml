@@ -1,5 +1,0 @@
-name: cancel_workflow
-description: Cancel a running workflow. Optional cascade to tree.
-entry: cancel_workflow.py
-requires:
-  - workflows

@@ -22,8 +22,6 @@ input(s)`` list.
 
 from __future__ import annotations
 
-import importlib.util
-from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -31,6 +29,7 @@ import pytest
 
 from errors import PlatformError
 from schemas.identifiers import AgentId, SessionId, ThreadId
+from tests.fixtures.bundle_paths import STARTER_TOOLS_DIR, load_bundle_tool
 from tools.decorator import ToolContext
 
 # ----------------------------------------------------------------------
@@ -38,20 +37,9 @@ from tools.decorator import ToolContext
 # ----------------------------------------------------------------------
 
 
-_REPO = Path(__file__).resolve().parents[4]
-_TOOL_PATH = _REPO / "bundles" / "kolsch" / "tools" / "run_workflow.py"
-
-
 def _load_run_workflow() -> Any:
-    spec = importlib.util.spec_from_file_location(
-        "bundles.kolsch.tools.run_workflow_probe_027",
-        _TOOL_PATH,
-    )
-    assert spec is not None
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    return module.run_workflow
+    """Load the shipped ``run_workflow`` tool from the starter bundle."""
+    return load_bundle_tool(STARTER_TOOLS_DIR, "run_workflow.py", "run_workflow")
 
 
 # ----------------------------------------------------------------------
