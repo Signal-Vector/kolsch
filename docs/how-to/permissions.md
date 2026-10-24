@@ -156,7 +156,10 @@ Every rule is three fields — `what`, `pattern`, `effect`:
 
 Evaluation is **first-match-wins** with **default-deny** when
 nothing matches. The protected `{ what: "*", pattern: "*", effect: deny }`
-catch-all is the safety net; the runtime refuses to remove it.
+catch-all (id `rl_default_deny`) is the safety net; `kolsch setup`
+writes it last and `kolsch permissions remove` refuses to remove it.
+A hand-edited rule list without it still loads — see
+[If your rule list has no default-deny tail](#if-your-rule-list-has-no-default-deny-tail).
 
 ---
 
@@ -375,9 +378,15 @@ caller-chain contains a matching 3-segment agent/workflow ref (see
 below).
 
 The default-deny tail is **removal-protected**:
-`kolsch permissions remove rl_default_deny` raises
-`authz.protected_rule`. Direct edits to `platform.yaml` removing
-the tail are rejected at bootstrap.
+`kolsch permissions remove rl_default_deny` exits 1 with
+`authz.protected_rule` and leaves `platform.yaml` untouched. A
+hand edit that removes or moves the tail is **not** refused — the
+rule set loads with a warning (see
+[If your rule list has no default-deny tail](#if-your-rule-list-has-no-default-deny-tail)).
+
+`kolsch permissions add` / `remove` rewrite `platform.yaml`: only a
+comment block at the very end of the file is preserved; comments
+anywhere else are lost.
 
 ---
 
@@ -453,6 +462,64 @@ authorization:
 ```
 
 Reloads on the next authz check — no restart.
+
+### If your rule list has no default-deny tail
+
+Every command that starts the runtime (`kolsch run`, `chat`,
+`sessions`, `server`, `workflows`, `mcp serve`, …) checks the
+platform rule list once per process. When the
+`{ what: "*", pattern: "*", effect: deny }` tail is missing, or is
+not the last rule, it logs one warning on stderr and **loads the
+rules anyway** — nothing is refused and no rule is changed:
+
+```
+WARNING platform_runtime: /path/to/platform.yaml: the authorization rule set has no default-deny tail (...). Effect: ... Fix: ...
+```
+
+`kolsch doctor` reports the same finding in an **Authorization**
+section. It is advisory: doctor's exit code doesn't change.
+
+What it means today:
+
+- **Tail missing.** An action no rule covers asks for approval in
+  `kolsch chat` — and is **allowed without asking** under
+  `kolsch chat --auto-approve` — and is denied everywhere else
+  (`kolsch run`, the server, headless workflows). An empty, absent,
+  or `null` `rules:` list counts as missing.
+- **Tail present (for comparison).** An action no rule covers is
+  denied outright everywhere — in chat too, with no approval
+  prompt, and `--auto-approve` doesn't change that.
+- **Tail missing, with a catch-all allow** (e.g.
+  `{ who: ".*", what: ".*", effect: allow }`). That rule already
+  allows every action no earlier rule denies — remove or narrow it
+  before adding the tail.
+- **Tail not last.** Every rule after it can never match.
+
+How to fix:
+
+- Missing: `kolsch permissions add --what '*' --pattern '*' --effect deny`
+  (appends the tail as `rl_default_deny`), then `kolsch doctor` to
+  re-check. This rewrites `platform.yaml` (comments other than a
+  trailing block are lost) — hand-add the rule instead if you want
+  to keep them.
+- Not last: move the tail rule to the end of
+  `authorization.config.rules` by hand. `kolsch permissions add`
+  would insert a new rule *before* the existing tail, not move it.
+
+Notes:
+
+- Only the two exact tail shapes are recognized — the rule above,
+  and the legacy `{ who: ".*", what: ".*", effect: deny }`. An
+  equivalent catch-all deny written differently (`pattern: "**"`,
+  `what: "^.*$"`, `who: ".+"`) still hard-denies uncovered actions,
+  but is reported as "no default-deny tail". That errs on the safe
+  side; use the canonical shape to clear the warning.
+- A catch-all deny scoped with `from:` is not a tail — it only
+  covers that caller. This applies to canonical-shape rules; legacy
+  `{who, what, effect}` rules currently ignore `from:` altogether.
+- `/reload` in chat does not re-check. A tail removed mid-session
+  is reported by `kolsch doctor` or the next command that starts
+  the runtime.
 
 ---
 

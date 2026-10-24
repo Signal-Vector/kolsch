@@ -26,7 +26,10 @@ import argparse
 import hashlib
 import io
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+import pytest
+import yaml
 
 from cli._doctor import cmd_doctor
 from cli._setup import (
@@ -37,9 +40,8 @@ from cli._setup import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
-
-    import pytest
 
 
 # ---------------------------------------------------------------------------
@@ -375,3 +377,191 @@ async def test_retired_kolsch_owned_ref_shows_replacement_hint(
     assert rc == 1, text
     assert "remove `kolsch/tools/bash`" in text
     assert "consider: `kolsch/tools/shell`" in text
+
+
+# ---------------------------------------------------------------------------
+# bug-152 — advisory Authorization section (default-deny tail)
+# ---------------------------------------------------------------------------
+
+_TAIL_FIX = "kolsch permissions add --what '*' --pattern '*' --effect deny"
+
+
+def _edit_rules(root: Path, edit: Callable[[list[Any]], list[Any] | None]) -> None:
+    """Rewrite ``authorization.config.rules`` in ``root/platform.yaml``."""
+    path = root / "platform.yaml"
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    data["authorization"]["config"]["rules"] = edit(
+        data["authorization"]["config"]["rules"]
+    )
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+
+
+async def test_doctor_fresh_install_has_no_authorization_section(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _run_install(tmp_path, monkeypatch)
+    out = io.StringIO()
+    rc = await cmd_doctor(argparse.Namespace(), out=out, root=tmp_path)
+    assert rc == 0
+    assert "Authorization" not in out.getvalue()
+
+
+async def test_doctor_tail_removed_reports_authorization_advisory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _run_install(tmp_path, monkeypatch)
+    _edit_rules(tmp_path, lambda rules: rules[:-1])
+    hash_before = _dir_hash(tmp_path)
+
+    out = io.StringIO()
+    rc = await cmd_doctor(argparse.Namespace(), out=out, root=tmp_path)
+    text = out.getvalue()
+    assert rc == 0, text  # advisory: same rc as the clean bundle
+    assert "no drift detected" in text
+    assert "Authorization (platform.yaml)" in text
+    assert "no default-deny tail" in text
+    assert _TAIL_FIX in text
+    assert _dir_hash(tmp_path) == hash_before
+
+
+async def test_doctor_tail_not_last_names_position(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _run_install(tmp_path, monkeypatch)
+    _edit_rules(tmp_path, lambda rules: [rules[-1], *rules[:-1]])
+
+    out = io.StringIO()
+    rc = await cmd_doctor(argparse.Namespace(), out=out, root=tmp_path)
+    text = out.getvalue()
+    assert rc == 0, text
+    assert "Authorization (platform.yaml)" in text
+    assert "is at position 1 of" in text
+
+
+async def test_doctor_null_rules_reports_authorization(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Same normalization as the runtime: null rules == empty enforced set.
+    await _run_install(tmp_path, monkeypatch)
+    _edit_rules(tmp_path, lambda _rules: None)
+
+    out = io.StringIO()
+    rc = await cmd_doctor(argparse.Namespace(), out=out, root=tmp_path)
+    assert rc == 0
+    assert "no default-deny tail" in out.getvalue()
+
+
+async def test_doctor_authorization_does_not_change_drift_rc(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _run_install(tmp_path, monkeypatch)
+    stray = tmp_path / "bundles" / "kolsch" / "tools" / "fetch_website.py"
+    stray.write_text("# retired stub\n", encoding="utf-8")
+    _edit_rules(tmp_path, lambda rules: rules[:-1])
+
+    out = io.StringIO()
+    rc = await cmd_doctor(argparse.Namespace(), out=out, root=tmp_path)
+    text = out.getvalue()
+    assert rc == 1  # bundle drift, exactly as without the authz finding
+    assert "Bundle drift report" in text
+    assert "Authorization (platform.yaml)" in text
+    assert text.index("Bundle drift report") < text.index(
+        "Authorization (platform.yaml)"
+    )
+
+
+async def test_doctor_pre_setup_workspace_reports_authorization(
+    tmp_path: Path,
+) -> None:
+    payload = {
+        "authorization": {
+            "variant": "rule_based",
+            "config": {
+                "rules": [{"what": "a/tools/x", "pattern": "*", "effect": "allow"}]
+            },
+        }
+    }
+    (tmp_path / "platform.yaml").write_text(yaml.safe_dump(payload), encoding="utf-8")
+    hash_before = _dir_hash(tmp_path)
+
+    out = io.StringIO()
+    rc = await cmd_doctor(argparse.Namespace(), out=out, root=tmp_path)
+    text = out.getvalue()
+    assert rc == 0, text
+    assert "run `kolsch setup`" in text
+    assert "Authorization (platform.yaml)" in text
+    assert _TAIL_FIX in text
+    assert _dir_hash(tmp_path) == hash_before
+
+
+async def test_doctor_malformed_platform_yaml_skips_authorization(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _run_install(tmp_path, monkeypatch)
+    (tmp_path / "platform.yaml").write_text(
+        "not: valid: yaml:\n  - [unclosed\n", encoding="utf-8"
+    )
+
+    out = io.StringIO()
+    await cmd_doctor(argparse.Namespace(), out=out, root=tmp_path)
+    assert "Authorization" not in out.getvalue()
+
+
+async def test_doctor_non_mapping_platform_yaml_skips_authorization(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "platform.yaml").write_text("- just\n- a list\n", encoding="utf-8")
+    out = io.StringIO()
+    rc = await cmd_doctor(argparse.Namespace(), out=out, root=tmp_path)
+    assert rc == 0
+    assert "Authorization" not in out.getvalue()
+
+
+@pytest.mark.parametrize(
+    ("content", "reason"),
+    [
+        ("storage: {}\n", "`authorization` section is missing"),
+        ("authorization:\n", "`authorization` is null, not a mapping"),
+        (
+            "authorization:\n  config: off\n",
+            "`authorization.config` is a string, not a mapping",
+        ),
+        ("authorization: 3\n", "`authorization` is a number, not a mapping"),
+        (
+            "authorization:\n  config: [1]\n",
+            "`authorization.config` is a list, not a mapping",
+        ),
+        (
+            "authorization:\n  config:\n    rules: 5\n",
+            "`authorization.config.rules` is a number, not a list",
+        ),
+    ],
+)
+async def test_doctor_unreadable_authorization_shape_is_advisory(
+    tmp_path: Path, content: str, reason: str
+) -> None:
+    (tmp_path / "platform.yaml").write_text(content, encoding="utf-8")
+    hash_before = _dir_hash(tmp_path)
+    out = io.StringIO()
+    rc = await cmd_doctor(argparse.Namespace(), out=out, root=tmp_path)
+    text = out.getvalue()
+    assert rc == 0, text  # advisory
+    assert "Authorization (platform.yaml)" in text
+    assert f"couldn't check the default-deny tail: {reason}." in text
+    assert _dir_hash(tmp_path) == hash_before
+
+
+async def test_doctor_unreadable_authorization_shape_installed_keeps_rc(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _run_install(tmp_path, monkeypatch)
+    path = tmp_path / "platform.yaml"
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    data["authorization"]["config"]["rules"] = "oops"
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    out = io.StringIO()
+    rc = await cmd_doctor(argparse.Namespace(), out=out, root=tmp_path)
+    text = out.getvalue()
+    assert rc == 0, text
+    assert "no drift detected" in text
+    assert "couldn't check the default-deny tail" in text

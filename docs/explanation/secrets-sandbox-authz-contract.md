@@ -455,6 +455,21 @@ write rules is denial, not silent permission. v1's default config
 provides one explicit allow rule to make the local-first single-user
 case usable out of the box.
 
+The explicit tail rule `{what: "*", pattern: "*", effect: deny}`
+(id `rl_default_deny`, written by `kolsch setup`) makes that deny
+unconditional. Without it, a no-rule match still denies for headless
+callers but routes to the approval prompt when a prompt callback is
+registered (chat) — and under `kolsch chat --auto-approve` that prompt
+self-resolves as allow-once, so uncovered actions are allowed without
+asking. With the tail, uncovered actions are denied outright in chat
+too. The runtime does **not** require the tail: a rule
+set with no tail, or with the tail not last, loads unchanged while
+`bootstrap_runtime` logs one `platform_runtime` WARNING per process
+per workspace and `kolsch doctor` reports an advisory Authorization
+finding (detector:
+[`inspect_default_deny_tail`][providers.authz.inspect_default_deny_tail],
+by shape, never by id).
+
 ## 3.3 Interface
 
 ```
@@ -704,9 +719,13 @@ The Authorization provider does NOT own:
 ### 3.7.5 The `allow_all_test` variant
 
 Phase 2.0 introduces an `allow_all_test` variant under TOOL-R8 / TOOL-R10
-that returns `ALLOW` for everything. It is registered ONLY when the
-`KOLSCH_TEST_BUILD=1` environment variable is set; production builds
-refuse to load it (AGENTS.md hard rule). Existing Phase 1+ component
+that returns `ALLOW` for everything. The variant is registered
+unconditionally, but its constructor raises unless the
+`KOLSCH_TEST_BUILD=1` environment variable is set, so it can't be
+instantiated outside a test build. `bootstrap_runtime` does not
+consult `authorization.variant` at all — it always builds
+`rule_based` — so the variant is reachable only via
+`make_authorization_provider` / direct construction in tests. Existing Phase 1+ component
 tests that relied on the old allow-all default either set their own
 rule fixture or opt in via `allow_all_test`; no test relies on
 production defaults being permissive.
@@ -772,7 +791,9 @@ lists are walked in this order — first match returns its effect:
 
 Agent rules can widen, narrow, or shift the effect for any
 principal-action-target combination; the platform's default-deny
-tail still catches unhandled cases.
+tail still catches unhandled cases. When the platform list has no
+tail, step 3 is the provider's implicit no-rule path instead (prompt
+when a callback is registered, deny otherwise) — see §3.2.6.
 
 ### 3.8.2 Provider surface change
 
