@@ -42,7 +42,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from assets.refs import build_ref, is_three_segment, parse_three_segment
 from errors import (
@@ -51,9 +51,11 @@ from errors import (
     AuthzPatternInvalid,
     AuthzRegexInvalid,
     AuthzToolRefUnknown,
+    ConfigDeprecatedRegexRule,
     ConfigInvalid,
 )
 from errors.assets import AssetsAmbiguousShorthand
+from schemas.config import legacy_rule_scope_violation
 from workflows.errors import (
     WorkflowFromAssetTypeError,
     WorkflowFromNotFound,
@@ -67,6 +69,9 @@ if TYPE_CHECKING:
     from engine.context import ExecutionContext
 
 
+_log = logging.getLogger(__name__)
+
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -78,10 +83,12 @@ DEFAULT_DENY_RULE_ID = "rl_default_deny"
 Set at parse time when a rule with the matching shape is detected;
 [`RuleBasedAuthorizationProvider.remove_rule`][providers.authz.RuleBasedAuthorizationProvider.remove_rule]
 refuses to remove this id (even when no rule carries it). The shapes
-that earn this id are legacy `who=".*"` AND `what=".*"` AND
-`effect="deny"`, and canonical `what="*"` AND `pattern="*"` AND
-`effect="deny"`. The id ignores `from:`, so it is not a reliable
-tail signal — use
+that earn this id are the **unscoped** catch-all denies: legacy
+`who=".*"` AND `what=".*"` AND `effect="deny"`, or canonical `what="*"`
+AND `pattern="*"` AND `effect="deny"` with no `from`. A `from`-scoped
+catch-all deny gets an ordinary `rl_…` id (see
+[`derive_rule_id`][providers.authz.derive_rule_id]). To check whether a
+rule set actually ends with the tail, use
 [`inspect_default_deny_tail`][providers.authz.inspect_default_deny_tail]."""
 
 
@@ -125,6 +132,71 @@ class AuthzEffect(StrEnum):
 # rather than literal magic numbers (ruff PLR2004).
 _THREE_SEG_PARTS = 3
 _TWO_SEG_PARTS = 2
+
+# Legacy `what:` regex shapes the `kolsch setup` migrator
+# (`cli._migrations.authz_rules`) knows how to convert; it imports these
+# so the grammar lives in one place.
+# `tool\.<name>` (with optional anchors) — the pre-3-seg tool action pin.
+LEGACY_TOOL_ACTION_RE = re.compile(r"^\^?tool\\\.([a-z0-9][a-z0-9_-]*)\$?$")
+# `^<cmd> .*$` — bash-suggest output from `_modal.suggest_pattern`.
+LEGACY_BASH_SUGGEST_RE = re.compile(r"^\^([a-zA-Z0-9_\-./]+) \.\*\$$")
+# `agent\.execute\..*` — the engine pre-flight allow.
+LEGACY_AGENT_EXECUTE_RE = re.compile(r"^\^?agent\\\.execute\\\.\.\*\$?$")
+# `.*` — the catch-all.
+LEGACY_CATCHALL_RE = re.compile(r"^\^?\.\*\$?$")
+_LEGACY_MIGRATABLE_WHATS = (
+    LEGACY_CATCHALL_RE,
+    LEGACY_AGENT_EXECUTE_RE,
+    LEGACY_TOOL_ACTION_RE,
+    LEGACY_BASH_SUGGEST_RE,
+)
+
+
+def _entry_from_value(index: int, entry: dict[str, Any]) -> Any:  # noqa: ANN401 — raw YAML value
+    """Return a raw rule entry's `from` value, reading both spellings.
+
+    YAML uses `from`; programmatic dicts may use the Python name
+    `from_`. Either non-null key scopes the rule (a present-but-null
+    `from` must not hide a `from_`). Both set to different values is
+    ambiguous and refused.
+    """
+    from_value = entry.get("from")
+    alt_value = entry.get("from_")
+    if from_value is None:
+        return alt_value
+    if alt_value is not None and alt_value != from_value:
+        raise AuthzMalformedRule(
+            rule_index=index,
+            error=(
+                f"rule sets both `from: {from_value!r}` and "
+                f"`from_: {alt_value!r}`; keep one (`from`)"
+            ),
+        )
+    return from_value
+
+
+def _setup_can_migrate_legacy(entry: dict[str, Any], from_value: object) -> bool:
+    """Return True when `kolsch setup` would convert this scoped legacy rule.
+
+    Mirrors the migrator's acceptance: `who: ".*"`, no non-`*`
+    `pattern`, a `from` of shape `<bundle>/<agents|workflows>/<name>`,
+    and a `what` one of its heuristics recognises. (Catalog checks —
+    tool home bundle, `from` existence — are left to setup, which warns
+    when they fail.)
+    """
+    if entry.get("who") != ".*" or entry.get("pattern", "*") != "*":
+        return False
+    if not isinstance(from_value, str):
+        return False
+    parts = from_value.split("/")
+    if len(parts) != _THREE_SEG_PARTS or not all(parts):
+        return False
+    if parts[1] not in ("agents", "workflows"):
+        return False
+    what = entry.get("what")
+    return isinstance(what, str) and any(
+        regex.match(what) for regex in _LEGACY_MIGRATABLE_WHATS
+    )
 
 
 def _build_action_to_tool_ref(catalog: AssetCatalog) -> dict[str, str]:
@@ -198,7 +270,21 @@ class Rule(BaseModel):
     during the in-flight migration — `who` defaults to `None`, which
     the provider's compile step treats as new-shape glob-matched; when
     `who` is supplied (typically `".*"`) the rule compiles as legacy
-    regex. `id` is auto-derived from `who+what+effect` when absent.
+    regex.
+
+    `id` is derived by
+    [`derive_rule_id`][providers.authz.derive_rule_id]: canonical rules
+    from `what|pattern|effect` plus `from` when scoped (any supplied
+    `id` in YAML is ignored); legacy rules from `who|what|effect` when no `id`
+    is supplied. Only the unscoped catch-all deny earns
+    [`DEFAULT_DENY_RULE_ID`][providers.authz.DEFAULT_DENY_RULE_ID].
+    A legacy rule cannot carry `from_` or a non-`*` `pattern`: the
+    regex matcher has no caller or target filter, so either field
+    would be silently ignored and the rule would apply more widely
+    than it reads. Construction raises (Pydantic `ValidationError`)
+    with the
+    [`legacy_rule_scope_violation`][schemas.config.legacy_rule_scope_violation]
+    text instead.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
@@ -237,27 +323,55 @@ class Rule(BaseModel):
         """
         return self.who is not None
 
+    @model_validator(mode="after")
+    def _reject_scoped_legacy(self) -> Rule:
+        if self.who is not None:
+            reason = legacy_rule_scope_violation(
+                from_value=self.from_, pattern=self.pattern
+            )
+            if reason is not None:
+                raise ValueError(reason)
+        return self
 
-def derive_rule_id(who: str, what: str, effect: str) -> str:
-    """Return a deterministic id of form `rl_<sha256(who+what+effect)[:8]>`.
+
+def derive_rule_id(
+    who: str,
+    what: str,
+    effect: str,
+    *,
+    from_: str | None = None,
+) -> str:
+    """Return a deterministic id of form `rl_<sha256(...)[:8]>`.
 
     Stable across reorders and reloads — two rules with identical
-    content always produce the same id. The default-deny shape
-    (legacy: `who=".*"`, `what=".*"`, `effect="deny"`; new-shape:
-    `what="*"`, `pattern="*"`, `effect="deny"`, passed in as
-    `what="*|*"` by `_ensure_id`) returns the reserved
+    content always produce the same id. The hash input is
+    `who|what|effect`; canonical rules pass `who=".*"` and
+    `what="<what>|<pattern>"` (see `_ensure_id`). A `from_`-scoped
+    rule appends `|from=<from_>`, so a scoped rule and its unscoped
+    twin never share an id; with `from_=None` the id is byte-identical
+    to the pre-`from_` derivation, so unscoped ids never change.
+
+    The **unscoped** default-deny shape (legacy: `who=".*"`,
+    `what=".*"`, `effect="deny"`; canonical: `what="*"`, `pattern="*"`,
+    `effect="deny"`, passed in as `what="*|*"`) returns the reserved
     [`DEFAULT_DENY_RULE_ID`][providers.authz.DEFAULT_DENY_RULE_ID]
     instead so the tail is referenced by a fixed name across both
-    schema shapes.
+    schema shapes. A scoped catch-all deny never gets that id.
+
+    Legacy rules cannot carry `from` (the provider refuses one that
+    does), so only canonical rules pass `from_`.
     """
-    if who == ".*" and what == ".*" and effect == "deny":
-        return DEFAULT_DENY_RULE_ID
-    # New-shape catch-all collapses to
-    # `{what: "*", pattern: "*", effect: "deny"}`; `_ensure_id`
-    # encodes that as `what="*|*"` here.
-    if who == ".*" and what == "*|*" and effect == "deny":
-        return DEFAULT_DENY_RULE_ID
-    payload = f"{who}|{what}|{effect}"
+    if from_ is None:
+        if who == ".*" and what == ".*" and effect == "deny":
+            return DEFAULT_DENY_RULE_ID
+        # Canonical catch-all collapses to
+        # `{what: "*", pattern: "*", effect: "deny"}`; `_ensure_id`
+        # encodes that as `what="*|*"` here.
+        if who == ".*" and what == "*|*" and effect == "deny":
+            return DEFAULT_DENY_RULE_ID
+        payload = f"{who}|{what}|{effect}"
+    else:
+        payload = f"{who}|{what}|{effect}|from={from_}"
     digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:8]
     return f"rl_{digest}"
 
@@ -355,11 +469,10 @@ def inspect_default_deny_tail(rules: Sequence[object]) -> DefaultDenyTailStatus:
     parsed from `platform.yaml`'s `authorization.config.rules`
     (mappings; any non-mapping entry is skipped but keeps its index).
 
-    The tail is detected by **shape**, never by id. Ids are an
-    unreliable signal: [`derive_rule_id`][providers.authz.derive_rule_id]
-    ignores `from`, so a scoped catch-all deny is also assigned
-    [`DEFAULT_DENY_RULE_ID`][providers.authz.DEFAULT_DENY_RULE_ID], and a
-    legacy rule may carry any caller-supplied `id`. A tail is an
+    The tail is detected by **shape**, never by id: a legacy rule may
+    carry any caller-supplied `id`, so
+    [`DEFAULT_DENY_RULE_ID`][providers.authz.DEFAULT_DENY_RULE_ID] alone
+    is not proof of a tail. A tail is an
     unscoped catch-all deny in either schema:
 
     - canonical: `{what: "*", pattern: "*" (or absent), effect: deny}`
@@ -464,6 +577,68 @@ def describe_default_deny_tail_problem(status: DefaultDenyTailStatus) -> str | N
         "`kolsch chat --auto-approve`, and be denied everywhere else. Fix: run "
         f"`{_DEFAULT_DENY_FIX_COMMAND}`, then `kolsch doctor` to re-check."
     )
+
+
+def dead_legacy_rule_reason(rule: Rule) -> str | None:
+    r"""Return why a legacy rule can never match, or `None`.
+
+    Covers the one precisely decidable case: a legacy `what:` that pins
+    the pre-3-segment tool action `tool\.<name>` (the
+    `LEGACY_TOOL_ACTION_RE`
+    grammar the setup migrator converts). Engine-registered tools act as
+    `<bundle>/tools/<name>`, so such a rule is dead — its effect is
+    never applied. Pure; callers decide whether to warn. Never consulted
+    by `allow()`, so it can't change a decision.
+    """
+    if not rule.is_legacy:
+        return None
+    match = LEGACY_TOOL_ACTION_RE.match(rule.what)
+    if match is None:
+        return None
+    name = match.group(1)
+    return (
+        f"`what: {rule.what!r}` pins the action `tool.{name}`, which no "
+        "engine-registered tool uses (tool actions are "
+        "`<bundle>/tools/<name>`), so this rule never matches; replace it "
+        f'with `{{what: <bundle>/tools/{name}, pattern: "*", '
+        f"effect: {rule.effect}}}`"
+    )
+
+
+def warn_dead_legacy_rules(rules: Sequence[Rule], *, where: str) -> int:
+    """Log one WARNING per dead legacy rule in `rules`.
+
+    A rule is dead when
+    [`dead_legacy_rule_reason`][providers.authz.dead_legacy_rule_reason]
+    returns a reason. The text is
+    [`ConfigDeprecatedRegexRule`][errors.ConfigDeprecatedRegexRule]'s
+    (`config.deprecated_regex_rule`), prefixed with `where` and the
+    rule's source location when known. Never raises.
+
+    Args:
+        rules: The rules to check, indexed as listed.
+        where: Who loaded them (e.g. `"authz.rule_based.load"`,
+            `"agent ag_x permissions"`).
+
+    Returns:
+        The number of warnings logged.
+    """
+    warned = 0
+    for index, rule in enumerate(rules):
+        reason = dead_legacy_rule_reason(rule)
+        if reason is None:
+            continue
+        location = (
+            f" ({rule.source_file}:{rule.source_line})"
+            if rule.source_file is not None
+            else ""
+        )
+        warning = ConfigDeprecatedRegexRule(
+            rule_index=index, what=rule.what, reason=reason, where=where
+        )
+        _log.warning("%s%s: %s", where, location, warning)
+        warned += 1
+    return warned
 
 
 class AuthorizationResult(BaseModel):
@@ -776,6 +951,14 @@ class RuleBasedAuthorizationProvider:
         self._rules: list[_CompiledRule] = [
             self._compile(index, entry) for index, entry in enumerate(raw_rules)
         ]
+        # A legacy `tool\.<name>` rule loads but can never match a real
+        # tool; say so (warning only). Catalog-less providers are test
+        # / non-workspace callers — stay quiet there.
+        if catalog is not None:
+            warn_dead_legacy_rules(
+                [compiled.raw for compiled in self._rules],
+                where="authz.rule_based.load",
+            )
         # Chat-injected callback resolved by `_resolve_prompt` when
         # `allow(callback=)` is omitted. The chat lifecycle registers
         # on startup and clears on exit so subsequent in-process
@@ -821,6 +1004,21 @@ class RuleBasedAuthorizationProvider:
         *,
         source: tuple[str, int] | None = None,
     ) -> _CompiledRule:
+        """Compile a legacy `{id, who, what, effect}` regex-shape entry.
+
+        The legacy shape has no caller-chain or target filter, so an
+        entry carrying `from` (or `from_`) or a non-`*` `pattern` is
+        refused with `AuthzMalformedRule` rather than compiled into a
+        rule that applies to every caller and target.
+        """
+        from_value = _entry_from_value(index, entry)
+        reason = legacy_rule_scope_violation(
+            from_value=from_value,
+            pattern=entry.get("pattern", "*"),
+            setup_can_migrate=_setup_can_migrate_legacy(entry, from_value),
+        )
+        if reason is not None:
+            raise AuthzMalformedRule(rule_index=index, error=reason)
         for required in ("who", "what", "effect"):
             if required not in entry:
                 raise AuthzMalformedRule(
@@ -926,16 +1124,17 @@ class RuleBasedAuthorizationProvider:
         # catalog-existence misses. Accept both the "from" YAML alias
         # and the Python "from_" name so programmatic Rule(...)
         # construction works without alias-by.
-        from_value = entry.get("from", entry.get("from_"))
+        from_value = _entry_from_value(index, entry)
         self._validate_from(index=index, from_value=from_value)
         # Derive a stable id so the live-edit API + default-deny tail
-        # detection still work for new-shape rules. The catch-all
-        # (`what="*"`, `pattern="*"`, `effect="deny"`) collapses to
-        # `DEFAULT_DENY_RULE_ID`; everything else gets a deterministic
-        # hash. `who=".*"` is the canonical placeholder fed into
-        # `derive_rule_id` so legacy and new-shape catch-alls coalesce
-        # to the same id.
-        rule_id = derive_rule_id(".*", f"{what}|{pattern}", effect)
+        # detection still work for new-shape rules. The unscoped
+        # catch-all (`what="*"`, `pattern="*"`, `effect="deny"`)
+        # collapses to `DEFAULT_DENY_RULE_ID`; everything else —
+        # including a `from`-scoped catch-all — gets a deterministic
+        # hash that includes `from`. `who=".*"` is the canonical
+        # placeholder fed into `derive_rule_id` so legacy and
+        # new-shape catch-alls coalesce to the same id.
+        rule_id = derive_rule_id(".*", f"{what}|{pattern}", effect, from_=from_value)
         source_file, source_line = (source[0], source[1]) if source else (None, None)
         return _CompiledRule(
             effect=effect,
@@ -1778,12 +1977,14 @@ class RuleBasedAuthorizationProvider:
         New-shape rules carry their own identifier shape (the
         matched-rule object itself, surfaced via the denied capsule's
         `what`/`pattern`) but the internal anchor still uses a
-        derived id. We synthesise one from `what+pattern+effect`.
+        derived id. We synthesise one from `what+pattern+effect`, plus
+        `from` when the rule is scoped.
         """
         if rule.id:
             return rule
         if rule.is_legacy:
             assert rule.who is not None
+            # No `from_`: a legacy rule can't carry one (bug-159).
             derived = derive_rule_id(rule.who, rule.what, rule.effect)
         else:
             # New-shape: derive from (what, pattern, effect). The
@@ -1794,6 +1995,7 @@ class RuleBasedAuthorizationProvider:
                 ".*",
                 f"{rule.what}|{rule.pattern}",
                 rule.effect,
+                from_=rule.from_,
             )
         return rule.model_copy(update={"id": derived})
 
@@ -1803,10 +2005,21 @@ class RuleBasedAuthorizationProvider:
         Dispatches the same way `_compile` does — legacy rules (`who`
         set) use regex; new-shape rules (`who` absent) use glob. Used
         by `add_rule` / `_resolve_prompt` where the caller already
-        constructed a `Rule`.
+        constructed a `Rule`, and per call for agent / bundle /
+        workflow layer rules. A legacy rule carrying `from_` or a
+        non-`*` `pattern` raises `AuthzMalformedRule` (`rule_index=-1`)
+        before any caller mutates its rule list.
         """
         if rule.is_legacy:
             assert rule.who is not None
+            # `Rule`'s validator already refuses this; re-check for
+            # `model_construct` / `model_copy` bypasses so no legacy
+            # rule with an ignored `from_` / `pattern` ever compiles.
+            reason = legacy_rule_scope_violation(
+                from_value=rule.from_, pattern=rule.pattern
+            )
+            if reason is not None:
+                raise AuthzMalformedRule(rule_index=-1, error=reason)
             try:
                 who_re = re.compile(rule.who)
             except re.error as exc:

@@ -33,6 +33,7 @@ from typing import TYPE_CHECKING, Any, Literal, TextIO
 
 from assets.platform_config import authorization_rule_source_map, platform_yaml_lock
 from errors import (
+    AuthzMalformedRule,
     AuthzProtectedRule,
     AuthzRuleInvalid,
     AuthzRuleNotFound,
@@ -54,6 +55,7 @@ from providers import (
     Rule,
     RuleBasedAuthorizationProvider,
 )
+from schemas.config import legacy_rule_scope_violation
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -373,6 +375,11 @@ def _rule_to_dict(rule: Rule) -> dict[str, str]:
     serialize with the old `{id, who, what, effect}` shape so an
     unmigrated workspace that gets one rule added/removed via the
     CLI doesn't accidentally flip back to the new shape mid-file.
+
+    Raises:
+        AuthzMalformedRule: A legacy rule carries `from_` or a non-`*`
+            `pattern` (only reachable through a validation bypass);
+            writing it would drop the field and widen the rule.
     """
     if rule.who is None:
         out: dict[str, str] = {
@@ -383,6 +390,12 @@ def _rule_to_dict(rule: Rule) -> dict[str, str]:
             out["from"] = rule.from_
         out["effect"] = rule.effect
         return out
+    # The legacy shape can't carry `from` / `pattern`. `Rule` refuses
+    # one that does, but a `model_construct` bypass could still reach
+    # here — refuse rather than write a widened rule to disk.
+    reason = legacy_rule_scope_violation(from_value=rule.from_, pattern=rule.pattern)
+    if reason is not None:
+        raise AuthzMalformedRule(rule_index=-1, error=reason)
     return {
         "id": rule.id,
         "who": rule.who,

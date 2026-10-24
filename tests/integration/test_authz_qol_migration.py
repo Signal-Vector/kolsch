@@ -173,3 +173,81 @@ async def test_provider_rejects_bare_tool_ref_in_real_workspace(
     # The error names the qualified form the user should write.
     # qol-action-namespace-bundle-scoped.md Step 2 — candidate is 3-seg.
     assert "kolsch/tools/bash" in excinfo.value.detail["candidates"]
+
+
+# ---------------------------------------------------------------------------
+# bug-159 — `kolsch setup` re-run migrates a scoped legacy rule before
+# anything builds the provider from it (spec S1 escape hatch)
+# ---------------------------------------------------------------------------
+
+
+async def test_setup_rerun_migrates_scoped_legacy_rule_keeping_from(
+    tmp_path: Path,
+) -> None:
+    """A legacy rule with `from:` bricks provider load, but setup fixes it.
+
+    Drives the real re-run path (`_step_b_skeleton` on an initialized
+    workspace) — it migrates before Step C/E build the runtime — and
+    asserts the rewritten rule keeps its `from:`.
+    """
+    import io
+
+    import pytest
+
+    from cli._setup import NonInteractivePrompter, _SetupIO, _step_b_skeleton
+    from errors import AuthzMalformedRule
+
+    _seed_workspace(tmp_path)
+    agents = tmp_path / "bundles" / "kolsch" / "agents"
+    agents.mkdir()
+    (agents / "a.yaml").write_text("name: a\n", encoding="utf-8")
+    scoped = {"who": ".*", "what": r"tool\.bash", "from": "kolsch/agents/a"}
+    scoped["effect"] = "allow"
+    rules = [scoped, *_CANONICAL_LEGACY_RULES]
+    (tmp_path / "platform.yaml").write_text(
+        yaml.safe_dump(
+            {"authorization": {"variant": "rule_based", "config": {"rules": rules}}}
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(AuthzMalformedRule):
+        RuleBasedAuthorizationProvider(config={"rules": rules})
+
+    out = io.StringIO()
+    setup_io = _SetupIO(
+        root=tmp_path,
+        out=out,
+        err=io.StringIO(),
+        prompter=NonInteractivePrompter(),
+        connect_io_factory=lambda *a, **k: None,
+        run_handler=lambda *a, **k: None,
+    )
+    await _step_b_skeleton(setup_io, non_interactive=True)
+
+    post = yaml.safe_load((tmp_path / "platform.yaml").read_text(encoding="utf-8"))
+    post_rules = post["authorization"]["config"]["rules"]
+    assert post_rules[0] == {
+        "what": "kolsch/tools/bash",
+        "pattern": "*",
+        "from": "kolsch/agents/a",
+        "effect": "allow",
+    }
+    am = AssetManagement(root=tmp_path)
+    await am.initialize()
+    provider = RuleBasedAuthorizationProvider(
+        config={"rules": post_rules}, catalog=am.catalog()
+    )
+    allowed = await provider.allow(
+        "user.local",
+        "kolsch/tools/bash",
+        target="rm -rf /",
+        caller_chain=("kolsch/agents/a",),
+    )
+    other = await provider.allow(
+        "user.local",
+        "kolsch/tools/bash",
+        target="rm -rf /",
+        caller_chain=("kolsch/agents/b",),
+    )
+    assert allowed.allowed
+    assert not other.allowed

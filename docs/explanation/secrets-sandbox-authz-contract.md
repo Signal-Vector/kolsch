@@ -357,36 +357,71 @@ performing actions they want gated.
 
 ### 3.2.1 Rule shape
 
+The canonical rule shape:
+
 ```
 Rule
-├── id       string      — stable identifier; assigned at parse time
-│                          (Phase 2.0, TOOL-R3 / TOOL-R4)
-├── who      string      — principal pattern (regex, fullmatch)
-├── what     string      — action pattern (regex, fullmatch)
-└── effect   enum        — "allow" | "deny" | "prompt"
+├── what     string      — tool ref (`kolsch/tools/bash`), system action
+│                          namespace (`agent.execute.*`), or `*` (glob)
+├── pattern  string      — glob matched against the target; default `*`
+├── from     string?     — optional caller-chain glob
+│                          (`<bundle>/agents/<name>`,
+│                          `<bundle>/workflows/<name>`); see §3.2.5
+├── effect   enum        — "allow" | "deny" | "prompt"
+└── id       string      — derived at parse time, never written to YAML
 ```
 
-A rule says: principals matching `who`, performing actions matching
-`what`, are [allowed | denied | prompted]. The `prompt` effect arrives
-in Phase 2.0 — see §3.7 below.
+A rule says: actions matching `what`, on a target matching `pattern`,
+called from a chain with a frame matching `from` (when set), are
+[allowed | denied | prompted]. The `prompt` effect arrives in Phase 2.0
+— see §3.7 below.
 
-The `id` field is a stable identifier assigned deterministically from
-the rule's `who+what+effect` (Phase 2.0, TOOL-R3). It is the handle
-the `kolsch permissions {remove, show}` CLI uses to reference a
-rule. Re-ordering preserves ids; editing a rule's content changes
-its id.
+**Legacy shape (deprecated).** `{id, who, what, effect}`, where `who`
+and `what` are regexes (§3.2.2), is still accepted during the migration
+window; the presence of `who` marks a rule as legacy. The legacy shape
+has **no caller or target filter**, so a legacy rule **cannot carry
+`from` or a non-`*` `pattern`**: every loader (platform rules, agent and
+bundle `permissions:`, workflow `policy:`, the `Rule` model itself)
+refuses the combination with `authz.malformed_rule` instead of silently
+dropping the field and enforcing a wider rule. `kolsch setup` converts
+a `platform.yaml` legacy rule with a valid `from` to the canonical
+shape; anything else is converted by hand.
 
-### 3.2.2 Regex semantics
+**Rule ids.** The `id` is the handle `kolsch permissions {remove, show}`,
+`add --before/--after` and `/perm` use. It is derived deterministically
+by `providers.authz.derive_rule_id`:
 
-Both `who` and `what` are regular expressions matched with **fullmatch**
-semantics — the regex must match the entire string, not a substring.
-This avoids the well-known over-matching footgun (`kolsch/tools/b`
-accidentally matching `kolsch/tools/bash`).
+- canonical: hash of `what|pattern|effect`, plus `from` when the rule
+  is scoped — so a scoped rule and its unscoped twin never share an id.
+  Canonical ids are re-derived on every load; a supplied `id` is
+  ignored.
+- legacy: a supplied `id` is kept; otherwise hash of `who|what|effect`.
+- the reserved `rl_default_deny` goes only to the **unscoped** catch-all
+  deny (canonical `{what: "*", pattern: "*", effect: deny}` or legacy
+  `{who: ".*", what: ".*", effect: deny}`). A `from`-scoped catch-all
+  deny gets an ordinary id and can be removed.
+
+Re-ordering preserves ids; editing a rule's content changes its id.
+**Ids of existing scoped (`from:`) rules changed once in bug-159**, when
+`from` joined the derivation; unscoped ids are unchanged. Ids are
+display / correlation handles only: `policy.decision.made` and
+`authz.prompt_requested` events recorded before the upgrade carry the
+old id of a scoped rule, and nothing resolves a historical id back to a
+live rule.
+
+### 3.2.2 Regex semantics (legacy shape only)
+
+In the legacy shape, both `who` and `what` are regular expressions
+matched with **fullmatch** semantics — the regex must match the entire
+string, not a substring. This avoids the well-known over-matching
+footgun (`kolsch/tools/b` accidentally matching `kolsch/tools/bash`).
 
 If a user wants substring or prefix matching, they write it explicitly
 with `.*` (e.g., `kolsch/tools/.*` matches every kolsch tool action).
 
 Standard Python regex syntax. Implementation uses `re.fullmatch()`.
+Canonical rules use globs (`fnmatch`) for `what`, `pattern` and `from`
+instead (§3.2.5).
 
 ### 3.2.3 Action namespace
 

@@ -23,11 +23,15 @@ context_files: []
 # Per-agent permission rules. The default kolsch `bash` policy is
 # `prompt`; reaffirm it here so an operator who has widened the
 # workspace-level rule still sees the confirmation modal for this
-# meta-agent specifically. The two validation tools are pure read;
-# they fall under the kolsch default (allow) policy.
+# meta-agent specifically — the agent layer is checked before the
+# workspace (`platform.yaml`) layer. The two validation tools are pure
+# read; they fall under the kolsch default (allow) policy.
+#
+# `what:` is the 3-seg catalog ref `<bundle>/tools/<name>`; `pattern:
+# "*"` matches any command.
 permissions:
-  - who: ".*"
-    what: "tool\\.bash"
+  - what: kolsch/tools/bash
+    pattern: "*"
     effect: prompt
 
 # One skill carries the bulk of the authoring knowledge so the
