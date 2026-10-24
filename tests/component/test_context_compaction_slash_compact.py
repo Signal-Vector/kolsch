@@ -17,8 +17,9 @@ Uses the same synthesizer harness as
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
+import httpx
 import pytest
 import yaml
 
@@ -31,9 +32,11 @@ from engine import (
     LLMResponse,
     MinimalFramework,
 )
+from engine._crewai_adapter import make_build_llm_factory
 from errors import ModelContextOverflow
 from files import PathPolicy
-from llm import ProviderConfig
+from llm import ProviderConfig, registry
+from llm.providers.opencode import OpenCodeConnector
 from providers import (
     NativeSandboxProvider,
     RecentBufferMemoryProvider,
@@ -427,6 +430,97 @@ async def test_manual_compact_overflow_short_circuits_summariser(
     emitted = await engine.manual_compact(config=_config(), thread_id=thread_id)
     assert emitted is not None
     assert overflow.calls == 1
+
+
+_WIRE_TYPE = "opencode_overflow_bug145"
+
+
+class _OverflowWireConnector(OpenCodeConnector):
+    """The real OpenCode connector whose client answers every call with
+    OpenAI's 400 context-overflow body (bug-144 MockTransport idiom).
+    CrewAI re-raises it as `LLMContextLengthExceededError from
+    BadRequestError`; the bug-145 call seam must type it
+    `model.context_overflow`."""
+
+    type_name: ClassVar[str] = _WIRE_TYPE
+    calls: ClassVar[int] = 0
+
+    async def build_llm(
+        self,
+        model_id: str,
+        provider_config: ProviderConfig,
+        api_key: str | None,
+        parameters: Any = None,
+        *,
+        context: Any = None,
+    ) -> Any:
+        llm = await super().build_llm(
+            model_id, provider_config, api_key, parameters, context=context
+        )
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            type(self).calls += 1
+            return httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "message": "This model's maximum context length is 8192 tokens"
+                    }
+                },
+            )
+
+        llm.max_retries = 0
+        llm.client_params = {
+            "http_client": httpx.Client(transport=httpx.MockTransport(handler))
+        }
+        llm._client = None
+        return llm
+
+
+@pytest.mark.asyncio
+async def test_real_provider_overflow_short_circuits_summariser(
+    tmp_path: Path,
+) -> None:
+    """bug-145 Test 5 (AC 9) — the summariser callable comes from the
+    production `make_build_llm_factory`, built by a real connector over
+    a canned wire. Pre-bug-145 CrewAI's `LLMContextLengthExceededError`
+    reached the ladder untyped, so this short-circuit never fired for a
+    real provider; now it does: exactly one summariser call."""
+    _OverflowWireConnector.calls = 0
+    registry.register(_WIRE_TYPE, _OverflowWireConnector)
+    try:
+        wire = {
+            "wire": ProviderConfig(
+                name="wire",
+                type=_WIRE_TYPE,
+                api_key_secret=None,
+                base_url="https://gateway.invalid/v1",
+                timeout_seconds=5,
+            )
+        }
+        real_factory = make_build_llm_factory(
+            llm_providers_config=wire,
+            secrets=DotenvSecretsProvider(root=tmp_path, config={"path": ".env"}),
+        )
+
+        async def factory(_spec: Any, *, context: Any = None) -> Any:
+            return await real_factory(
+                ModelSpec(provider="wire", model="summariser"), context=context
+            )
+
+        provider = ReferenceSummaryCompactionProvider(llm_for_model=factory, config={})
+        engine, store = await _build(tmp_path, compaction_provider=provider)
+        thread_id = await _fresh_thread(store)
+        await _seed_turns(engine, thread_id)
+
+        _OverflowWireConnector.calls = 0
+        emitted = await engine.manual_compact(config=_config(), thread_id=thread_id)
+    finally:
+        registry._REGISTRY.pop(_WIRE_TYPE, None)
+
+    assert emitted is not None
+    assert emitted.data.get("trigger") == "manual_truncation"
+    assert _OverflowWireConnector.calls == 1
 
 
 @pytest.mark.asyncio

@@ -161,12 +161,15 @@ CATALOG: dict[str, Level] = {
     "setup.aborted": Level.RECOVERABLE,
     "setup.starter_exists": Level.RECOVERABLE,
     # ----- Model Fallback ----------------------------------------------
-    # Four Recoverable codes — drive the fallback loop.
+    # Five Recoverable codes — drive the fallback loop.
     "model.rate_limited": Level.RECOVERABLE,
     "model.server_error": Level.RECOVERABLE,
     "model.timeout": Level.RECOVERABLE,
     "model.context_overflow": Level.RECOVERABLE,
-    # Two Fatal model.* codes — abort without consulting the chain.
+    # HTTP 404 — the provider doesn't serve the model (catalog drift);
+    # another chain entry can still answer (bug-145).
+    "model.not_found": Level.RECOVERABLE,
+    # Fatal model.* codes — abort without consulting the chain.
     "model.authentication_failed": Level.FATAL,
     "model.bad_request": Level.FATAL,
     # The local CLI a subscription connector shells is missing or not

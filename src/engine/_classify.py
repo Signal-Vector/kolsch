@@ -6,15 +6,26 @@ equated "unknown to the engine" with "the engine crashed," which
 obscured terminal conditions from below — most painfully, transport
 timeouts that the retry pipeline should have absorbed.
 
-This module is the safety net half. The primary half is per-framework
-adapter translation (the CrewAI adapter catches known CrewAI
-exception shapes and re-raises as typed
-[`PlatformError`][errors.PlatformError] BEFORE reaching the
-boundary). Even with the adapter in place, a future framework
-release could change its surface; the safety net walks the cause
-chain on every boundary catch so the boundary can re-classify based
-on the original typed exception even when intermediate layers
-flattened it.
+This module is the safety net half. The primary half is the LLM
+call seam (bug-145): `engine._crewai_adapter.make_llm_callable` hands
+every raw provider exception to the building connector's
+`classify_call_error` hook and re-raises it as a typed
+[`PlatformError`][errors.PlatformError] BEFORE the fallback loop and
+the boundary see it; the CrewAI framework adapter also translates the
+CrewAI exception shapes it knows. Even with those in place, a path
+the seam doesn't cover (a connector that returns `None`, a future
+framework release) could still surface a raw exception; the safety
+net walks the cause chain on every boundary catch so the boundary can
+re-classify based on the original typed exception even when
+intermediate layers flattened it.
+
+Two passes, in order: the name tables below (unchanged since before
+bug-145, so their mappings — e.g. `openai.AuthenticationError` →
+`agent.unauthorized` — keep winning), then a status branch that maps
+any remaining link with an `int` `status_code` >= 400 and a `response`
+through the connectors' shared pure mapper
+`llm.providers._errors.classify_http_response`. `platform.internal_error`
+is therefore left for genuinely unknown exceptions.
 
 **String matching, not isinstance.** The classifier matches on
 `f"{type(exc).__module__}.{type(exc).__name__}"` so the engine does
@@ -59,6 +70,12 @@ _MAX_DEPTH = 10
 """Pathological-chain guard. Real exception chains rarely exceed 3
 hops (provider → framework adapter → engine); ten is generous + safe."""
 
+_HTTP_ERROR_MIN = 400
+
+_STATUS_WHERE = "engine._classify.cause_chain"
+"""`where` stamped on status-branch errors, so the log shows the safety
+net — not the connector call seam — classified them."""
+
 
 def classify_from_cause_chain(
     exc: BaseException,
@@ -90,13 +107,8 @@ def classify_from_cause_chain(
         A typed `PlatformError` when the chain carries a known
         provider exception, otherwise `None`.
     """
-    seen: set[int] = set()
-    current: BaseException | None = exc
-    depth = 0
-    while current is not None and depth < _MAX_DEPTH:
-        if id(current) in seen:
-            return None
-        seen.add(id(current))
+    chain = _cause_chain(exc)
+    for current in chain:
         qual = f"{type(current).__module__}.{type(current).__name__}"
         if qual in _RECOVERABLE_UPSTREAM:
             return ModelUpstreamError(
@@ -110,6 +122,46 @@ def classify_from_cause_chain(
                 action="model.call",
                 principal="user.local",
             )
-        current = current.__cause__
-        depth += 1
+    for current in chain:
+        classified = _classify_status(current)
+        if classified is not None:
+            return classified
     return None
+
+
+def _cause_chain(exc: BaseException) -> list[BaseException]:
+    """`exc` and its `__cause__` ancestors, cycle-guarded, at most `_MAX_DEPTH`."""
+    seen: set[int] = set()
+    chain: list[BaseException] = []
+    current: BaseException | None = exc
+    while current is not None and len(chain) < _MAX_DEPTH:
+        if id(current) in seen:
+            break
+        seen.add(id(current))
+        chain.append(current)
+        current = current.__cause__
+    return chain
+
+
+def _classify_status(link: BaseException) -> PlatformError | None:
+    """Map a duck-typed HTTP status error through the shared mapper (bug-145)."""
+    status = getattr(link, "status_code", None)
+    if (
+        not isinstance(status, int)
+        or isinstance(status, bool)
+        or status < _HTTP_ERROR_MIN
+        or not hasattr(link, "response")
+    ):
+        return None
+    from llm.providers._errors import (  # noqa: PLC0415 — keep the engine import graph narrow
+        classify_http_response,
+        response_body,
+    )
+
+    return classify_http_response(
+        status,
+        response_body(link),
+        provider=type(link).__module__,
+        model="unknown",
+        where=_STATUS_WHERE,
+    )

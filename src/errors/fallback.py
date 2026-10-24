@@ -1,6 +1,6 @@
 """Model fallback errors.
 
-Eight classes that drive the engine's fallback loop. Classification
+Ten classes that drive the engine's fallback loop. Classification
 (Recoverable vs Fatal) is load-bearing — the engine's
 `is_fallback_triggering` predicate (see `engine._fallback`) consults
 the level to decide whether to walk the chain. See the
@@ -14,6 +14,8 @@ Recoverable — drive fallback:
 - `ModelTimeout` — provider unresponsive.
 - `ModelContextOverflow` — request exceeds the model's window; a
   larger-context model may handle it.
+- `ModelNotFound` — HTTP 404; the provider doesn't serve that model
+  (often retired from its catalog), but another chain entry may.
 
 Fatal — abort without consulting the chain:
 
@@ -164,6 +166,43 @@ class ModelContextOverflow(PlatformError):
             ),
             where=where,
             detail=detail,
+        )
+
+
+class ModelNotFound(PlatformError):
+    """Raised when the provider returned HTTP 404 for the model (bug-145).
+
+    Recoverable — the usual cause is catalog drift (the provider retired
+    or renamed the model), so a different chain entry can still answer.
+    `kolsch refresh <provider>` re-reads the provider's current catalog.
+    A wrong `base_url` 404s every model too, so the message names both.
+    """
+
+    code = "model.not_found"
+    level = Level.RECOVERABLE
+
+    def __init__(
+        self,
+        provider: str,
+        model: str,
+        status_code: int,
+        reason: str,
+        *,
+        where: str = "llm.connector.call",
+    ) -> None:
+        super().__init__(
+            message=(
+                f"Provider {provider!r} returned HTTP {status_code} for model "
+                f"{model!r}: {reason} — check the model id and the "
+                f"provider's base_url"
+            ),
+            where=where,
+            detail={
+                "provider": provider,
+                "model": model,
+                "status_code": status_code,
+                "reason": reason,
+            },
         )
 
 

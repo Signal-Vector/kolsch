@@ -62,7 +62,7 @@ the engine doesn't know it exists because the engine works with
 
 ### 1.2 The checklist (one question per Protocol method)
 
-When writing the connector, the file must answer these five
+When writing the connector, the file must answer these six
 questions. Each maps to a Protocol method:
 
 - **What does the user type to connect?** →
@@ -85,12 +85,22 @@ questions. Each maps to a Protocol method:
   api_key=api_key, base_url=provider_config.base_url, ...)`. For
   providers needing special construction (e.g., Bedrock with AWS
   sigv4), it can be more involved.
+- **What does a call-time failure mean?** →
+  `classify_call_error(exc, *, provider_config, model_id)` maps an
+  exception the connector's own `crewai.LLM` raised while serving a
+  call to a catalogued `model.*` error (or `None` if unrecognised).
+  It must be pure. The engine's fallback chain only advances on a
+  typed error, so this is what makes `fallback_models` work for your
+  provider. OpenAI-compatible connectors delegate to
+  `classify_openai_compat_exception` in `_errors.py`; a connector
+  whose LLM already raises typed `model.*` errors returns `None`
+  (see `claude_code.py`).
 - **(If applicable)** Can we look up other providers' metadata?
   → implement `MetadataSourceConnector` and its
   `lookup_model_metadata(provider, model_id, credentials)`
   method. Returns a `ModelMetadata` if known, `None` otherwise.
 
-If the answer to any of the first four is "I don't know yet,"
+If the answer to any of the first five is "I don't know yet,"
 the provider isn't ready — document the open question in the
 connector module's docstring and either don't ship it or ship
 with the open question visible.
@@ -106,7 +116,8 @@ from collections.abc import Mapping
 from typing import Any, ClassVar
 import crewai
 
-from src.llm.protocol import (
+from errors import PlatformError
+from llm.protocol import (
     AuthPromptSpec, PromptField,
     Credentials, ValidationResult,
     LLMCallContext,
@@ -169,6 +180,17 @@ class <Name>Connector:
             base_url=provider_config.base_url,
             timeout=provider_config.timeout_seconds,
         )
+
+    def classify_call_error(
+        self,
+        exc: BaseException,
+        *,
+        provider_config: ProviderConfig,
+        model_id: str,
+    ) -> PlatformError | None:
+        # Pure: map a call-time failure of the LLM above to a
+        # catalogued `model.*` error, or `None` if unrecognised.
+        ...
 ```
 
 And the registration:
@@ -180,7 +202,7 @@ from .opencode import OpenCodeConnector
 from .openrouter import OpenRouterConnector
 from .<name> import <Name>Connector   # add this line
 
-from src.llm.registry import register
+from llm.registry import register
 
 register("opencode", OpenCodeConnector)
 register("openrouter", OpenRouterConnector)
@@ -280,6 +302,14 @@ class <Name>Connector:
             context=context,
             default_policy=self.DEFAULT_REQUEST_POLICY,
         )
+
+    def classify_call_error(self, exc, *, provider_config, model_id):
+        return classify_openai_compat_exception(
+            exc,
+            provider=provider_config.name,
+            model=model_id,
+            timeout_seconds=<the same effective timeout build_llm used>,
+        )
 ```
 
 The builder:
@@ -329,6 +359,19 @@ per-conversation metadata accepts and ignores it (see
 `context.conversation_key` and raises a typed `PlatformError` when
 `context` is `None`.
 
+### 2.8. Migration note — `classify_call_error` (bug-145)
+
+`ProviderConnector` gained a required
+`classify_call_error(exc, *, provider_config, model_id) -> PlatformError | None`.
+This is a declared protocol change: connectors are registered in-tree
+only, so every connector (and test double) was updated in the same
+change and nothing probes for the method with `getattr`. The shared
+OpenAI-compatible mapper is total over HTTP status >= 400 and walks
+CrewAI's re-wrapped shapes (`ValueError … from NotFoundError`,
+`ConnectionError … from APIConnectionError`,
+`LLMContextLengthExceededError`, and the `raise e from e` self-cycle),
+so an OpenAI-compatible connector only delegates to it.
+
 ---
 
 ## 3. Things to NOT do
@@ -352,7 +395,7 @@ per-conversation metadata accepts and ignores it (see
 - **Don't take initiative beyond the connector's Protocol
   surface.** No orchestration. No retries (that's the engine's
   domain). No model selection logic. The connector answers the
-  five questions in section 1.2 and nothing more.
+  questions in section 1.2 and nothing more.
 
 ---
 

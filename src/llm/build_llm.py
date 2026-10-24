@@ -5,6 +5,11 @@ provider, and dispatches to the matched provider's `build_llm` method.
 Adding a new provider does not change this function — provider-specific
 concerns live entirely inside the provider class.
 
+[`call_error_classifier`][llm.build_llm.call_error_classifier] is its
+call-time sibling (bug-145): it binds the same connector's
+`classify_call_error` hook so the engine's LLM call seam can turn a raw
+provider exception into a typed `model.*` error.
+
 The engine's pre-flight calls this per exchange. See the
 [agent engine contract](../explanation/agent-engine-contract.md).
 """
@@ -23,6 +28,8 @@ from errors import (
 from llm import registry
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     import crewai
 
     from llm.protocol import LLMCallContext, ProviderConfig
@@ -120,3 +127,44 @@ async def build_llm(
             model=spec.model,
             reason=f"{type(exc).__name__}: {exc}",
         ) from exc
+
+
+def call_error_classifier(
+    spec: ModelSpec,
+    provider_config: ProviderConfig,
+) -> Callable[[BaseException], PlatformError | None]:
+    """Bind the spec's connector `classify_call_error` hook (bug-145).
+
+    Resolves the connector exactly as
+    [`build_llm`][llm.build_llm.build_llm] does
+    (`registry.get(provider_config.type, provider_name=spec.provider)`)
+    and returns a one-argument classifier with `provider_config` and
+    `spec.model` bound. The engine's LLM call seam
+    (`engine._crewai_adapter.make_llm_callable`) invokes it on any
+    non-`PlatformError` the `crewai.LLM` raises.
+
+    Call it only after `build_llm` succeeded for the same arguments:
+    the `None`-config check is not repeated here.
+
+    Args:
+        spec: The canonical model spec the LLM was built for.
+        provider_config: The same platform.yaml entry passed to
+            `build_llm`.
+
+    Returns:
+        A pure classifier returning a typed `model.*` error, or `None`
+        when the connector doesn't recognise the exception.
+
+    Raises:
+        LlmConnectorUnknown: `provider_config.type` is not in the
+            registry.
+    """
+    connector = registry.get(provider_config.type, provider_name=spec.provider)
+    model_id = spec.model
+
+    def classify(exc: BaseException) -> PlatformError | None:
+        return connector.classify_call_error(
+            exc, provider_config=provider_config, model_id=model_id
+        )
+
+    return classify

@@ -29,13 +29,19 @@ overflow markers (Anthropic's
 OpenRouter's relay body).
 
 - HTTP 429 -> `model.rate_limited` (Recoverable).
-- HTTP 5xx -> `model.server_error` (Recoverable).
-- `httpx.TimeoutException` / transport-down -> `model.timeout`
-  (Recoverable).
-- HTTP 400 with body keyword `context_*` / `too long` / `maximum
-  context` -> `model.context_overflow` (Recoverable).
+- HTTP 5xx (500-599) -> `model.server_error` (Recoverable).
 - HTTP 401 or 403 -> `model.authentication_failed` (Fatal).
-- HTTP 400 otherwise -> `model.bad_request` (Fatal).
+- HTTP 402 or 409 -> `model.upstream_error` (Recoverable).
+- HTTP 408, `httpx` timeout / connect / network failures, and
+  `openai.APITimeoutError` / `APIConnectionError` -> `model.timeout`
+  (Recoverable).
+- A context-overflow message in the body -> `model.context_overflow`
+  (Recoverable). HTTP 400 matches the broad markers (`context_*`,
+  `too long`, `exceeds`, `maximum context`, ...); every other status
+  only the specific context/token phrases.
+- HTTP 404 otherwise -> `model.not_found` (Recoverable).
+- HTTP 400 / 422 otherwise, and any other status >= 400 ->
+  `model.bad_request` (Fatal).
 
 Because OpenRouter is a proxy, an upstream provider's 5xx may surface
 as either `model.server_error` (if OpenRouter returns the same 5xx)
@@ -44,10 +50,14 @@ reading: 5xx-at-the-wire is always Recoverable; the non-5xx wrap is
 Fatal because the chain's other entries likely route through
 different providers anyway.
 
-The classification helper
-`classify_http_response`
-is shared with the other OpenAI-compat providers via
-`llm.providers._errors` so a new provider that picks up the same
+`classify_call_error` delegates to the shared, pure
+`llm.providers._errors.classify_openai_compat_exception`, which walks
+the exception CrewAI re-raised (cause chain, cycle-guarded) to the SDK
+status error and maps it with `classify_http_response`. The engine runs
+the hook at its LLM call seam (`engine._crewai_adapter.make_llm_callable`),
+so these codes are what the event log records and what the fallback
+chain decides on (bug-145). The mapper is shared with the other
+OpenAI-compat providers, so a new provider that picks up the same
 shape doesn't reimplement it.
 """
 
@@ -70,6 +80,7 @@ from llm.protocol import (
 )
 from llm.providers._errors import (
     classify_http_response,
+    classify_openai_compat_exception,
     classify_transport_error,
 )
 from llm.providers._openai_compat import (
@@ -82,6 +93,7 @@ if TYPE_CHECKING:
 
     import crewai
 
+    from errors import PlatformError
     from llm.protocol import LLMCallContext
 
 _DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
@@ -281,6 +293,32 @@ class OpenRouterConnector:
             parameters=parameters,
             context=context,
             default_policy=self.DEFAULT_REQUEST_POLICY,
+        )
+
+    def classify_call_error(
+        self,
+        exc: BaseException,
+        *,
+        provider_config: ProviderConfig,
+        model_id: str,
+    ) -> PlatformError | None:
+        """Map a call-time failure of this connector's `crewai.LLM` (bug-145).
+
+        Delegates to the shared OpenAI-compatible mapper
+        `llm.providers._errors.classify_openai_compat_exception`,
+        stamping `provider_config.name` and the same effective timeout
+        `build_llm` configured.
+        """
+        timeout = (
+            float(provider_config.timeout_seconds)
+            if provider_config.timeout_seconds is not None
+            else _DEFAULT_TIMEOUT_SECONDS
+        )
+        return classify_openai_compat_exception(
+            exc,
+            provider=provider_config.name,
+            model=model_id,
+            timeout_seconds=timeout,
         )
 
     # ---- MetadataSourceConnector extension --------------------------------

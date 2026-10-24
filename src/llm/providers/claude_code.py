@@ -138,6 +138,7 @@ if TYPE_CHECKING:
 
     import crewai
 
+    from errors import PlatformError
     from llm.protocol import LLMCallContext
 
 
@@ -657,3 +658,19 @@ class ClaudeCodeConnector:
                 timeout_seconds=timeout,
             ),
         )
+
+    def classify_call_error(
+        self,
+        exc: BaseException,  # noqa: ARG002 — nothing to classify, see below
+        *,
+        provider_config: ProviderConfig,  # noqa: ARG002
+        model_id: str,  # noqa: ARG002
+    ) -> PlatformError | None:
+        """Return `None` — `_ClaudeCodeLLM` already raises typed `model.*` errors.
+
+        Every failure `_ClaudeCodeLLM._run` can hit is mapped in its own
+        layer (missing binary, timeout, non-zero exit, logged out), so
+        anything else reaching the call seam is genuinely unknown
+        (bug-145 protocol).
+        """
+        return None

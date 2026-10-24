@@ -31,6 +31,8 @@ if TYPE_CHECKING:
 
     import crewai
 
+    from errors import PlatformError
+
 
 # ---------------------------------------------------------------------------
 # Auth prompt — the CLI walks this; no interactive code in the provider
@@ -446,10 +448,10 @@ class ProviderConnector(Protocol):
     """The shape every LLM provider implements.
 
     One implementation per provider, living in
-    `src/llm/providers/<name>.py`. Four required methods —
+    `src/llm/providers/<name>.py`. Five required methods —
     `auth_prompt_spec`, `validate_credentials`, `discover_models`,
-    `build_llm` — answer the five questions documented in
-    `src/llm/providers/README.md`.
+    `build_llm`, `classify_call_error` — answer the questions
+    documented in `src/llm/providers/README.md`.
 
     Attributes:
         type_name: The string used in `platform.yaml`'s `type` field
@@ -511,6 +513,32 @@ class ProviderConnector(Protocol):
         id. Connectors that have no use for it accept and ignore it.
         (Protocol change, bug-144: every in-tree connector takes this
         keyword.)
+        """
+        ...
+
+    def classify_call_error(
+        self,
+        exc: BaseException,
+        *,
+        provider_config: ProviderConfig,
+        model_id: str,
+    ) -> PlatformError | None:
+        """Map a call-time failure of this connector's LLM to a `model.*` error.
+
+        Called at the LLM call seam with an exception that is NOT a
+        `PlatformError`, raised by the `crewai.LLM` this connector's
+        `build_llm` returned (for `provider_config` / `model_id`) while
+        serving a call. Returns a catalogued `model.*` `PlatformError`
+        (the caller raises it `from exc`), or `None` when the exception
+        is not one the connector recognises (the caller re-raises the
+        original). The returned code decides whether the engine's
+        fallback chain advances, so an unrecognised provider failure
+        never engages `fallback_models`.
+
+        Must be pure: no I/O, no network, no mutation, and it must not
+        raise. A connector whose LLM already raises typed `model.*`
+        errors (e.g. `claude_code`) returns `None`. (Protocol change,
+        bug-145: every in-tree connector implements this method.)
         """
         ...
 

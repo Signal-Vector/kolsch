@@ -96,6 +96,11 @@ class _RecordingConnector:
     ) -> Any:  # pragma: no cover — unused
         raise NotImplementedError
 
+    def classify_call_error(
+        self, exc: BaseException, *, provider_config: Any, model_id: str
+    ) -> Any:  # pragma: no cover — unused (bug-145 protocol)
+        return None
+
     async def build_llm(
         self,
         model_id: str,

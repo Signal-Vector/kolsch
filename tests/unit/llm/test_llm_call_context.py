@@ -104,7 +104,20 @@ async def test_llm_call_context_make_build_llm_factory_forwards(
         return object()
 
     monkeypatch.setattr(llm, "build_llm", fake_build_llm)
-    factory = make_build_llm_factory(llm_providers_config={}, secrets=object())
+    # bug-145: the factory binds the connector's classifier once
+    # `build_llm` returned, so the entry must exist; the registry is
+    # empty in this unit test, so the binding is stubbed too.
+    monkeypatch.setattr(llm, "call_error_classifier", lambda spec, cfg: None)
+    cfg = ProviderConfig(
+        name="real",
+        type="opencode",
+        api_key_secret=None,
+        base_url=None,
+        timeout_seconds=None,
+    )
+    factory = make_build_llm_factory(
+        llm_providers_config={"real": cfg}, secrets=object()
+    )
     ctx = LLMCallContext.for_session("ses_factory")
 
     await factory(ModelSpec(provider="real", model="m"), context=ctx)
@@ -119,6 +132,11 @@ async def test_llm_call_context_build_llm_forwards_to_connector() -> None:
 
     class _Connector:
         type_name = "ctx_unit_bug144"
+
+        def classify_call_error(
+            self, exc: BaseException, *, provider_config: Any, model_id: str
+        ) -> Any:  # pragma: no cover — unused (bug-145 protocol)
+            return None
 
         async def build_llm(
             self,
