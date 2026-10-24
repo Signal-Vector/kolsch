@@ -37,7 +37,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
 
-from engine.assembly import ASSEMBLY_VERSION, assemble_context
+from engine.assembly import (
+    ASSEMBLY_VERSION,
+    assemble_context,
+    is_compaction_summary_message,
+)
 from engine.assembly_cache import AssemblyCache, _Key, hash_tool_schemas
 from engine.context import (
     AgentExecutionError,
@@ -2817,9 +2821,11 @@ class _Exchange:
 
         # Hand to the framework. The user_message text is the most
         # recent user.message's content text projection; history is
-        # everything BEFORE it (prior turns from the path).
+        # everything BEFORE it (prior turns from the path), plus any
+        # compaction summary the pre-flight above emitted after the
+        # trigger user.message, moved to the end of history (bug-156).
         user_message_text = _last_user_text(assembled.messages)
-        history_messages = _history_before_last_user(assembled.messages)
+        history_messages = _history_for_framework(assembled.messages)
 
         # spec-121 Phase A — AUTO framework selection + engine-owned
         # bridge lifecycle. A `claude_code` agent with ≥1 registered
@@ -3635,6 +3641,41 @@ def _history_before_last_user(messages: list[Any]) -> list[Any]:
     if last_user_idx is None:
         return []
     return list(messages[:last_user_idx])
+
+
+def _history_for_framework(messages: list[Any]) -> list[Any]:
+    """Return the ``history`` the engine hands the framework.
+
+    :func:`_history_before_last_user`, plus every compaction-summary
+    message (:func:`engine.assembly.is_compaction_summary_message`)
+    that sits AFTER the most recent user message, appended in order —
+    i.e. immediately before the user message the framework adds.
+
+    bug-156 — the per-exchange pre-flight
+    (:meth:`_Exchange._maybe_compact_events`) emits
+    `context.compacted` after the trigger `user.message`, so Assembly
+    projects its summary after that message and a plain
+    before-the-last-user split cut it off: the model's request for the
+    turn the compaction fired had the compacted span removed with
+    nothing in its place (agent-engine contract §2.6 step 4). Same
+    failure family as spec-068 Part B's post-user ``tool.failed`` (see
+    the Step 10.5 resume-reconciliation comment in
+    :meth:`_Exchange._preflight`), which was
+    fixed by emitting earlier; compaction must run after the trigger
+    is logged, so the split moves the summary instead. Any other
+    message after the last user message is still dropped, and
+    summaries before it stay where they are.
+    """
+    history = _history_before_last_user(messages)
+    last_user_idx: int | None = None
+    for i in range(len(messages) - 1, -1, -1):
+        if getattr(messages[i], "role", None) == "user":
+            last_user_idx = i
+            break
+    if last_user_idx is None:
+        return history
+    trailing = messages[last_user_idx + 1 :]
+    return history + [m for m in trailing if is_compaction_summary_message(m)]
 
 
 def _stable_hash(payload: dict[str, Any]) -> str:
