@@ -137,6 +137,10 @@ class _Report:
     def __init__(self) -> None:
         self.missing: list[str] = []
         self.modified: list[str] = []
+        # bug-146 — differ from source but have no baseline entry (all
+        # of them when there is no baseline): a local edit or an older
+        # shipped version; sync can't tell which.
+        self.unrecorded: list[str] = []
         self.retired_at_source: list[str] = []
         self.migration: ToolsMigrationResult = ToolsMigrationResult()
         self.no_baseline_note: bool = False
@@ -157,6 +161,7 @@ class _Report:
         return bool(
             self.missing
             or self.modified
+            or self.unrecorded
             or self.retired_at_source
             or self.migration.rewrites
             or self.migration.user_owned_hits
@@ -180,8 +185,10 @@ def _build_report(workspace_root: Path) -> _Report:
             workspace_bundle,
             baseline.files if baseline is not None else None,
         )
+        recorded = baseline.files if baseline is not None else {}
         report.missing = plan.added
-        report.modified = plan.modified
+        report.modified = [r for r in plan.modified if r in recorded]
+        report.unrecorded = [r for r in plan.modified if r not in recorded]
         report.retired_at_source = plan.retired
     elif source_dir.is_dir() and not workspace_bundle.is_dir():
         # Pre-`kolsch setup` workspace — flagged so the CLI can emit
@@ -433,7 +440,12 @@ def _render(report: _Report, *, out: TextIO) -> None:
     out.write("===================\n\n")
 
     _render_missing(report.missing, out=out)
-    _render_modified(report.modified, no_baseline=report.no_baseline_note, out=out)
+    _render_modified(
+        report.modified,
+        report.unrecorded,
+        no_baseline=report.no_baseline_note,
+        out=out,
+    )
     _render_retired_at_source(report.retired_at_source, out=out)
     _render_parse_failures(report.migration, out=out)
     _render_kolsch_owned_rewrites(report.migration, out=out)
@@ -445,6 +457,12 @@ def _render(report: _Report, *, out: TextIO) -> None:
             "(`--dry-run` to preview). User-owned YAMLs are listed for "
             "a manual fix; sync never rewrites them.\n"
         )
+        if report.modified or report.unrecorded:
+            out.write(
+                "Modified files are kept under `--yes`: run "
+                "`kolsch setup --sync-bundle` interactively to review each "
+                "([d]iff).\n"
+            )
     _render_authz_tail(report.authz_tail_note, out=out)
     _render_agent_write_access(report.agent_write_access, out=out)
 
@@ -491,26 +509,36 @@ def _render_missing(missing: list[str], *, out: TextIO) -> None:
 
 def _render_modified(
     modified: list[str],
+    unrecorded: list[str],
     *,
     no_baseline: bool,
     out: TextIO,
 ) -> None:
+    unrecorded_header = (
+        "differs from source, no baseline entry (a local edit or an older "
+        "shipped version)"
+    )
     if no_baseline:
-        out.write(
-            "Modified vs source (differs from the shipped file — "
-            "a local edit or an older shipped version):\n"
-        )
+        out.write(f"Modified vs source — {unrecorded_header}:\n")
         out.write(
             "  · baseline not recorded — compared against the current "
             "source; `kolsch setup --sync-bundle` records one.\n"
         )
-    else:
-        out.write("Modified vs baseline (sha256 mismatch):\n")
-    if not modified:
+        _render_paths(unrecorded, marker="~", out=out)
+        return
+    out.write("Modified vs baseline (sha256 mismatch):\n")
+    _render_paths(modified, marker="~", out=out)
+    if unrecorded:
+        out.write(f"Modified — {unrecorded_header}:\n")
+        _render_paths(unrecorded, marker="?", out=out)
+
+
+def _render_paths(paths: list[str], *, marker: str, out: TextIO) -> None:
+    if not paths:
         out.write("  ✓ none\n\n")
         return
-    for rel in modified:
-        out.write(f"  ~ {rel}\n")
+    for rel in paths:
+        out.write(f"  {marker} {rel}\n")
     out.write("\n")
 
 

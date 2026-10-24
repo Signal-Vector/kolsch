@@ -180,9 +180,11 @@ def update_baseline_entries(
     hash — or stay unrecorded — so a locally modified file sync kept
     is still "modified" next run.
 
-    Writes (atomically, stamping ``shipped_at`` and ``kolsch_version``
-    afresh) only when the merge changes the recorded files or no
-    readable baseline exists yet; a corrupt baseline is replaced.
+    Writes (atomically) only when the merge changes the recorded files
+    or no readable baseline exists yet; a corrupt baseline is replaced.
+    An existing ``shipped_at`` is kept (it records when the baseline
+    was first written); ``kolsch_version`` is the version that last
+    wrote it.
 
     Args:
         workspace_root: Absolute workspace root.
@@ -200,7 +202,11 @@ def update_baseline_entries(
             files[rel] = digest
     if current is not None and files == current.files:
         return False
-    _store(workspace_root, files=dict(sorted(files.items())), shipped_at=None)
+    _store(
+        workspace_root,
+        files=dict(sorted(files.items())),
+        shipped_at=current.shipped_at if current is not None else None,
+    )
     return True
 
 

@@ -118,7 +118,9 @@ Prints up to five sections:
    your workspace.
 2. **Modified tool files** — differ from the current source, and the
    sha256 differs from the recorded `.kolsch/bundle-baseline.json`. A
-   file identical to source is never listed. With no baseline
+   file identical to source is never listed. Files the baseline has no
+   entry for are listed separately ("differs from source, no baseline
+   entry"). With no baseline
    (workspaces installed before qol-089) the section is labelled
    **Modified vs source** and lists every shipped file that differs
    from the current source: a local edit or an older shipped version.
@@ -178,9 +180,17 @@ Sync classifies every file in `bundles/kolsch/` into four buckets:
   keep the local file and exit non-zero as a partial-success signal.
 - **added-at-source** — new file in source → **copy in** (`--no`
   skips it).
-- **retired-at-source** — file in workspace no longer in source →
-  **prompt** (`[k]eep / [d]elete`). `--yes` deletes it; `--no`
-  keeps it and exits non-zero.
+- **retired-at-source** — file in `bundles/kolsch/` that source
+  doesn't ship → **prompt** (`[k]eep / [d]elete`). That covers both a
+  file kolsch shipped and later retired and a file you added yourself,
+  so `--yes` deletes it only when the baseline proves kolsch shipped it
+  and you never edited it (it has an entry and the sha256 matches);
+  anything else is kept. `--no` always keeps.
+
+When a run keeps anything, it ends with
+`N item(s) left unresolved — exit 1 (partial).` — under `--yes` /
+`--no` it adds that a run without those flags reviews each item (with
+`[d]iff`). Exit `1` here is the partial-success signal, not a crash.
 
 **No baseline?** Workspaces installed before qol-089 have no
 `.kolsch/bundle-baseline.json`. Sync still runs: it prints
@@ -195,7 +205,9 @@ to `bundles/kolsch/agents/*.yaml` and `platform.yaml`. Then
 partial — with an entry for every file sync copied, overwrote,
 rewrote or found identical to source. A file you kept local keeps its
 old entry (or stays unrecorded), so the next sync asks about it
-again and nothing else. Files under `bundles/<your-bundle>/**` are
+again and nothing else. A file the migrator rewrote is recorded only
+if you had not edited it; an edited one keeps its old entry, so your
+edit is never refreshed away later. Files under `bundles/<your-bundle>/**` are
 **never written** — the `kolsch doctor` report is where user-owned
 drift gets surfaced.
 

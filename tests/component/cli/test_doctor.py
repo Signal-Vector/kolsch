@@ -894,3 +894,30 @@ async def test_agent_write_access_unreadable_says_couldnt_check(
     assert _FLOOR_LINE in text
     assert f"couldn't check agent write access: {reason}." in text
     assert _ALL_CLEAR not in text
+
+
+async def test_doctor_labels_unrecorded_modified_files_separately(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """QA N3: a differing file with no baseline entry isn't "sha256 mismatch"."""
+    await _run_install(tmp_path, monkeypatch)
+    bundle = tmp_path / "bundles" / "kolsch"
+    for rel in ("tools/bash.py", "tools/read_file.py"):
+        path = bundle / rel
+        path.write_text(path.read_text(encoding="utf-8") + "# edit\n", encoding="utf-8")
+    baseline = tmp_path / ".kolsch" / "bundle-baseline.json"
+    payload = json.loads(baseline.read_text(encoding="utf-8"))
+    del payload["files"]["tools/read_file.py"]
+    baseline.write_text(json.dumps(payload), encoding="utf-8")
+
+    out = io.StringIO()
+    rc = await cmd_doctor(argparse.Namespace(), out=out, root=tmp_path)
+    text = out.getvalue()
+    assert rc == 1, text
+    mismatch, _, rest = text.partition(
+        "Modified — differs from source, no baseline entry"
+    )
+    assert "  ~ tools/bash.py" in mismatch
+    assert "tools/read_file.py" not in mismatch
+    assert "  ? tools/read_file.py" in rest
+    assert "run `kolsch setup --sync-bundle` interactively" in text

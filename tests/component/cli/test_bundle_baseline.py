@@ -88,3 +88,14 @@ def test_update_replaces_a_corrupt_baseline(tmp_path: Path) -> None:
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["schema_version"] == 1
     assert payload["files"] == {"tools/bash.py": "sha256:aa"}
+
+
+def test_update_keeps_shipped_at(tmp_path: Path) -> None:
+    bundle = _bundle(tmp_path)
+    first = write_baseline(
+        tmp_path, bundle_dir=bundle, shipped_at="2026-01-01T00:00:00Z"
+    )
+    assert update_baseline_entries(tmp_path, {"tools/new.py": "sha256:dd"})
+    recorded = read_baseline(tmp_path)
+    assert recorded is not None
+    assert recorded.shipped_at == first.shipped_at == "2026-01-01T00:00:00Z"

@@ -97,6 +97,9 @@ class _SyncReport:
     baseline_entries: dict[str, str | None] = field(default_factory=dict)
     baseline_refreshed: bool = False
     dry_run: bool = False
+    # Ran under `--yes` / `--no`: the closing line says how to review
+    # the kept items.
+    non_interactive: bool = False
 
     def is_partial(self) -> bool:
         """True when the sync left any drift unresolved."""
@@ -154,18 +157,20 @@ async def sync_kolsch_bundle(
     # "modified" (sha256 drift vs baseline), but the migrator's
     # rewrite is the authoritative fix. Strip such paths from the
     # file-level plan so we don't double-handle them.
-    plan = _defer_to_migrator(plan, migration)
+    plan, pristine_rewrites = _defer_to_migrator(plan, migration)
     report = await _apply(
         io=io,
         source_dir=source_dir,
         workspace_bundle=workspace_bundle,
         plan=plan,
         migration=migration,
-        recorded=set(baseline.files) if baseline is not None else set(),
+        pristine_rewrites=pristine_rewrites,
+        baseline_files=baseline.files if baseline is not None else {},
         dry_run=dry_run,
         yes=yes,
         no=no,
     )
+    report.non_interactive = yes or no
 
     if not dry_run:
         report.baseline_refreshed = update_baseline_entries(
@@ -254,7 +259,7 @@ def plan_bundle_files(
 
 def _defer_to_migrator(
     plan: BundleFilePlan, migration: ToolsMigrationResult
-) -> BundleFilePlan:
+) -> tuple[BundleFilePlan, set[str]]:
     """Remove paths the migrator will rewrite from ``modified``/``unchanged``.
 
     Kolsch-owned YAMLs the migrator handles (``bundles/kolsch/agents/*.yaml``,
@@ -264,6 +269,12 @@ def _defer_to_migrator(
     or the previous session's rewrite; the migrator is the correct
     fixer, not "overwrite from source" (which would clobber every
     user tweak the file also carries).
+
+    Also returns the deferred paths that were ``unchanged`` (pristine:
+    identical to source, or matching their baseline entry). Only those
+    get the rewritten file's hash recorded in the baseline; a deferred
+    ``modified`` file keeps its prior entry (or none), so a later run
+    still asks before touching the user's edit (bug-146).
     """
     migrator_paths = set(migration.yaml_bodies)
     # Migrator paths are workspace-relative from `io.root`; the plan's
@@ -274,12 +285,13 @@ def _defer_to_migrator(
         for p in migrator_paths
         if p.startswith("bundles/kolsch/")
     }
-    return BundleFilePlan(
+    deferred = BundleFilePlan(
         added=plan.added,
         modified=[r for r in plan.modified if r not in migrator_bundle_paths],
         retired=plan.retired,
         unchanged=[r for r in plan.unchanged if r not in migrator_bundle_paths],
     )
+    return deferred, migrator_bundle_paths.intersection(plan.unchanged)
 
 
 # ---------------------------------------------------------------------------
@@ -294,7 +306,8 @@ async def _apply(
     workspace_bundle: Path,
     plan: BundleFilePlan,
     migration: ToolsMigrationResult,
-    recorded: set[str],
+    pristine_rewrites: set[str],
+    baseline_files: dict[str, str],
     dry_run: bool,
     yes: bool,
     no: bool,
@@ -302,8 +315,8 @@ async def _apply(
     """Walk the plan; write per decisions; return an aggregated report.
 
     Every file written (copied, refreshed, overwritten, or rewritten by
-    the migrator), or left identical to source, is recorded in
-    ``report.baseline_entries`` (deleted files as ``None``).
+    the migrator while pristine), or left identical to source, is
+    recorded in ``report.baseline_entries`` (deleted files as ``None``).
     """
     report = _SyncReport(dry_run=dry_run)
 
@@ -342,7 +355,7 @@ async def _apply(
             source_dir=source_dir,
             workspace_bundle=workspace_bundle,
             rel=rel,
-            in_baseline=rel in recorded,
+            in_baseline=rel in baseline_files,
             report=report,
             dry_run=dry_run,
             yes=yes,
@@ -355,6 +368,7 @@ async def _apply(
             io=io,
             workspace_bundle=workspace_bundle,
             rel=rel,
+            recorded=baseline_files.get(rel),
             report=report,
             dry_run=dry_run,
             yes=yes,
@@ -367,13 +381,11 @@ async def _apply(
         target = io.root / rel
         if not dry_run:
             _write_atomic(target, body)
-            if rel.startswith("bundles/kolsch/"):
-                # The migrator's rewrite is the authoritative fix, so
-                # its output is the new baseline (as qol-093's
-                # whole-bundle refresh recorded it).
-                report.baseline_entries[rel.removeprefix("bundles/kolsch/")] = (
-                    sha256_file(target)
-                )
+            bundle_rel = rel.removeprefix("bundles/kolsch/")
+            if rel.startswith("bundles/kolsch/") and bundle_rel in pristine_rewrites:
+                # Nobody edited it, so the migrator's output is what
+                # kolsch shipped. An edited file keeps its old entry.
+                report.baseline_entries[bundle_rel] = sha256_file(target)
         report.applied.append(
             _SyncOutcome(rel=rel, action="rewrote", kind="yaml_rewrite")
         )
@@ -513,6 +525,7 @@ def _resolve_retired_file(
     io: _SetupIO,
     workspace_bundle: Path,
     rel: str,
+    recorded: str | None,
     report: _SyncReport,
     dry_run: bool,
     yes: bool,
@@ -520,12 +533,27 @@ def _resolve_retired_file(
 ) -> None:
     """Handle a retired-at-source file — prompt or use flag defaults.
 
-    Unlike modified files (which carry user edits), retired-at-source
-    files are shipped platform files the source has since removed —
-    the user has no reason to keep them. So ``--yes`` DELETES them
-    (aligns with the ses_0e54 repair story); ``--no`` KEEPS them
-    (strict, never touches). Interactive prompts per file.
+    "Retired" only means "in the workspace, not in source": it may be a
+    file kolsch shipped and later removed, or one the user added under
+    ``bundles/kolsch/``. ``--yes`` deletes it only when it provably is
+    the former — it has a baseline entry (``recorded``) and its sha256
+    still matches it (shipped, never edited; the ses_0e54 repair).
+    Anything else — no baseline, no entry, or edited — is kept and
+    recorded as a skip (bug-146). ``--no`` always keeps. Interactive
+    runs prompt per file; ``[d]`` is the explicit consent to delete.
     """
+    pristine_shipped = (
+        recorded is not None and sha256_file(workspace_bundle / rel) == recorded
+    )
+    if yes and not pristine_shipped:
+        report.skipped.append(
+            _SyncOutcome(
+                rel=rel,
+                action="kept-retired (not shipped by kolsch, or edited)",
+                kind="retired-at-source",
+            )
+        )
+        return
     if yes:
         if not dry_run:
             (workspace_bundle / rel).unlink(missing_ok=True)
@@ -539,9 +567,15 @@ def _resolve_retired_file(
             _SyncOutcome(rel=rel, action="kept-retired", kind="retired-at-source")
         )
         return
+    question = (
+        f"[sync] {rel}: retired at source, still in workspace."
+        if pristine_shipped
+        else f"[sync] {rel}: not in source — not a recorded kolsch file, "
+        "or edited since shipped."
+    )
     answer = _prompt_choice(
         io.prompter,
-        question=f"[sync] {rel}: retired at source, still in workspace.",
+        question=question,
         options=["[k]eep local", "[d]elete"],
         default="k",
     )
@@ -654,3 +688,13 @@ def _render_report(report: _SyncReport, *, out: object, dry_run: bool) -> None:
 
     if not report.applied and not report.skipped and not report.parse_failures:
         write("✓ no drift — workspace already in sync with source.\n")
+
+    if report.is_partial():
+        unresolved = len(report.skipped) + len(report.parse_failures)
+        line = f"\n{unresolved} item(s) left unresolved — exit 1 (partial)."
+        if report.skipped and report.non_interactive:
+            line += (
+                " Re-run `kolsch setup --sync-bundle` without --yes/--no "
+                "to review each ([d]iff)."
+            )
+        write(line + "\n")
