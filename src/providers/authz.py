@@ -452,6 +452,29 @@ def _locked_key_problem(key: str, value: object) -> str | None:
     )
 
 
+def _locked_ref_problem(what: str) -> str | None:
+    """Return why a `/`-containing locked `what` is not 3-segment, or `None`.
+
+    The matcher compares `what` to the action string verbatim, and tool
+    actions are 3-segment refs (`<bundle>/tools/<name>`). A 2-segment
+    `<bundle>/<name>` passes the catalog's legacy migration shim but
+    never matches, so as a locked deny it would load and silently do
+    nothing. Rejected rather than canonicalised, so what the operator
+    wrote is what is enforced.
+    """
+    parts = what.split("/")
+    if len(parts) == _THREE_SEG_PARTS and all(parts):
+        return None
+    hint = ""
+    if len(parts) == _TWO_SEG_PARTS and all(parts) and not any(c in what for c in "*?"):
+        hint = f"; did you mean {build_ref(parts[0], 'tool', parts[1])!r}?"
+    return (
+        f"`what: {what!r}` must be a 3-segment ref "
+        f"(`<bundle>/tools/<name>`); a locked rule written any other way "
+        f"would never match{hint}"
+    )
+
+
 def _locked_rule_problem(entry: Mapping[str, object]) -> str | None:
     """Return why `entry` is not a valid locked rule, or `None` when it is.
 
@@ -478,7 +501,12 @@ def _locked_rule_problem(entry: Mapping[str, object]) -> str | None:
             "and a locked 'prompt' would persist approvals into the "
             "`rules` list it pre-empts"
         )
-    if entry["what"] == "*" and entry.get("pattern", "*") == "*":
+    what = entry["what"]
+    if isinstance(what, str) and "/" in what:
+        problem = _locked_ref_problem(what)
+        if problem is not None:
+            return problem
+    if what == "*" and entry.get("pattern", "*") == "*":
         return (
             "the catch-all `{what: '*', pattern: '*', effect: deny}` cannot "
             "be locked (it would deny everything before any layer runs); "
@@ -1183,8 +1211,9 @@ class RuleBasedAuthorizationProvider:
         The locked-specific checks run first (`_locked_rule_problem`);
         the remaining shape and catalog checks reuse
         `_compile_new_shape`, whose typed errors (`AuthzPatternInvalid`,
-        `AuthzToolRefUnknown`, ...) propagate with their `where` set to
-        `authz.rule_based.locked_rules[<index>]` so they are not
+        `AuthzToolRefUnknown`, ...) propagate with their message prefixed
+        `locked_rules[<index>]: ` and their `where` set to
+        `authz.rule_based.locked_rules[<index>]`, so they are not
         mistaken for a `rules` entry at the same index.
         """
         if not isinstance(entry, dict):
@@ -1217,7 +1246,9 @@ class RuleBasedAuthorizationProvider:
 
         `fields` already passed `_locked_rule_problem`. The result keeps
         the shared matcher inputs (so locked rules match exactly like
-        platform rules) but carries the locked id.
+        platform rules) but carries the locked id. Typed errors from the
+        shared checks keep their type and code, with the message
+        prefixed `locked_rules[<index>]: `.
         """
         where = f"authz.rule_based.locked_rules[{index}]"
         try:
@@ -1228,8 +1259,23 @@ class RuleBasedAuthorizationProvider:
                 rule_index=index, error=f"locked_rules[{index}]: {error}"
             ) from exc
         except PlatformError as exc:
+            # Keep the type, code and detail; prefix the message so an
+            # operator reading it looks at `locked_rules`, not `rules`.
+            exc.args = (f"locked_rules[{index}]: {exc}",)
             exc.where = where
             raise
+        # The single choke point both `locked_rules` load and
+        # `add_locked_rule` pass through: a non-deny must never land in
+        # `_locked_rules`, so no locked match can reach a prompt
+        # callback via `_resolve_prompt`.
+        if compiled.effect != "deny":
+            raise AuthzMalformedRule(
+                rule_index=index,
+                error=(
+                    f"locked_rules[{index}]: effect must be 'deny'; got "
+                    f"{compiled.effect!r}"
+                ),
+            )
         raw = compiled.raw.model_copy(
             update={
                 "id": derive_locked_rule_id(
@@ -1741,8 +1787,8 @@ class RuleBasedAuthorizationProvider:
         through `_resolve_prompt`); returns `None` when no rule fires
         so the caller can fall through to the next layer.
 
-        `layer` (`"agent"` / `"platform"` / `"workflow"` /
-        `"bundle"`) is folded into the result's `reason` (and into
+        `layer` (`"locked"` / `"workflow"` / `"agent"` / `"bundle"` /
+        `"platform"`) is folded into the result's `reason` (and into
         PROMPT's resolved reason via `_resolve_prompt`) so debugging
         output identifies which layer matched.
 
