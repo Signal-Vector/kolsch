@@ -25,6 +25,15 @@ Report sections:
 5. **Retired-tool refs in user-owned YAMLs** — the migrator surfaces
    these but never rewrites them. Includes the suggested manual fix.
 
+6. **Missing default permission rules** (bug-146) — starter rules
+   shipped since the workspace was set up
+   (:func:`cli._rules_upgrade.check_default_rules`, the same plan
+   ``--sync-bundle`` applies). Missing ``prompt`` / ``deny`` defaults
+   are drift; missing ``allow`` defaults are listed as informational
+   (``--sync-bundle`` never adds them) and don't change the exit code.
+   A missing default-deny tail is the Authorization section's finding,
+   not repeated here.
+
 Plus, only when there is a finding, an **Authorization** section
 (bug-152): ``platform.yaml``'s rule set has no default-deny tail, or
 has it somewhere other than last. Same text as the runtime bootstrap
@@ -73,6 +82,8 @@ if TYPE_CHECKING:
     from pathlib import Path
     from typing import TextIO
 
+    from cli._rules_upgrade import RulesCheck
+
 
 # ---------------------------------------------------------------------------
 # Source template — same constant the setup module uses; kept in sync via
@@ -105,6 +116,19 @@ async def cmd_doctor(args: object, *, out: TextIO, root: Path) -> int:
     """
     _ = args  # no CLI flags in qol-089's scope
     report = _build_report(root)
+    if not report.not_yet_installed and (root / "platform.yaml").is_file():
+        from cli._rules_upgrade import check_default_rules  # noqa: PLC0415
+
+        # Tools `--sync-bundle` would copy in count as installed, so
+        # doctor names the same rules sync would add.
+        pending = {
+            f"kolsch/tools/{rel.removeprefix('tools/').removesuffix('.py')}"
+            for rel in report.missing
+            if rel.startswith("tools/") and rel.endswith(".py") and rel.count("/") == 1
+        }
+        report.default_rules = await check_default_rules(
+            root, pending_tool_refs=pending
+        )
     if report.not_yet_installed:
         # Pre-`kolsch setup` workspace — no bundle materialized, no
         # baseline. Emit a friendly one-liner instead of dumping the
@@ -154,6 +178,8 @@ class _Report:
         # bug-161 — "Agent write access" findings (list) or a
         # "couldn't check" reason (str). Advisory: NOT part of `has_drift`.
         self.agent_write_access: list[str] | str = []
+        # bug-146 — missing starter rules; proposals are drift.
+        self.default_rules: RulesCheck | None = None
 
     @property
     def has_drift(self) -> bool:
@@ -166,6 +192,11 @@ class _Report:
             or self.migration.rewrites
             or self.migration.user_owned_hits
             or self.migration.parse_failures
+            or (
+                self.default_rules is not None
+                and self.default_rules.plan is not None
+                and self.default_rules.plan.actionable
+            )
         )
 
 
@@ -432,6 +463,7 @@ def _render(report: _Report, *, out: TextIO) -> None:
     """Print the five report sections; write nothing on a clean workspace."""
     if not report.has_drift and not report.no_baseline_note:
         out.write("✓ no drift detected — bundle in sync with source.\n")
+        _render_default_rules(report.default_rules, out=out, quiet_when_clean=True)
         _render_authz_tail(report.authz_tail_note, out=out)
         _render_agent_write_access(report.agent_write_access, out=out)
         return
@@ -450,6 +482,7 @@ def _render(report: _Report, *, out: TextIO) -> None:
     _render_parse_failures(report.migration, out=out)
     _render_kolsch_owned_rewrites(report.migration, out=out)
     _render_user_owned_hits(report.migration, out=out)
+    _render_default_rules(report.default_rules, out=out, quiet_when_clean=False)
 
     if report.has_drift:
         out.write(
@@ -465,6 +498,51 @@ def _render(report: _Report, *, out: TextIO) -> None:
             )
     _render_authz_tail(report.authz_tail_note, out=out)
     _render_agent_write_access(report.agent_write_access, out=out)
+
+
+def _render_default_rules(
+    check: RulesCheck | None, *, out: TextIO, quiet_when_clean: bool
+) -> None:
+    """Print the "Missing default permission rules" section (bug-146)."""
+    if check is None:
+        return
+    plan = check.plan
+    informational = plan is not None and bool(plan.report_only or plan.unavailable)
+    if quiet_when_clean and plan is not None and not informational:
+        return
+    out.write("Missing default permission rules (shipped since setup):\n")
+    if plan is None:
+        out.write(f"  ? couldn't check: {check.skipped}.\n\n")
+        return
+    if not plan.proposals and not informational:
+        out.write("  ✓ none\n\n")
+        return
+    for entry in plan.proposals:
+        out.write(f"  + {entry.what} → {entry.effect} ({entry.rationale})\n")
+    if plan.proposals:
+        where = (
+            "before the default-deny tail"
+            if plan.tail_present
+            else "at the end (no default-deny tail)"
+        )
+        out.write(f"    `kolsch setup --sync-bundle` adds these {where}.\n")
+    for entry in plan.unavailable:
+        out.write(
+            f"  · {entry.what} → {entry.effect}: tool not installed here "
+            "(informational).\n"
+        )
+    from cli.permissions import permissions_add_command  # noqa: PLC0415
+    from providers.authz import Rule  # noqa: PLC0415
+
+    for entry in plan.report_only:
+        command = permissions_add_command(
+            Rule(what=entry.what, pattern=entry.pattern, effect=entry.effect)
+        )
+        out.write(
+            f"  ! {entry.what} → allow ({entry.rationale}) — informational; "
+            f"sync never adds `allow` rules: `{command}`\n"
+        )
+    out.write("\n")
 
 
 def _render_authz_tail(note: str | None, *, out: TextIO) -> None:

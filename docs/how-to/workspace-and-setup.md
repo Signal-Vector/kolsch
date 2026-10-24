@@ -211,6 +211,18 @@ edit is never refreshed away later. Files under `bundles/<your-bundle>/**` are
 **never written** — the `kolsch doctor` report is where user-owned
 drift gets surfaced.
 
+Then sync checks `platform.yaml` for **default permission rules**
+shipped since the workspace was set up (for example the `prompt` rule
+for `kolsch/tools/jev_decide`). It offers the missing `prompt` / `deny`
+defaults with a one-line reason each (`[a]dd all / [c]hoose each /
+[s]kip`; `--yes` adds them, `--no` and `--dry-run` add nothing), adds
+the accepted ones directly before the default-deny tail (or at the end
+if there is none), and records each decision in
+`.kolsch/default-rules.json` so a default is offered only once.
+Missing `allow` defaults are only reported, with the
+`kolsch permissions add` command. See
+[New default rules on an existing workspace](permissions.md#new-default-rules-on-an-existing-workspace).
+
 ## When the workspace doesn't exist
 
 Any non-setup command run against an uninitialised path produces:

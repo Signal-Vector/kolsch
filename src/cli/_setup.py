@@ -527,6 +527,9 @@ async def _step_b_skeleton(io: _SetupIO, *, non_interactive: bool) -> str:
         dump(_setup_platform_payload()) + "\n" + _HOOKS_EXAMPLE_BLOCK,
         encoding="utf-8",
     )
+    # bug-146 — every starter rule is in the file, so the upgrade
+    # planner must never offer one (even after the user removes it).
+    _record_starter_rules_installed(io.root)
     io.out.write("  ✓ platform.yaml\n")
 
     if not env_path.exists():
@@ -1120,6 +1123,60 @@ def _migrate_rules_preserving_customs(
     return defaults[:-1] + customs + defaults[-1:]
 
 
+def _record_starter_rules_installed(root: Path) -> None:
+    """Record every starter-rule key as `installed` in the ledger (bug-146)."""
+    from assets.default_rules import STARTER_RULES  # noqa: PLC0415
+    from cli._default_rules_ledger import record_installed  # noqa: PLC0415
+
+    record_installed(root, [rule.key for rule in STARTER_RULES])
+
+
+def _write_rules_locked(
+    io: _SetupIO,
+    yaml_path: Path,
+    rewrite: Callable[[dict[str, Any], list[Any]], list[Any] | None],
+) -> Path | None:
+    """Rewrite `authorization.config.rules` under the rules lock (bug-146).
+
+    Takes [`platform_yaml_lock`][assets.platform_config.platform_yaml_lock]
+    — as [`mutate_platform_rules`][cli.permissions.mutate_platform_rules]
+    does — re-reads `platform.yaml` *inside* it and calls
+    `rewrite(payload, rules)` on that fresh copy, so a rule a chat
+    "always" (or `kolsch permissions`) wrote since the caller's first
+    read is never lost. `rewrite` returns the new rule list, or `None`
+    when there is nothing to do on the fresh copy. Backs the file up,
+    then replaces it atomically.
+
+    Returns:
+        The backup path, or `None` when nothing was written (no-op, or
+        the lock could not be taken — reported on `io.out`).
+    """
+    from assets.platform_config import platform_yaml_lock  # noqa: PLC0415
+    from cli.permissions import _atomic_write_text  # noqa: PLC0415
+    from errors import PlatformError  # noqa: PLC0415
+
+    try:
+        with platform_yaml_lock(io.root):
+            payload = _read_yaml(yaml_path)
+            rules = ((payload.get("authorization") or {}).get("config") or {}).get(
+                "rules"
+            ) or []
+            new_rules = rewrite(payload, rules if isinstance(rules, list) else [])
+            if new_rules is None:
+                return None
+            backup = _backup_platform_yaml(yaml_path)
+            previous_text = yaml_path.read_text(encoding="utf-8")
+            payload["authorization"]["config"]["rules"] = new_rules
+            _atomic_write_text(
+                yaml_path,
+                dump_preserving_trailing_comment_block(previous_text, payload),
+            )
+            return backup
+    except PlatformError as exc:
+        io.out.write(f"  ⚠ authorization rules not changed: {exc}\n")
+        return None
+
+
 def _backup_platform_yaml(yaml_path: Path) -> Path:
     """Copy `yaml_path` to `.platform/platform.yaml.bak.<UTC-timestamp>`.
 
@@ -1185,14 +1242,17 @@ def _maybe_migrate_authz_rules(
         )
 
     if choice == "m":
-        backup = _backup_platform_yaml(yaml_path)
-        previous_text = yaml_path.read_text(encoding="utf-8")
-        new_rules = _migrate_rules_preserving_customs(rules)
-        payload["authorization"]["config"]["rules"] = new_rules
-        yaml_path.write_text(
-            dump_preserving_trailing_comment_block(previous_text, payload),
-            encoding="utf-8",
-        )
+
+        def _migrate(_payload: dict[str, Any], fresh: list[Any]) -> list[Any] | None:
+            if not _has_pre_phase_2_authz_shape(fresh):
+                return None  # someone migrated it meanwhile
+            return _migrate_rules_preserving_customs(fresh)
+
+        backup = _write_rules_locked(io, yaml_path, _migrate)
+        if backup is None:
+            io.out.write("  → authorization rules unchanged; nothing migrated\n")
+            return
+        _record_starter_rules_installed(io.root)
         io.out.write("  ✓ migrated authorization rules → canonical defaults\n")
         io.out.write(f"  ✓ backup written to {backup.relative_to(yaml_path.parent)}\n")
     elif choice == "k":
@@ -1228,7 +1288,10 @@ async def _maybe_migrate_authz_rules_to_qol_schema(io: _SetupIO) -> None:
     after that prompt has resolved.
     """
     from assets import AssetManagement  # noqa: PLC0415
-    from cli._migrations.authz_rules import migrate_authz_rules  # noqa: PLC0415
+    from cli._migrations.authz_rules import (  # noqa: PLC0415
+        MigrationResult,
+        migrate_authz_rules,
+    )
     from errors import (  # noqa: PLC0415
         ConfigDeprecatedRegexRule,
         ConfigDeprecatedRuleForm,
@@ -1264,11 +1327,22 @@ async def _maybe_migrate_authz_rules_to_qol_schema(io: _SetupIO) -> None:
         )
         return
 
-    result = migrate_authz_rules(rules, catalog=catalog)
-    # Nothing changed (everything was unconvertible) → leave the YAML
-    # alone but still emit deprecation warnings so the user knows.
+    # bug-146 — migrate the copy read under the rules lock, not the one
+    # read before the (slow) catalog build.
+    migrated: list[tuple[list[Any], MigrationResult]] = []
+
+    def _migrate(_payload: dict[str, Any], fresh: list[Any]) -> list[Any] | None:
+        result = migrate_authz_rules(fresh, catalog=catalog)
+        migrated.append((fresh, result))
+        changed = any(old != new for old, new in zip(fresh, result.rules, strict=False))
+        return result.rules if changed else None
+
+    backup = _write_rules_locked(io, yaml_path, _migrate)
+    if not migrated:
+        return
+    fresh_rules, result = migrated[0]
     converted_count = sum(
-        1 for old, new in zip(rules, result.rules, strict=False) if old != new
+        1 for old, new in zip(fresh_rules, result.rules, strict=False) if old != new
     )
     for entry in result.deprecated:
         # Dispatch on `kind` so the right event class fires per
@@ -1290,15 +1364,8 @@ async def _maybe_migrate_authz_rules_to_qol_schema(io: _SetupIO) -> None:
             )
         # PlatformError carries the message via `str(exc)` (super().__init__(message)).
         io.out.write(f"  ⚠ {warn}\n")
-    if converted_count == 0:
+    if backup is None:
         return
-    backup = _backup_platform_yaml(yaml_path)
-    previous_text = yaml_path.read_text(encoding="utf-8")
-    payload["authorization"]["config"]["rules"] = result.rules
-    yaml_path.write_text(
-        dump_preserving_trailing_comment_block(previous_text, payload),
-        encoding="utf-8",
-    )
     io.out.write(
         f"  ✓ migrated {converted_count} authz rule(s) → new schema "
         "(what / pattern / effect)\n",
@@ -1417,7 +1484,11 @@ def _maybe_ensure_agent_execute_allow(io: _SetupIO) -> None:
     This step prepends the broad-allow rule when none of the shapes
     recognised by
     [`_rule_covers_broad_agent_execute`][cli._setup._rule_covers_broad_agent_execute]
-    is already present. Silent no-op when coverage is present. Runs
+    is already present, through
+    [`mutate_platform_rules`][cli.permissions.mutate_platform_rules]
+    (`InsertRule(position="first")`, locked), and prints one line naming
+    the added rule's id, `what` and `pattern` (bug-146). Silent no-op
+    when coverage is present, so repeated re-runs add nothing. Runs
     BEFORE Step E so the smoke test sees the newly-inserted rule.
 
     Silent no-op when:
@@ -1440,24 +1511,33 @@ def _maybe_ensure_agent_execute_allow(io: _SetupIO) -> None:
     if any(_rule_covers_broad_agent_execute(r) for r in rules):
         return
 
-    backup = _backup_platform_yaml(yaml_path)
-    previous_text = yaml_path.read_text(encoding="utf-8")
-    new_rule = {
-        "what": "agent.execute.*",
-        "pattern": "*",
-        "effect": "allow",
-    }
+    from cli.permissions import InsertRule, mutate_platform_rules  # noqa: PLC0415
+    from errors import PlatformError  # noqa: PLC0415
+    from providers.authz import Rule  # noqa: PLC0415
+
     # Prepend so it beats any narrower agent-specific deny that might
     # be lurking above the default-deny tail. Rule order is
     # first-match-wins and this is a default-shape allow, not a
-    # policy statement.
-    payload["authorization"]["config"]["rules"] = [new_rule, *rules]
-    yaml_path.write_text(
-        dump_preserving_trailing_comment_block(previous_text, payload),
-        encoding="utf-8",
-    )
+    # policy statement. bug-146: through the locked single-entry
+    # writer, so a concurrent chat "always" survives and comments stay.
+    backup = _backup_platform_yaml(yaml_path)
+    try:
+        result = mutate_platform_rules(
+            yaml_path,
+            InsertRule(
+                Rule(what="agent.execute.*", pattern="*", effect="allow"),
+                position="first",
+            ),
+            catalog=None,
+        )
+    except PlatformError as exc:
+        io.out.write(f"  ⚠ couldn't add the `agent.execute.*` allow rule: {exc}\n")
+        return
+    if not result.written or result.rule is None:
+        return
     io.out.write(
-        "  ✓ added `agent.execute.*` allow rule — required for "
+        f"  ✓ added rule {result.rule.id} (`agent.execute.*`, pattern `*` → "
+        f"allow) as rule {(result.position or 0) + 1} — required for "
         "`kolsch run <agent>` pre-flight; see "
         "docs/how-to/permissions.md#how-permissions-gate-an-exchange\n",
     )

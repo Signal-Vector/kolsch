@@ -52,6 +52,7 @@ from __future__ import annotations
 import shutil
 from dataclasses import dataclass, field
 from difflib import unified_diff
+from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
 
 from cli._bundle_baseline import (
@@ -63,6 +64,7 @@ from cli._bundle_baseline import (
 from cli._migrations.tools import (
     ToolsMigrationResult,
     migrate_tool_refs,
+    plan_platform_yaml_rewrite,
 )
 
 if TYPE_CHECKING:
@@ -100,10 +102,17 @@ class _SyncReport:
     # Ran under `--yes` / `--no`: the closing line says how to review
     # the kept items.
     non_interactive: bool = False
+    # bug-146 — the default-rule pass (cli._rules_upgrade).
+    rule_lines: list[str] = field(default_factory=list)
+    rule_failures: list[str] = field(default_factory=list)
+    rules_offered: bool = False
+    # Bundle-relative paths deleted (or, in a dry run, to be deleted)
+    # by the retired pass; the migrator must not write them back.
+    deleted: set[str] = field(default_factory=set)
 
     def is_partial(self) -> bool:
         """True when the sync left any drift unresolved."""
-        return bool(self.skipped or self.parse_failures)
+        return bool(self.skipped or self.parse_failures or self.rule_failures)
 
 
 # ---------------------------------------------------------------------------
@@ -171,6 +180,21 @@ async def sync_kolsch_bundle(
         no=no,
     )
     report.non_interactive = yes or no
+
+    # bug-146 — after the file pass (so newly copied tools are in the
+    # catalog) and the migrator's platform.yaml rewrite.
+    from cli._rules_upgrade import run_default_rules_pass  # noqa: PLC0415
+
+    rules_outcome = await run_default_rules_pass(
+        io,
+        dry_run=dry_run,
+        yes=yes,
+        no=no,
+        pending_tool_refs=_dry_run_copied_tool_refs(report) if dry_run else (),
+    )
+    report.rule_lines = rules_outcome.lines
+    report.rule_failures = rules_outcome.failures
+    report.rules_offered = rules_outcome.offered
 
     if not dry_run:
         report.baseline_refreshed = update_baseline_entries(
@@ -379,9 +403,15 @@ async def _apply(
     #    user-owned hits are report-only).
     for rel, body in migration.yaml_bodies.items():
         target = io.root / rel
-        if not dry_run:
+        bundle_rel = rel.removeprefix("bundles/kolsch/")
+        if rel.startswith("bundles/kolsch/") and bundle_rel in report.deleted:
+            # Deleted by the retired pass above — don't write it back.
+            continue
+        if rel == "platform.yaml":
+            if not dry_run and not _rewrite_platform_yaml_locked(io.root):
+                continue
+        elif not dry_run:
             _write_atomic(target, body)
-            bundle_rel = rel.removeprefix("bundles/kolsch/")
             if rel.startswith("bundles/kolsch/") and bundle_rel in pristine_rewrites:
                 # Nobody edited it, so the migrator's output is what
                 # kolsch shipped. An edited file keeps its old entry.
@@ -434,7 +464,7 @@ def _copy_source_file(
     if not dry_run:
         target = workspace_bundle / rel
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source_dir / rel, target)
+        _copy_atomic(source_dir / rel, target)
         report.baseline_entries[rel] = sha256_file(target)
     report.applied.append(
         _SyncOutcome(rel=rel, action="copied", kind="missing-from-workspace")
@@ -461,7 +491,7 @@ def _refresh_unchanged_file(
         report.baseline_entries[rel] = sha256_file(dst)
         return
     if not dry_run:
-        shutil.copy2(src, dst)
+        _copy_atomic(src, dst)
         report.baseline_entries[rel] = sha256_file(dst)
     report.applied.append(
         _SyncOutcome(rel=rel, action="refreshed", kind="unchanged-vs-baseline")
@@ -511,7 +541,7 @@ def _resolve_modified_file(
         break
     if answer == "o":
         if not dry_run:
-            shutil.copy2(source_dir / rel, workspace_bundle / rel)
+            _copy_atomic(source_dir / rel, workspace_bundle / rel)
             report.baseline_entries[rel] = sha256_file(workspace_bundle / rel)
         report.applied.append(
             _SyncOutcome(rel=rel, action="overwrote", kind="modified")
@@ -561,6 +591,7 @@ def _resolve_retired_file(
         report.applied.append(
             _SyncOutcome(rel=rel, action="deleted", kind="retired-at-source")
         )
+        report.deleted.add(rel)
         return
     if no:
         report.skipped.append(
@@ -586,6 +617,7 @@ def _resolve_retired_file(
         report.applied.append(
             _SyncOutcome(rel=rel, action="deleted", kind="retired-at-source")
         )
+        report.deleted.add(rel)
         return
     report.skipped.append(
         _SyncOutcome(rel=rel, action="kept-retired", kind="retired-at-source")
@@ -624,6 +656,47 @@ def _print_diff(io: _SetupIO, source: Path, workspace: Path, *, rel: str) -> Non
 # ---------------------------------------------------------------------------
 # Writes
 # ---------------------------------------------------------------------------
+
+
+def _copy_atomic(src: Path, dst: Path) -> None:
+    """Copy `src` over `dst` via a temp file + rename (never a truncated `dst`)."""
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dst.with_name(f".{dst.name}.sync-tmp")
+    try:
+        shutil.copy2(src, tmp)
+        tmp.replace(dst)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _rewrite_platform_yaml_locked(root: Path) -> bool:
+    """Apply the migrator's `platform.yaml` rewrite under the rules lock.
+
+    The rewrite edits `authorization.config.rules`, so it takes
+    [`platform_yaml_lock`][assets.platform_config.platform_yaml_lock]
+    like every other rules writer and re-plans from the file as read
+    *inside* the lock: a rule a chat "always" wrote since the first
+    read survives (bug-146). Returns False when, on that re-read, there
+    is nothing left to rewrite.
+    """
+    from assets.platform_config import platform_yaml_lock  # noqa: PLC0415
+    from cli.permissions import _atomic_write_text  # noqa: PLC0415
+
+    with platform_yaml_lock(root):
+        body = plan_platform_yaml_rewrite(root)
+        if body is None:
+            return False
+        _atomic_write_text(root / "platform.yaml", body)
+    return True
+
+
+def _dry_run_copied_tool_refs(report: _SyncReport) -> set[str]:
+    """Tool refs a dry run would have copied in (`tools/<name>.py`)."""
+    return {
+        f"kolsch/tools/{PurePosixPath(o.rel).stem}"
+        for o in report.applied
+        if o.action == "copied" and o.rel.startswith("tools/") and o.rel.endswith(".py")
+    }
 
 
 def _write_atomic(path: Path, text: str) -> None:
@@ -683,14 +756,30 @@ def _render_report(report: _SyncReport, *, out: object, dry_run: bool) -> None:
             write(f"  ! {line}\n")
         write("\n")
 
+    if report.rule_lines or report.rule_failures:
+        write("Default permission rules:\n")
+        for line in report.rule_lines:
+            write(f"  {line}\n")
+        for line in report.rule_failures:
+            write(f"  ✗ {line}\n")
+        write("\n")
+
     if report.baseline_refreshed:
         write("✓ baseline refreshed at .kolsch/bundle-baseline.json\n")
 
-    if not report.applied and not report.skipped and not report.parse_failures:
+    if (
+        not report.applied
+        and not report.skipped
+        and not report.parse_failures
+        and not report.rules_offered
+        and not report.rule_failures
+    ):
         write("✓ no drift — workspace already in sync with source.\n")
 
     if report.is_partial():
-        unresolved = len(report.skipped) + len(report.parse_failures)
+        unresolved = (
+            len(report.skipped) + len(report.parse_failures) + len(report.rule_failures)
+        )
         line = f"\n{unresolved} item(s) left unresolved — exit 1 (partial)."
         if report.skipped and report.non_interactive:
             line += (

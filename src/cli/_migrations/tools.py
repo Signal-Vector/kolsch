@@ -193,6 +193,25 @@ def migrate_tool_refs(
     return result
 
 
+def plan_platform_yaml_rewrite(
+    workspace_root: Path,
+    manifest: dict[str, Renamed | Retired] | None = None,
+) -> str | None:
+    """Return the migrated ``platform.yaml`` body, or ``None`` if nothing changes.
+
+    The ``platform.yaml`` part of :func:`migrate_tool_refs` alone, for a
+    writer that must re-plan under ``platform_yaml_lock`` from a fresh
+    read (bug-146). **Never writes.**
+    """
+    result = ToolsMigrationResult()
+    _process_platform_yaml(
+        workspace_root,
+        manifest if manifest is not None else TOOL_MIGRATIONS,
+        result,
+    )
+    return result.yaml_bodies.get("platform.yaml")
+
+
 # ---------------------------------------------------------------------------
 # Kolsch-owned YAML rewriters
 # ---------------------------------------------------------------------------
