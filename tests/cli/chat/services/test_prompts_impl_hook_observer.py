@@ -284,7 +284,8 @@ async def test_runtime_none_full_choice_round_trip_unaffected(
         msg = "no pending prompt observed within the polling budget"
         raise AssertionError(msg)
     impl.resolve_pending(str(impl.pending_prompt_id), "y")
-    result = await asyncio.wait_for(task, timeout=1.0)
+    # Hang guard only (qol-164): generous so host load cannot trip it.
+    result = await asyncio.wait_for(task, timeout=10.0)
     assert result == "y"
 
 
@@ -359,7 +360,8 @@ async def test_choice_round_trip_observes_requested(store: SessionStore) -> None
         msg = "no pending prompt observed within the polling budget"
         raise AssertionError(msg)
     impl.resolve_pending(str(impl.pending_prompt_id), "y")
-    await asyncio.wait_for(task, timeout=1.0)
+    # Hang guard only (qol-164): generous so host load cannot trip it.
+    await asyncio.wait_for(task, timeout=10.0)
 
     assert len(spy.observed) == 1
     assert spy.observed[0].data["kind"] == WIRE_PROMPT_REQUESTED

@@ -116,9 +116,10 @@ services:
     # parse-time interpolation, baking the scope into the image).
     #
     # E2E tests are NOT in the gate; they cost tokens and run on a
-    # separate schedule. They are excluded by the `-m "not e2e"` marker
-    # in `[tool.pytest.ini_options].addopts`, so passing the whole tree
-    # here still deselects them (8 tests) rather than running them.
+    # separate schedule. They are excluded by the `-m "not e2e and not
+    # perf"` marker in `[tool.pytest.ini_options].addopts`, so passing the
+    # whole tree here still deselects them (plus the opt-in `perf`
+    # wall-clock budgets) rather than running them.
     command:
       - sh
       - -ec
