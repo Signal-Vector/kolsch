@@ -105,6 +105,11 @@ the provider isn't ready — document the open question in the
 connector module's docstring and either don't ship it or ship
 with the open question visible.
 
+**Never put credentials in a URL query string.** httpx logs every
+request's full URL at INFO, and `kolsch` writes INFO records to
+`<workspace>/logs/kolsch.log` (and to stderr under `kolsch -v`). Send
+keys in headers (`Authorization`, `x-api-key`, …) only.
+
 ---
 
 ## 2. The pattern in one screen

@@ -43,7 +43,9 @@ final reply (or one model call in `single_shot` mode); `--model <ref>`
 overrides the model for that one run. Workflows have their own verb:
 `kolsch workflows run <ref>` — e.g. the starter
 `kolsch/workflows/triage-tickets-jev`, which routes a ticket three ways
-on a `kolsch/nodes/jev` decision.
+on a `kolsch/nodes/jev` decision. A failed `kolsch run` exits `2` and
+prints a short error block instead of a traceback (see
+[Failure output and logging](#failure-output-and-logging)).
 
 `kolsch models`, `kolsch nodes` (workflow node definitions — the 16
 built-ins plus any authored `@node`s),
@@ -64,6 +66,49 @@ external agent can drive over stdio, and `mcp bridge` bridges the
 running session's tools to an in-workflow external-harness agent.
 `kolsch doctor` diagnoses a workspace — provider connectivity, catalog
 integrity, and common misconfigurations.
+
+## Failure output and logging
+
+When an agent exchange fails in an ordinary way (bad credentials, an
+upstream 4xx/5xx, a timeout), `kolsch run` exits `2`, writes nothing to
+stdout, and prints one block to stderr, rendered from the durable
+`thread.exchange_failed` event:
+
+```text
+error: kolsch/agents/helper failed — model.timeout: <message>
+  cause:   <one line from the underlying error, at most 300 characters>
+  session: ses_…
+  inspect: kolsch sessions events ses_…
+```
+
+The `cause:` line is left out when the error carries none. Pre-flight
+problems — an unknown agent, a bad `--model`, a malformed or unknown
+`--session`, a session with no threads, an unknown `--skill` — print a
+single `error: …` line (plus a hint where one helps) and also exit `2`.
+An exception that is not an ordinary failure is a kolsch bug; it prints
+`error: <agent> failed with an internal error (<Type>): <message>` and
+points at `kolsch -v` and the log file.
+
+**What `-v` adds.** `-v` is a top-level flag, so it goes before the
+command: `kolsch -v run …`. Without it, stderr shows WARNING and above
+from kolsch's own loggers only. With it, stderr shows INFO and above
+from every logger — third-party libraries included (CrewAI, the OpenAI
+SDK, httpx) — and the traceback after the failure block. CrewAI's own
+console panels are always suppressed; their text is the same as the
+third-party log records.
+
+**`<workspace>/logs/kolsch.log`.** Every command run against an
+initialized workspace (including read-only ones like `kolsch sessions
+list`) creates this file if needed and appends every log record at INFO
+and above, from every logger, with timestamp, process id, level and
+logger name — whether or not `-v` is set. Failure tracebacks are always
+written here. It rotates at 5 MB and keeps 3 backups, shared by all
+kolsch processes on the workspace (concurrent rotations may drop or
+interleave a few lines). It records request URLs. kolsch never logs
+API keys or request headers; provider error bodies are logged verbatim
+(some providers echo a masked key fragment). With no initialized
+workspace (`kolsch setup` on a new path, or `kolsch doctor` /
+`kolsch mcp bridge` pointed at one), logs go to stderr only.
 
 ## Principles
 

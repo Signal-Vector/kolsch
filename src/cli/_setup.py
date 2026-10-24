@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, TextIO
 
 from assets.platform_config import default_platform_payload as _stock_defaults
+from cli._run_failure import one_line as _one_line
 from kolsch._yamlio import dump, dump_preserving_trailing_comment_block, load
 
 if TYPE_CHECKING:
@@ -84,15 +85,18 @@ class _StepEOutcome(StrEnum):
 class _StepEResult:
     """The richer return type from Step E.
 
-    On `FAILED`, `session_id` / `error` are copied from the
-    [`_TestRunResult`][cli._setup._TestRunResult] and `failure_code`
-    is `error["type"]` when it is a string (the classifier key).
+    On `FAILED`, `session_id` / `error` / `preflight` are copied from
+    the [`_TestRunResult`][cli._setup._TestRunResult] and
+    `failure_code` is `error["type"]` when it is a string (the
+    classifier key) — or, for a pre-flight failure, the pre-flight
+    `PlatformError` code when there was one.
     """
 
     outcome: _StepEOutcome
     failure_code: str | None = None
     session_id: str | None = None
     error: dict[str, Any] | None = None
+    preflight: str | None = None
 
 
 @dataclass(frozen=True)
@@ -121,11 +125,17 @@ class _TestRunResult:
       (`thread.exchange_failed` `data["error"]`: `type`, `message`,
       `where`, `detail`, `cause`) when the exchange ended Fatal;
       `None` on success or a failure with no durable event.
+    - `preflight` — one line saying why the run stopped before any
+      exchange started (e.g. the agent config did not resolve); `None`
+      when the exchange ran. `preflight_code` is that failure's
+      `PlatformError` code, when it had one.
     """
 
     rc: int
     session_id: str | None = None
     error: dict[str, Any] | None = None
+    preflight: str | None = None
+    preflight_code: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -868,11 +878,14 @@ async def _step_e_test_run(io: _SetupIO, *, non_interactive: bool) -> _StepEResu
         # write a canned diagnostic here — the orchestrator owns
         # the user-facing message so the wording is in one place.
         code = result.error.get("type") if result.error is not None else None
+        if result.preflight is not None:
+            code = result.preflight_code
         return _StepEResult(
             outcome=_StepEOutcome.FAILED,
             failure_code=code if isinstance(code, str) else None,
             session_id=result.session_id,
             error=result.error,
+            preflight=result.preflight,
         )
     io.out.write("  ✓ test run completed successfully\n")
     return _StepEResult(outcome=_StepEOutcome.PASSED)
@@ -926,7 +939,14 @@ def _step_f_banner_failure(
     io.out.write(f"Agent:     {agent_ref}  ({agent_status})\n")
     if result.session_id is not None:
         io.out.write(f"Session:   {result.session_id}\n")
-    if result.failure_code:
+    if result.preflight is not None:
+        # No exchange ran (bug-148): say so rather than the
+        # exchange-failed hint.
+        cause = f"the test run did not start: {_one_line(result.preflight)}"
+        if result.failure_code:
+            cause = f"{result.failure_code} — {cause}"
+        io.out.write(f"Cause:     {cause}\n")
+    elif result.failure_code:
         io.out.write(f"Cause:     {result.failure_code} — {hint}\n")
     else:
         io.out.write(f"Cause:     {hint}\n")
@@ -941,6 +961,10 @@ def _step_f_banner_failure(
         io.out.write(
             f"  kolsch sessions events {result.session_id}"
             "   # full event log of the failed run\n"
+        )
+    elif result.preflight is not None:
+        io.out.write(
+            "  kolsch doctor                        # diagnose the workspace\n"
         )
     else:
         io.out.write(
@@ -968,18 +992,6 @@ def _original_error_text(error: dict[str, Any]) -> str | None:
     if not isinstance(first, str) or not first.strip():
         return None
     return first
-
-
-def _one_line(text: str, limit: int = 300) -> str:
-    """Flatten `text` to one line of at most `limit` characters.
-
-    Whitespace runs (newlines included) collapse to single spaces; a
-    longer result is cut and ends with `…` (counted in `limit`).
-    """
-    flat = " ".join(text.split())
-    if len(flat) <= limit:
-        return flat
-    return flat[: limit - 1].rstrip() + "…"
 
 
 # ---------------------------------------------------------------------------
@@ -1770,25 +1782,34 @@ def make_default_setup_io(*, root: Path) -> _SetupIO:
     # Trigger LLM provider registration before any setup step calls
     # into the registry.
     import llm.providers  # noqa: F401, PLC0415
+    from cli._run_failure import format_internal_failure  # noqa: PLC0415
     from cli.main import _run_agent_once, _write_agent_message  # noqa: PLC0415
 
     async def _run_handler(args: argparse.Namespace) -> _TestRunResult:
         """Run the test exchange through the `kolsch run` seam.
 
         Setup must not re-implement agent execution. Maps the
-        `_RunOutcome` to a `_TestRunResult`: the session id, and the
+        `_RunOutcome` to a `_TestRunResult`: the session id, the
         durable `failed_event.data["error"]` envelope when the exchange
-        ended Fatal. An engine-Fatal failure is NOT logged — the
-        durable event and the failure banner carry it. Any other
-        caught exception is unexpected and is logged on the `cli`
-        logger with its traceback, as `kolsch run` would. On success
-        the agent message JSON is echoed to stdout, as `kolsch run`
-        prints it.
+        ended Fatal, and the pre-flight message/code when the run
+        stopped before any exchange started. An engine-Fatal failure
+        is NOT logged — the durable event and the failure banner carry
+        it. Any other caught exception is unexpected and follows
+        `kolsch run`'s bug-148 rule: the one-line internal-error
+        message on stderr, the traceback logged on the `cli` logger at
+        INFO (so on stderr only under `kolsch -v`). On success the
+        agent message JSON is echoed to stdout, as `kolsch run` prints
+        it.
         """
         outcome = await _run_agent_once(args)
         if outcome.exc is not None and outcome.failed_event is None:
-            logging.getLogger("cli").error(
-                "agent execution failed: %s", outcome.exc, exc_info=outcome.exc
+            sys.stderr.write(
+                format_internal_failure(
+                    outcome.exc, agent_ref=args.agent_ref, workspace_root=root
+                )
+            )
+            logging.getLogger("cli").info(
+                "agent execution raised unexpectedly", exc_info=outcome.exc
             )
         if outcome.agent_message is not None:
             _write_agent_message(outcome.agent_message)
@@ -1797,12 +1818,15 @@ def make_default_setup_io(*, root: Path) -> _SetupIO:
             raw = outcome.failed_event.data.get("error")
             if isinstance(raw, dict):
                 error = raw
+        preflight = outcome.preflight
         return _TestRunResult(
             rc=outcome.rc,
             session_id=(
                 str(outcome.session_id) if outcome.session_id is not None else None
             ),
             error=error,
+            preflight=preflight.message if preflight is not None else None,
+            preflight_code=preflight.code if preflight is not None else None,
         )
 
     return _SetupIO(

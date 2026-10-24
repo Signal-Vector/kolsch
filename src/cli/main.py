@@ -18,6 +18,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from cli._logging import configure_cli_logging
 from errors import AssetsNotFound, ConfigInvalid, PlatformError
 from platform_runtime import (
     bootstrap_runtime,
@@ -29,7 +30,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Sequence
 
     from platform_runtime import PlatformRuntime
-    from schemas import Event, ResolvedAgentConfig, SessionId
+    from schemas import Event, ResolvedAgentConfig, Session, SessionId
 
 
 _log = logging.getLogger("cli")
@@ -97,11 +98,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.print_help()
         return 1
 
-    logging.basicConfig(
-        level=logging.WARNING if not args.verbose else logging.INFO,
-        format="%(levelname)s %(name)s: %(message)s",
-    )
-
     # Resolve the workspace once, intercept the missing-workspace case
     # before any subsystem boots so the user gets a friendly message
     # instead of a stack trace. `setup` is the one command exempt from
@@ -110,6 +106,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     # (including "no workspace at this path"), so a stack trace would
     # be worse than a report saying "nothing to inspect here".
     resolved_root = resolve_workspace(args.root)
+    initialized = workspace_is_initialized(resolved_root)
+    # bug-148 — stderr shows kolsch's own loggers (all with `-v`); an
+    # initialized workspace also gets `logs/kolsch.log` with every
+    # record. Nothing logs before this point.
+    configure_cli_logging(
+        verbose=args.verbose, workspace_root=resolved_root if initialized else None
+    )
     # `mcp bridge` (spec-120) is also exempt: it is a pure socket
     # proxy an EXTERNAL harness spawns — all state lives in the
     # running kolsch process behind KOLSCH_MCP_SOCKET, so requiring a
@@ -117,7 +120,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     workspace_exempt = args.command in {"setup", "doctor"} or (
         args.command == "mcp" and getattr(args, "mcp_command", None) == "bridge"
     )
-    if not workspace_exempt and not workspace_is_initialized(resolved_root):
+    if not workspace_exempt and not initialized:
         sys.stderr.write(_MISSING_WORKSPACE_MESSAGE.format(path=resolved_root))
         return _EXIT_MISSING_WORKSPACE
     args.root = resolved_root
@@ -232,7 +235,10 @@ def _build_parser() -> argparse.ArgumentParser:
         "-v",
         "--verbose",
         action="store_true",
-        help="Enable INFO-level logging.",
+        help=(
+            "Enable INFO-level logging on stderr, including third-party "
+            "libraries and failure tracebacks."
+        ),
     )
 
     sub = parser.add_subparsers(dest="command", metavar="<command>")
@@ -650,6 +656,22 @@ def apply_run_model_override(
 
 
 @dataclass(frozen=True)
+class _RunPreflightFailure:
+    """Why a run stopped before the engine was called — no exchange ran.
+
+    - `message` — one line, no `error:` prefix (e.g. `could not resolve
+      agent 'x': …`). The core has already printed the full diagnostic
+      to stderr; this is the structured copy for callers (setup's
+      banner) that must not claim an exchange failed.
+    - `code` — the `PlatformError` code when the cause was one (config
+      resolve, `--session` store lookup); `None` otherwise.
+    """
+
+    message: str
+    code: str | None = None
+
+
+@dataclass(frozen=True)
 class _RunOutcome:
     """What one `kolsch run`-shaped agent invocation produced.
 
@@ -660,12 +682,11 @@ class _RunOutcome:
     exception (see `_run_agent_once` for what it does print).
 
     - `rc` — the exit code `kolsch run` returns: `0` success, `2` any
-      failure (config resolve, `--model`, `--skill`, engine Fatal,
-      unexpected exception, or a `--stream` run whose last event was
-      Fatal).
-    - `session_id` — the session the run created or reused; `None` only
-      when the run returned before reaching the store (config resolve /
-      `--model` failures).
+      failure (pre-flight, engine Fatal, unexpected exception, or a
+      `--stream` run whose last event was Fatal).
+    - `session_id` — the session the run created or reused; `None` when
+      the run returned before a session was resolved (config resolve,
+      `--model`, or a malformed / unknown `--session`).
     - `agent_message` — the final agent-message event on a successful
       non-stream run; `None` otherwise.
     - `failed_event` — the durable `thread.exchange_failed` event when
@@ -676,6 +697,11 @@ class _RunOutcome:
       `AgentExecutionError` (paired with `failed_event`) or any other
       `Exception` (alone; an unexpected bug). Always `None` on the
       `--stream` path, which never raises on Fatal.
+    - `preflight` — set when the run stopped BEFORE `engine.execute` /
+      `execute_stream` was called (config resolve, `--model`,
+      `--session`, a session with no threads, `--skill`); then no
+      exchange ran, and `failed_event` and `exc` are `None`. See
+      [`_RunPreflightFailure`][cli.main._RunPreflightFailure].
     """
 
     rc: int
@@ -683,19 +709,58 @@ class _RunOutcome:
     agent_message: Event | None = None
     failed_event: Event | None = None
     exc: Exception | None = None
+    preflight: _RunPreflightFailure | None = None
 
 
 async def _cmd_run(args: argparse.Namespace) -> int:
     """`kolsch run` — a thin rendering wrapper over `_run_agent_once`.
 
-    Logs the caught exception (with its traceback) on the `cli` logger
-    and prints the agent message JSON on success; everything else —
-    stderr diagnostics for early failures and `--stream` event lines —
-    is written by the core.
+    Failure output is concise and traceback-free by default (bug-148):
+
+    - Engine Fatal (`AgentExecutionError`) — the failure block from
+      [`format_exchange_failure`][cli._run_failure.format_exchange_failure]
+      (code, message, one-line cause, session id, `kolsch sessions
+      events <id>` hint) on stderr, exit 2.
+    - Any other exception from `engine.execute` (a kolsch bug) — the
+      one-line internal-error message from
+      [`format_internal_failure`][cli._run_failure.format_internal_failure],
+      exit 2.
+    - Pre-flight failures (config resolve, `--model`, `--session`, no
+      thread, `--skill`) — the `error: …` line the core already
+      printed, exit 2.
+
+    In both exception cases the traceback is logged on the `cli` logger
+    at INFO, so it reaches stderr only under `kolsch -v` (and the
+    workspace log file). Nothing is written to stdout on failure; on
+    success the agent message JSON is printed, unchanged. `--stream`
+    event lines are written by the core, unchanged.
     """
+    from cli._run_failure import (  # noqa: PLC0415
+        format_exchange_failure,
+        format_internal_failure,
+    )
+
     outcome = await _run_agent_once(args)
     if outcome.exc is not None:
-        _log.error("agent execution failed: %s", outcome.exc, exc_info=outcome.exc)
+        if outcome.failed_event is not None:
+            sys.stderr.write(
+                format_exchange_failure(outcome.failed_event, agent_ref=args.agent_ref)
+            )
+            _log.info(
+                "agent execution failed (event %s)",
+                outcome.failed_event.event_id,
+                exc_info=outcome.exc,
+            )
+        else:
+            # The kolsch-bug path: not an ordinary engine-Fatal failure.
+            sys.stderr.write(
+                format_internal_failure(
+                    outcome.exc,
+                    agent_ref=args.agent_ref,
+                    workspace_root=resolve_workspace(args.root),
+                )
+            )
+            _log.info("agent execution raised unexpectedly", exc_info=outcome.exc)
     if outcome.agent_message is not None:
         _write_agent_message(outcome.agent_message)
     return outcome.rc
@@ -717,13 +782,19 @@ async def _run_agent_once(args: argparse.Namespace) -> _RunOutcome:
     of an exit code so callers get the session id and the durable
     `thread.exchange_failed` event, not just `rc`.
 
-    Output contract: early-failure diagnostics (config resolve,
-    `--model`, `--skill`) go to stderr here, and `--stream` event lines
-    go to stdout here, exactly as `kolsch run` prints them. The
-    success-path agent message JSON and the exception log are left to
-    the caller. Every exception raised by `engine.execute` is caught
-    and reported on the outcome (never logged here); exceptions outside
-    that call propagate unchanged.
+    Output contract: pre-flight diagnostics (config resolve, `--model`,
+    `--session`, a session with no threads, `--skill`) go to stderr
+    here and are also returned as `outcome.preflight`; `--stream` event
+    lines go to stdout here, exactly as `kolsch run` prints them. The
+    success-path agent message JSON and the failure rendering / logging
+    of a caught exception are left to the caller.
+
+    Exceptions: every exception raised by `engine.execute` is caught and
+    reported on the outcome (never logged here). Outside that call, only
+    the expected pre-flight failures are caught — a `PlatformError` from
+    config resolve or the `--session` lookup, and the `ValueError` of a
+    malformed `--session` id; anything else (e.g. a runtime bootstrap
+    failure) propagates unchanged.
     """
     from engine import AgentExecutionError, ExecutionContext  # noqa: PLC0415
 
@@ -734,14 +805,26 @@ async def _run_agent_once(args: argparse.Namespace) -> _RunOutcome:
         config = await runtime.build_resolved_config(args.agent_ref)
     except PlatformError as exc:
         sys.stderr.write(_format_resolve_config_error(exc, agent_ref=args.agent_ref))
-        return _RunOutcome(rc=2)
+        return _RunOutcome(
+            rc=2,
+            preflight=_RunPreflightFailure(
+                message=f"could not resolve agent {args.agent_ref!r}: {exc}",
+                code=exc.code,
+            ),
+        )
 
     # qol-122 — `--model` overrides the resolved model for THIS run only,
     # applied before the silent-echo check so the warning reflects it.
     if getattr(args, "model", None):
         overridden = apply_run_model_override(config, args.model, runtime)
         if overridden is None:
-            return _RunOutcome(rc=2)  # error already printed to stderr
+            # The specific error is already printed to stderr.
+            return _RunOutcome(
+                rc=2,
+                preflight=_RunPreflightFailure(
+                    message=f"--model {args.model!r} could not be applied"
+                ),
+            )
         config = overridden
 
     # Re-targeted post-bug-fix (bug-echo-on-real-provider): warn when
@@ -765,9 +848,10 @@ async def _run_agent_once(args: argparse.Namespace) -> _RunOutcome:
     # leaf carries forward; the engine itself is stateless across
     # calls.
     if args.session:
-        from schemas import SessionId  # noqa: PLC0415
-
-        session = await runtime.store.get_session(SessionId(args.session))
+        resumed = await _resolve_run_session(runtime, args.session)
+        if isinstance(resumed, _RunPreflightFailure):
+            return _RunOutcome(rc=2, preflight=resumed)
+        session = resumed
     else:
         session = await runtime.store.create_session(
             str(config.agent_id),
@@ -777,8 +861,15 @@ async def _run_agent_once(args: argparse.Namespace) -> _RunOutcome:
 
     threads = await runtime.store.list_threads(session_id)
     if not threads:
-        msg = f"session {session.session_id} has no threads"
-        raise RuntimeError(msg)
+        message = f"session {session_id} has no threads"
+        sys.stderr.write(
+            f"error: {message}\nRun without --session to start a new session.\n"
+        )
+        return _RunOutcome(
+            rc=2,
+            session_id=session_id,
+            preflight=_RunPreflightFailure(message=message),
+        )
     thread = threads[0]
 
     # --skill collects refs to force-load before the exchange.
@@ -801,7 +892,16 @@ async def _run_agent_once(args: argparse.Namespace) -> _RunOutcome:
                     "(this agent has no skills enabled in "
                     "subsystems.skills.config.enabled.)\n"
                 )
-            return _RunOutcome(rc=2, session_id=session_id)
+            return _RunOutcome(
+                rc=2,
+                session_id=session_id,
+                preflight=_RunPreflightFailure(
+                    message=(
+                        "--skill ref(s) not in this agent's enabled list: "
+                        + ", ".join(unknown)
+                    )
+                ),
+            )
 
     if config.io.mode == "single_shot":
         trigger = {"kind": "invocation", "inputs": inputs}
@@ -845,9 +945,42 @@ async def _run_agent_once(args: argparse.Namespace) -> _RunOutcome:
         return _RunOutcome(
             rc=2, session_id=session_id, failed_event=exc.failed_event, exc=exc
         )
-    except Exception as exc:  # noqa: BLE001 — surface engine-Fatal as CLI exit
+    # Not an ordinary failure (those arrive as AgentExecutionError):
+    # the kolsch-bug path, reported on the outcome for the caller.
+    except Exception as exc:  # noqa: BLE001 — unexpected engine exception
         return _RunOutcome(rc=2, session_id=session_id, exc=exc)
     return _RunOutcome(rc=0, session_id=session_id, agent_message=agent_msg)
+
+
+async def _resolve_run_session(
+    runtime: PlatformRuntime, raw_session_id: str
+) -> Session | _RunPreflightFailure:
+    """Look up the `--session` a run resumes, or describe why it can't.
+
+    A malformed id (`SessionId`'s `ValueError`) and a store failure
+    (`PlatformError`, e.g. `SessionNotFound`) each print one `error: …`
+    line (plus a hint) to stderr and return a
+    [`_RunPreflightFailure`][cli.main._RunPreflightFailure] instead of
+    raising, so `kolsch run` never shows a traceback for a bad flag.
+    """
+    from errors import SessionNotFound  # noqa: PLC0415
+    from schemas import SessionId  # noqa: PLC0415
+
+    hint = "Run `kolsch sessions list` to see existing sessions.\n"
+    try:
+        session_id = SessionId(raw_session_id)
+    except ValueError as exc:
+        message = f"invalid --session {raw_session_id!r}: {exc}"
+        sys.stderr.write(f"error: {message}\n{hint}")
+        return _RunPreflightFailure(message=message)
+    try:
+        return await runtime.store.get_session(session_id)
+    except PlatformError as exc:
+        message = f"{exc.code}: {exc}"
+        sys.stderr.write(f"error: {message}\n")
+        if isinstance(exc, SessionNotFound):
+            sys.stderr.write(hint)
+        return _RunPreflightFailure(message=message, code=exc.code)
 
 
 async def _recent_sessions_decorated(
