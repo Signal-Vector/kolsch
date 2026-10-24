@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import sys
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -28,7 +29,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Sequence
 
     from platform_runtime import PlatformRuntime
-    from schemas import ResolvedAgentConfig
+    from schemas import Event, ResolvedAgentConfig, SessionId
 
 
 _log = logging.getLogger("cli")
@@ -648,8 +649,83 @@ def apply_run_model_override(
     return config.model_copy(update={"model": spec, "fallback_models": []})
 
 
+@dataclass(frozen=True)
+class _RunOutcome:
+    """What one `kolsch run`-shaped agent invocation produced.
+
+    Returned by [`_run_agent_once`][cli.main._run_agent_once], the shared
+    run-once seam that both `kolsch run` (via `_cmd_run`) and `kolsch
+    setup`'s Step E test run call. Callers render the failure however
+    their surface needs: the seam logs nothing and never prints the
+    exception (see `_run_agent_once` for what it does print).
+
+    - `rc` — the exit code `kolsch run` returns: `0` success, `2` any
+      failure (config resolve, `--model`, `--skill`, engine Fatal,
+      unexpected exception, or a `--stream` run whose last event was
+      Fatal).
+    - `session_id` — the session the run created or reused; `None` only
+      when the run returned before reaching the store (config resolve /
+      `--model` failures).
+    - `agent_message` — the final agent-message event on a successful
+      non-stream run; `None` otherwise.
+    - `failed_event` — the durable `thread.exchange_failed` event when
+      the exchange ended Fatal, on both the `execute` path (from
+      `AgentExecutionError.failed_event`) and the `--stream` path. Its
+      `data["error"]` is the durable error envelope.
+    - `exc` — the exception caught around `engine.execute`:
+      `AgentExecutionError` (paired with `failed_event`) or any other
+      `Exception` (alone; an unexpected bug). Always `None` on the
+      `--stream` path, which never raises on Fatal.
+    """
+
+    rc: int
+    session_id: SessionId | None = None
+    agent_message: Event | None = None
+    failed_event: Event | None = None
+    exc: Exception | None = None
+
+
 async def _cmd_run(args: argparse.Namespace) -> int:
-    from engine import ExecutionContext  # noqa: PLC0415
+    """`kolsch run` — a thin rendering wrapper over `_run_agent_once`.
+
+    Logs the caught exception (with its traceback) on the `cli` logger
+    and prints the agent message JSON on success; everything else —
+    stderr diagnostics for early failures and `--stream` event lines —
+    is written by the core.
+    """
+    outcome = await _run_agent_once(args)
+    if outcome.exc is not None:
+        _log.error("agent execution failed: %s", outcome.exc, exc_info=outcome.exc)
+    if outcome.agent_message is not None:
+        _write_agent_message(outcome.agent_message)
+    return outcome.rc
+
+
+def _write_agent_message(agent_msg: Event) -> None:
+    """Print a successful run's agent message as one JSON line on stdout."""
+    sys.stdout.write(json.dumps(agent_msg.data, sort_keys=True, default=str))
+    sys.stdout.write("\n")
+
+
+async def _run_agent_once(args: argparse.Namespace) -> _RunOutcome:
+    """Run one agent exchange from `kolsch run`-shaped `args`.
+
+    The run-once seam shared by `kolsch run` and `kolsch setup`'s Step E:
+    resolves the agent config, applies `--model`, creates (or reuses,
+    with `--session`) the session, validates `--skill`, then calls the
+    engine once. Returns a [`_RunOutcome`][cli.main._RunOutcome] instead
+    of an exit code so callers get the session id and the durable
+    `thread.exchange_failed` event, not just `rc`.
+
+    Output contract: early-failure diagnostics (config resolve,
+    `--model`, `--skill`) go to stderr here, and `--stream` event lines
+    go to stdout here, exactly as `kolsch run` prints them. The
+    success-path agent message JSON and the exception log are left to
+    the caller. Every exception raised by `engine.execute` is caught
+    and reported on the outcome (never logged here); exceptions outside
+    that call propagate unchanged.
+    """
+    from engine import AgentExecutionError, ExecutionContext  # noqa: PLC0415
 
     runtime = await bootstrap_runtime(root=args.root)
     # Route through runtime.build_resolved_config so Layer 3
@@ -658,14 +734,14 @@ async def _cmd_run(args: argparse.Namespace) -> int:
         config = await runtime.build_resolved_config(args.agent_ref)
     except PlatformError as exc:
         sys.stderr.write(_format_resolve_config_error(exc, agent_ref=args.agent_ref))
-        return 2
+        return _RunOutcome(rc=2)
 
     # qol-122 — `--model` overrides the resolved model for THIS run only,
     # applied before the silent-echo check so the warning reflects it.
     if getattr(args, "model", None):
         overridden = apply_run_model_override(config, args.model, runtime)
         if overridden is None:
-            return 2  # error already printed to stderr
+            return _RunOutcome(rc=2)  # error already printed to stderr
         config = overridden
 
     # Re-targeted post-bug-fix (bug-echo-on-real-provider): warn when
@@ -691,15 +767,15 @@ async def _cmd_run(args: argparse.Namespace) -> int:
     if args.session:
         from schemas import SessionId  # noqa: PLC0415
 
-        session_id = SessionId(args.session)
-        session = await runtime.store.get_session(session_id)
+        session = await runtime.store.get_session(SessionId(args.session))
     else:
         session = await runtime.store.create_session(
             str(config.agent_id),
             name=f"cli:{args.agent_ref}",
         )
+    session_id = session.session_id
 
-    threads = await runtime.store.list_threads(session.session_id)
+    threads = await runtime.store.list_threads(session_id)
     if not threads:
         msg = f"session {session.session_id} has no threads"
         raise RuntimeError(msg)
@@ -725,7 +801,7 @@ async def _cmd_run(args: argparse.Namespace) -> int:
                     "(this agent has no skills enabled in "
                     "subsystems.skills.config.enabled.)\n"
                 )
-            return 2
+            return _RunOutcome(rc=2, session_id=session_id)
 
     if config.io.mode == "single_shot":
         trigger = {"kind": "invocation", "inputs": inputs}
@@ -750,23 +826,28 @@ async def _cmd_run(args: argparse.Namespace) -> int:
         # stream-with-Fatal-final-event.
         from schemas import EventType  # noqa: PLC0415
 
-        had_fatal = False
+        failed_event: Event | None = None
         async for event in runtime.engine.execute_stream(config, ctx):
             sys.stdout.write(_format_event_line(event))
             sys.stdout.write("\n")
             sys.stdout.flush()
             if event.type == EventType.THREAD_EXCHANGE_FAILED:
-                had_fatal = True
-        return 2 if had_fatal else 0
+                failed_event = event
+        return _RunOutcome(
+            rc=2 if failed_event is not None else 0,
+            session_id=session_id,
+            failed_event=failed_event,
+        )
 
     try:
         agent_msg = await runtime.engine.execute(config, ctx)
+    except AgentExecutionError as exc:
+        return _RunOutcome(
+            rc=2, session_id=session_id, failed_event=exc.failed_event, exc=exc
+        )
     except Exception as exc:  # noqa: BLE001 — surface engine-Fatal as CLI exit
-        _log.exception("agent execution failed: %s", exc)
-        return 2
-    sys.stdout.write(json.dumps(agent_msg.data, sort_keys=True, default=str))
-    sys.stdout.write("\n")
-    return 0
+        return _RunOutcome(rc=2, session_id=session_id, exc=exc)
+    return _RunOutcome(rc=0, session_id=session_id, agent_message=agent_msg)
 
 
 async def _recent_sessions_decorated(

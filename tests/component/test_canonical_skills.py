@@ -225,6 +225,7 @@ def test_setup_migration_shim_copies_missing_skills_into_existing_bundle(
         NonInteractivePrompter,
         _maybe_install_missing_kolsch_skills,
         _SetupIO,
+        _TestRunResult,
     )
 
     # Pre-Step-9 kolsch bundle: copy the template, then nuke skills/
@@ -244,7 +245,7 @@ def test_setup_migration_shim_copies_missing_skills_into_existing_bundle(
         err=_io.StringIO(),
         prompter=NonInteractivePrompter(),
         connect_io_factory=lambda _r, _p, _k: None,  # type: ignore[return-value]  # no LLM path exercised
-        run_handler=lambda _a: (0, None),  # type: ignore[return-value]  # no handler path exercised
+        run_handler=lambda _a: _TestRunResult(rc=0),  # type: ignore[return-value]  # no handler path exercised
     )
     _maybe_install_missing_kolsch_skills(setup_io)
 

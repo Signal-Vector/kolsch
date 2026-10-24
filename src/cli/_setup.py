@@ -9,8 +9,9 @@ Step composition rules:
 - Step C must call the existing
   [`cmd_connect`][cli.llm_commands.cmd_connect]; setup does not
   re-implement the connect flow.
-- Step E must call the existing `cli.main._cmd_run`; setup does
-  not re-implement agent execution.
+- Step E must call the existing `cli.main._run_agent_once` (the
+  run-once seam behind `kolsch run`); setup does not re-implement
+  agent execution.
 - Setup writes nothing outside the resolved workspace (the `.env`
   secret-value write is the only exception).
 - Each step is interruptible at any prompt; the next setup run
@@ -22,6 +23,7 @@ from __future__ import annotations
 import argparse
 import difflib
 import json
+import logging
 import os
 import shutil
 import sys
@@ -80,11 +82,50 @@ class _StepEOutcome(StrEnum):
 
 @dataclass(frozen=True)
 class _StepEResult:
-    """The richer return type from Step E."""
+    """The richer return type from Step E.
+
+    On `FAILED`, `session_id` / `error` are copied from the
+    [`_TestRunResult`][cli._setup._TestRunResult] and `failure_code`
+    is `error["type"]` when it is a string (the classifier key).
+    """
 
     outcome: _StepEOutcome
     failure_code: str | None = None
-    failure_detail: str | None = None
+    session_id: str | None = None
+    error: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class _StepSummary:
+    """What steps B and D actually did — feeds the failure banner.
+
+    `workspace_created` is Step B's `_PROCEEDED` (skeleton written this
+    run) vs `_SKIPPED` (already initialized); `agent_created` is Step
+    D's `_PROCEEDED` (helper materialized this run) vs `_SKIPPED`
+    (already present — a declined helper never reaches the failure
+    banner because Step E then skips).
+    """
+
+    workspace_created: bool
+    agent_created: bool
+
+
+@dataclass(frozen=True)
+class _TestRunResult:
+    """What `_SetupIO.run_handler` returns for Step E's test exchange.
+
+    - `rc` — `kolsch run`'s exit code (`0` success, non-zero failure).
+    - `session_id` — the session the test run created, when it got
+      that far; the banner points the user at it.
+    - `error` — the durable error envelope
+      (`thread.exchange_failed` `data["error"]`: `type`, `message`,
+      `where`, `detail`, `cause`) when the exchange ended Fatal;
+      `None` on success or a failure with no durable event.
+    """
+
+    rc: int
+    session_id: str | None = None
+    error: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -185,14 +226,13 @@ class _SetupIO:
     # The factory receives the provider name + an optional API key
     # override (used by --non-interactive's env-driven path).
     connect_io_factory: Callable[[Path, str, str | None], _CommandIO]
-    # Run-handler — wraps `cli.main._cmd_run`. Used by step E to
-    # verify the install with a real exchange. Returns
-    # `(exit_code, failure_code)` so Step E can pass the failure
-    # code to `_classify_failure` for an actionable hint.
-    # `failure_code` is the canonical Error Model code from the
-    # failed event's `data.error.type` when an exchange ended
-    # Fatal; `None` otherwise (success / non-engine failures).
-    run_handler: Callable[[argparse.Namespace], Awaitable[tuple[int, str | None]]]
+    # Run-handler — wraps `cli.main._run_agent_once`. Used by step E
+    # to verify the install with a real exchange. Returns a
+    # `_TestRunResult` carrying the exit code, the test run's session
+    # id, and the durable `thread.exchange_failed` error envelope (when
+    # the exchange ended Fatal) so the failure banner renders from the
+    # event log rather than from exception text.
+    run_handler: Callable[[argparse.Namespace], Awaitable[_TestRunResult]]
 
 
 # ---------------------------------------------------------------------------
@@ -238,18 +278,22 @@ async def run_setup(args: argparse.Namespace, io: _SetupIO) -> int:
 
     partial = False
     step_e_result: _StepEResult | None = None
+    # Each step's result token, keyed by step letter — the failure
+    # banner reports what B and D actually did on this run.
+    step_results: dict[str, str] = {}
 
-    for step_name, step_fn in (
-        ("A workspace location", _step_a_workspace_location),
-        ("B workspace skeleton", _step_b_skeleton),
-        ("C LLM provider", _step_c_provider),
-        ("D starter agent", _step_d_starter_agent),
+    for step_key, step_name, step_fn in (
+        ("A", "A workspace location", _step_a_workspace_location),
+        ("B", "B workspace skeleton", _step_b_skeleton),
+        ("C", "C LLM provider", _step_c_provider),
+        ("D", "D starter agent", _step_d_starter_agent),
     ):
         try:
             result = await step_fn(io, non_interactive=non_interactive)
         except KeyboardInterrupt:
             io.err.write(f"\nsetup aborted at step {step_name}\n")
             return _EXIT_PARTIAL
+        step_results[step_key] = result
         if result == "partial":
             partial = True
 
@@ -265,7 +309,11 @@ async def run_setup(args: argparse.Namespace, io: _SetupIO) -> int:
     # partial-completion banner and returns 4, regardless of whether
     # earlier steps reported partial.
     if step_e_result.outcome is _StepEOutcome.FAILED:
-        _step_f_banner_failure(io, step_e_result)
+        summary = _StepSummary(
+            workspace_created=step_results.get("B") == _PROCEEDED,
+            agent_created=step_results.get("D") == _PROCEEDED,
+        )
+        _step_f_banner_failure(io, step_e_result, summary)
         return _EXIT_PARTIAL
 
     # Success path — passed OR actively skipped both render a "ready"
@@ -305,9 +353,19 @@ def _classify_failure(failure_code: str | None) -> str:
       connected; run `kolsch connect <provider>`."
     - `model.timeout` → "the model took too long to respond. Try
       again or pick a faster model."
-    - Default (any other code) → "the test exchange failed; check
-      `kolsch sessions events <id>` for details, then re-run setup
-      or `kolsch run` directly."
+    - `model.rate_limited` → "wait a few seconds and re-run, or
+      pick a less-trafficked model."
+    - `model.context_overflow` → "pick a model with a larger
+      context, or shorten the input."
+    - `model.bad_request` → "the model rejected the request as
+      malformed"; points at the failed session's events.
+    - Default (any other code) → "the test exchange failed; inspect
+      the failed session's events (see Next steps below), then
+      re-run setup or `kolsch run` directly."
+
+    No hint names a placeholder session id — the failure banner
+    prints the real `kolsch sessions events <id>` command under
+    "Next steps".
     """
     table = {
         "model.server_error": (
@@ -335,13 +393,14 @@ def _classify_failure(failure_code: str | None) -> str:
         ),
         "model.bad_request": (
             "the model rejected the request as malformed. "
-            "Check `kolsch sessions events <id>` for the response detail."
+            "Inspect the failed session's events (see Next steps below) "
+            "for the response detail."
         ),
     }
     return table.get(
         failure_code or "",
-        "the test exchange failed; check `kolsch sessions events <id>` "
-        "for details, then re-run setup or `kolsch run` directly.",
+        "the test exchange failed; inspect the failed session's events "
+        "(see Next steps below), then re-run setup or `kolsch run` directly.",
     )
 
 
@@ -795,7 +854,7 @@ async def _step_e_test_run(io: _SetupIO, *, non_interactive: bool) -> _StepEResu
             io.out.write("  → skipped test run\n")
             return _StepEResult(outcome=_StepEOutcome.SKIPPED)
     io.out.write(f"Running {agent_ref}...\n")
-    rc, failure_code = await io.run_handler(
+    result = await io.run_handler(
         argparse.Namespace(
             root=io.root,
             agent_ref=agent_ref,
@@ -804,14 +863,16 @@ async def _step_e_test_run(io: _SetupIO, *, non_interactive: bool) -> _StepEResu
             session=None,
         )
     )
-    if rc != 0:
+    if result.rc != 0:
         # The hint surfaces via the partial-completion banner; don't
         # write a canned diagnostic here — the orchestrator owns
         # the user-facing message so the wording is in one place.
+        code = result.error.get("type") if result.error is not None else None
         return _StepEResult(
             outcome=_StepEOutcome.FAILED,
-            failure_code=failure_code,
-            failure_detail=f"test run failed (rc={rc})",
+            failure_code=code if isinstance(code, str) else None,
+            session_id=result.session_id,
+            error=result.error,
         )
     io.out.write("  ✓ test run completed successfully\n")
     return _StepEResult(outcome=_StepEOutcome.PASSED)
@@ -843,30 +904,82 @@ def _step_f_banner_success(io: _SetupIO, *, test_skipped: bool = False) -> None:
     io.out.write("Docs:      docs/tutorials/first-agent.md\n")
 
 
-def _step_f_banner_failure(io: _SetupIO, result: _StepEResult) -> None:
+def _step_f_banner_failure(
+    io: _SetupIO, result: _StepEResult, summary: _StepSummary
+) -> None:
     """The partial-completion banner — printed when Step E failed.
 
-    Names the failed step, the workspace path, and the
-    classifier-driven hint. Never prints "Kolsch is ready" on this
-    path; the user must see that something needs attention.
+    Rendered only from what setup actually observed: the B/D step
+    results (`summary`) and the test run's session id + durable
+    `thread.exchange_failed` error envelope (`result`). Never prints
+    "Kolsch is ready" on this path; the user must see that something
+    needs attention. Never prints `detail.traceback`.
     """
     agent_ref = f"{_STARTER_BUNDLE}/agents/{_STARTER_AGENT}"
     hint = _classify_failure(result.failure_code)
+    error = result.error or {}
+    workspace_status = "created" if summary.workspace_created else "already initialized"
+    agent_status = "created" if summary.agent_created else "already present"
     io.out.write("\n")
     io.out.write("Kolsch setup completed partially — test run failed.\n\n")
-    io.out.write(f"Workspace: {io.root}  (initialized successfully)\n")
-    io.out.write(f"Agent:     {agent_ref}  (created)\n")
+    io.out.write(f"Workspace: {io.root}  ({workspace_status})\n")
+    io.out.write(f"Agent:     {agent_ref}  ({agent_status})\n")
+    if result.session_id is not None:
+        io.out.write(f"Session:   {result.session_id}\n")
     if result.failure_code:
         io.out.write(f"Cause:     {result.failure_code} — {hint}\n")
     else:
-        io.out.write(f"Cause:     test exchange failed — {hint}\n")
-    if result.failure_detail:
-        io.out.write(f"Detail:    {result.failure_detail}\n")
+        io.out.write(f"Cause:     {hint}\n")
+    message = error.get("message")
+    if isinstance(message, str) and message:
+        io.out.write(f"Error:     {_one_line(message)}\n")
+    original = _original_error_text(error)
+    if original is not None:
+        io.out.write(f"Detail:    {_one_line(original)}\n")
     io.out.write("\nNext steps:\n")
-    io.out.write("  kolsch sessions list                 # find the failed session\n")
+    if result.session_id is not None:
+        io.out.write(
+            f"  kolsch sessions events {result.session_id}"
+            "   # full event log of the failed run\n"
+        )
+    else:
+        io.out.write(
+            "  kolsch sessions list                 # find the failed session\n"
+        )
     io.out.write(f'  kolsch run {agent_ref} --input content="<retry>"\n')
     io.out.write("\n")
     io.out.write("Docs: docs/tutorials/first-agent.md\n")
+
+
+def _original_error_text(error: dict[str, Any]) -> str | None:
+    """The wrapped exception's own text from a durable error envelope.
+
+    `PlatformInternalError` / `WrappedError` carry it as
+    `detail["args"][0]`; returns it only when that is a non-empty
+    string. Deliberately never reads `detail["traceback"]`.
+    """
+    detail = error.get("detail")
+    if not isinstance(detail, dict):
+        return None
+    args = detail.get("args")
+    if not isinstance(args, list) or not args:
+        return None
+    first = args[0]
+    if not isinstance(first, str) or not first.strip():
+        return None
+    return first
+
+
+def _one_line(text: str, limit: int = 300) -> str:
+    """Flatten `text` to one line of at most `limit` characters.
+
+    Whitespace runs (newlines included) collapse to single spaces; a
+    longer result is cut and ends with `…` (counted in `limit`).
+    """
+    flat = " ".join(text.split())
+    if len(flat) <= limit:
+        return flat
+    return flat[: limit - 1].rstrip() + "…"
 
 
 # ---------------------------------------------------------------------------
@@ -1648,33 +1761,40 @@ def make_default_setup_io(*, root: Path) -> _SetupIO:
     # Trigger LLM provider registration before any setup step calls
     # into the registry.
     import llm.providers  # noqa: F401, PLC0415
-    from cli.main import _cmd_run  # noqa: PLC0415
+    from cli.main import _run_agent_once, _write_agent_message  # noqa: PLC0415
 
-    async def _run_handler(
-        args: argparse.Namespace,
-    ) -> tuple[int, str | None]:
-        """Wrap `_cmd_run` so Step E can read the Fatal failure code.
+    async def _run_handler(args: argparse.Namespace) -> _TestRunResult:
+        """Run the test exchange through the `kolsch run` seam.
 
-        Setup must not re-implement agent execution. On success
-        returns `(0, None)`; on Fatal returns
-        `(exit_code, error_code)` where `error_code` is the
-        canonical Error Model code from
-        `failed_event.data["error"]["type"]`.
+        Setup must not re-implement agent execution. Maps the
+        `_RunOutcome` to a `_TestRunResult`: the session id, and the
+        durable `failed_event.data["error"]` envelope when the exchange
+        ended Fatal. An engine-Fatal failure is NOT logged — the
+        durable event and the failure banner carry it. Any other
+        caught exception is unexpected and is logged on the `cli`
+        logger with its traceback, as `kolsch run` would. On success
+        the agent message JSON is echoed to stdout, as `kolsch run`
+        prints it.
         """
-        from engine.context import AgentExecutionError  # noqa: PLC0415
-
-        try:
-            rc = await _cmd_run(args)
-        except AgentExecutionError as exc:
-            error_code = None
-            if exc.failed_event is not None and isinstance(exc.failed_event.data, dict):
-                err = exc.failed_event.data.get("error")
-                if isinstance(err, dict):
-                    code = err.get("type")
-                    if isinstance(code, str):
-                        error_code = code
-            return (2, error_code)
-        return (rc, None)
+        outcome = await _run_agent_once(args)
+        if outcome.exc is not None and outcome.failed_event is None:
+            logging.getLogger("cli").error(
+                "agent execution failed: %s", outcome.exc, exc_info=outcome.exc
+            )
+        if outcome.agent_message is not None:
+            _write_agent_message(outcome.agent_message)
+        error: dict[str, Any] | None = None
+        if outcome.failed_event is not None:
+            raw = outcome.failed_event.data.get("error")
+            if isinstance(raw, dict):
+                error = raw
+        return _TestRunResult(
+            rc=outcome.rc,
+            session_id=(
+                str(outcome.session_id) if outcome.session_id is not None else None
+            ),
+            error=error,
+        )
 
     return _SetupIO(
         root=root,
