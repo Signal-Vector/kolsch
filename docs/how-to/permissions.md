@@ -820,6 +820,60 @@ Notes:
 
 ---
 
+## New default rules on an existing workspace
+
+`kolsch setup` writes the starter rule set once. When a later kolsch
+version ships a new default — for example
+`{ what: kolsch/tools/jev_decide, pattern: "*", effect: prompt }` for
+the Jev tool — an existing workspace doesn't get it by re-running
+setup. `kolsch setup --sync-bundle` adds it:
+
+```bash
+kolsch setup --sync-bundle --dry-run   # preview
+kolsch setup --sync-bundle             # asks: [a]dd all / [c]hoose each / [s]kip
+kolsch setup --sync-bundle --yes       # adds the missing prompt/deny defaults
+```
+
+`kolsch doctor` lists what's missing under **Missing default
+permission rules**. The rules for what an upgrade may do:
+
+- **Only `prompt` and `deny` defaults are ever added.** A `prompt`
+  rule asks a human before each call in `kolsch chat`, and is a deny
+  for everything that isn't a chat (`kolsch run`, the server, headless
+  workflows). The one exception is `kolsch chat --auto-approve`, which
+  turns every `prompt` into an allow: in a workspace *with* a
+  default-deny tail, an added `prompt` default changes that tool from
+  deny to allow in an auto-approve chat — exactly as on a fresh
+  install. A missing **`allow`** default is only reported, with the
+  `kolsch permissions add …` command — an upgrade never adds an
+  `allow` rule, not even with `--yes`.
+- **Placement.** Each added rule goes directly before the default-deny
+  tail (or at the end when there is no tail), through the same locked
+  writer as `kolsch permissions add`. So it can only change the outcome
+  of an action no existing rule covers. No other rule is edited,
+  reordered or removed; `locked_rules` and agent/bundle rules are
+  untouched. `platform.yaml` is backed up to
+  `.platform/platform.yaml.bak.<UTC>` first; comments survive.
+- **Your rule wins.** If you already have any rule for that target
+  (any pattern, effect or `from:`, or a locked rule), the default isn't
+  offered.
+- **Offered once.** Each decision — `added`, `declined` (`[s]kip`),
+  `present` (you had a rule), or `installed` (a new workspace got it at
+  setup) — is recorded in `.kolsch/default-rules.json`. A default you
+  declined (`[s]kip`, or "no" under `[c]hoose each`), or removed after
+  it was added, is never offered again. To be offered again, delete
+  its entry (or the file). `--no` and `--dry-run` record nothing; under
+  `--no` an offered rule counts as unresolved (exit 1), like a kept
+  file.
+- **Not for missing tools.** A default for a tool the workspace doesn't
+  have isn't offered (a rule naming an unknown tool would stop the
+  rules from loading); copy the tool in with `--sync-bundle` first.
+- **The tail is never added.** A missing default-deny tail is reported
+  by `kolsch doctor` (see
+  [If your rule list has no default-deny tail](#if-your-rule-list-has-no-default-deny-tail));
+  adding it changes how uncovered actions behave in chat, so that's
+  your call.
+
 ## When a tool is denied: the recovery capsule
 
 When the engine denies a tool call, the chat renders a distinct

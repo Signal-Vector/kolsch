@@ -75,6 +75,17 @@ to a third party:
 Change it to `allow` with `/perm` or `kolsch permissions` if you trust
 the agent with it.
 
+**Workspace set up before Jev shipped?** It has neither the tool file
+nor the rule. Run `kolsch setup --sync-bundle` (add `--dry-run` to
+preview): it copies in `bundles/kolsch/tools/jev_decide.py` and the
+Jev workflows, and offers the `prompt` rule above (directly before your
+default-deny tail, or at the end if you have none). See
+[Upgrading an existing workspace](workspace-and-setup.md#upgrading-an-existing-workspace).
+Sync never edits your own bundles: an agent that sets its own
+`declared` list — for example a `butler` that `extends:
+kolsch/agents/helper` and overrides `declared` (lists replace, they
+don't merge) — must add `- ref: kolsch/tools/jev_decide` itself.
+
 ## 4. Ask questions
 
 The tool takes three arguments:

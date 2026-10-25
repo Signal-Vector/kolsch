@@ -34,6 +34,7 @@ import pytest
 import yaml
 
 from cli._setup import (
+    _STARTER_BUNDLE_TEMPLATE_DIR,
     NonInteractivePrompter,
     SetupPrompter,
     _SetupIO,
@@ -2165,3 +2166,156 @@ async def test_qol133_corrupt_marker_degrades_to_showing_notice_again(
     assert _HOOKS_NOTICE_POINTER in second_rerun_out.getvalue(), (
         "a corrupt marker must degrade toward showing the notice again"
     )
+
+
+# ===========================================================================
+# bug-146 Test 6 — a setup re-run reports (and offers) the workspace upgrade
+# ===========================================================================
+
+
+async def _install_then_age(root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fresh install, then the bug-146 Reproduce shape: an older workspace."""
+    import shutil
+
+    from cli.permissions import RemoveRule, mutate_platform_rules
+    from providers.authz import Rule
+
+    monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
+    monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
+    io_ = _make_test_io(root=root)
+    assert (
+        await run_setup(argparse.Namespace(non_interactive=True, root=root), io_) == 0
+    )
+    bundle = root / "bundles" / "kolsch"
+    (root / ".kolsch" / "bundle-baseline.json").unlink()
+    (root / ".kolsch" / "default-rules.json").unlink()
+    (bundle / "tools" / "jev_decide.py").unlink()
+    shutil.rmtree(bundle / "workflows")
+    helper = bundle / "agents" / "helper.yaml"
+    helper.write_text("# my note\n" + helper.read_text(encoding="utf-8"), "utf-8")
+    mutate_platform_rules(
+        root / "platform.yaml",
+        RemoveRule(
+            match=Rule(what="kolsch/tools/jev_decide", pattern="*", effect="prompt")
+        ),
+        catalog=None,
+    )
+
+
+def _rerun_hash(root: Path) -> dict[str, str]:
+    # qol-133's one-time `.kolsch/hooks-notice-shown` marker is written
+    # by every first re-run (pre-existing); everything else is watched.
+    return {
+        k: v
+        for k, v in _hash_workspace(root).items()
+        if k.startswith(("bundles/kolsch/", "platform.yaml", ".kolsch/"))
+        and k != ".kolsch/hooks-notice-shown"
+    }
+
+
+async def test_setup_rerun_reports_upgrade_and_writes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _install_then_age(tmp_path, monkeypatch)
+    before = _rerun_hash(tmp_path)
+
+    io_ = _make_test_io(root=tmp_path)
+    rc = await run_setup(argparse.Namespace(non_interactive=True, root=tmp_path), io_)
+    out = io_.out.getvalue()
+    assert rc == 0, out
+    workflows = len(list((_STARTER_BUNDLE_TEMPLATE_DIR / "workflows").iterdir()))
+    assert (
+        f"`--sync-bundle` would copy {workflows + 1} new file(s), ask about 1 "
+        "file(s) that differ from this version" in out
+    )
+    assert "1 missing default permission rule: kolsch/tools/jev_decide → prompt" in out
+    assert "Run `kolsch setup --sync-bundle` to review and apply" in out
+    notice = out.split("✓ starter agent already at", 1)[1]
+    assert notice.index("workspace bundle is behind") < notice.index("Running")
+    assert _rerun_hash(tmp_path) == before
+
+
+async def test_setup_rerun_on_synced_workspace_prints_no_upgrade_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
+    monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
+    first = _make_test_io(root=tmp_path)
+    await run_setup(argparse.Namespace(non_interactive=True, root=tmp_path), first)
+    io_ = _make_test_io(root=tmp_path)
+    await run_setup(argparse.Namespace(non_interactive=True, root=tmp_path), io_)
+    out = io_.out.getvalue()
+    assert "behind kolsch" not in out
+    assert "--sync-bundle" not in out
+    assert "upgrade check skipped" not in out
+
+
+class _UpgradeAnswers(NonInteractivePrompter):
+    """Answer the D1 offer; keep everything else at its default."""
+
+    def __init__(self, *, apply: bool) -> None:
+        self.apply = apply
+        self.asked: list[str] = []
+
+    def confirm(self, question: str, *, default: bool = True) -> bool:
+        self.asked.append(question)
+        if "Review and apply now?" in question:
+            return self.apply
+        return default
+
+
+async def test_setup_rerun_interactive_accept_runs_sync_before_step_e(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D1 (b): interactive re-run offers the sync; yes runs it inline."""
+    await _install_then_age(tmp_path, monkeypatch)
+    prompter = _UpgradeAnswers(apply=True)
+    io_ = _make_test_io(root=tmp_path, prompter=prompter)
+    await run_setup(argparse.Namespace(non_interactive=False, root=tmp_path), io_)
+    out = io_.out.getvalue()
+    assert any("Review and apply now?" in q for q in prompter.asked)
+    assert out.index("Sync report") < out.index("Running")
+    bundle = tmp_path / "bundles" / "kolsch"
+    assert (bundle / "tools" / "jev_decide.py").is_file()
+    assert (bundle / "workflows").is_dir()
+    rules = yaml.safe_load((tmp_path / "platform.yaml").read_text())["authorization"][
+        "config"
+    ]["rules"]
+    assert {
+        "what": "kolsch/tools/jev_decide",
+        "pattern": "*",
+        "effect": "prompt",
+    } in rules
+    # The edited helper was kept (the scripted prompter keeps by default).
+    assert (bundle / "agents" / "helper.yaml").read_text().startswith("# my note\n")
+
+
+async def test_setup_rerun_interactive_decline_writes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _install_then_age(tmp_path, monkeypatch)
+    before = _rerun_hash(tmp_path)
+    io_ = _make_test_io(root=tmp_path, prompter=_UpgradeAnswers(apply=False))
+    await run_setup(argparse.Namespace(non_interactive=False, root=tmp_path), io_)
+    assert "Sync report" not in io_.out.getvalue()
+    assert _rerun_hash(tmp_path) == before
+
+
+async def test_setup_rerun_upgrade_check_failure_is_one_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import cli._bundle_sync as sync_mod
+
+    await _install_then_age(tmp_path, monkeypatch)
+
+    async def boom(_root: Path) -> object:
+        msg = "planner exploded"
+        raise RuntimeError(msg)
+
+    monkeypatch.setattr(sync_mod, "plan_workspace_upgrade", boom)
+    io_ = _make_test_io(root=tmp_path)
+    rc = await run_setup(argparse.Namespace(non_interactive=True, root=tmp_path), io_)
+    out = io_.out.getvalue()
+    assert rc == 0, out
+    assert "  ⚠ upgrade check skipped: planner exploded\n" in out
+    assert "Running" in out

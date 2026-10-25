@@ -685,7 +685,10 @@ def mutate_platform_rules(
 ) -> RulesMutationResult | LockedRulesMutationResult:
     """Apply one rule op to the rules **currently on disk** in `yaml_path`.
 
-    The only writer of `authorization.config.rules` (bug-162). Under
+    The writer for single rule edits of `authorization.config.rules`
+    (bug-162); whole-document rewrites take the same lock and re-read
+    inside it via `cli._platform_yaml_write.rewrite_platform_yaml_locked`
+    (bug-146). Under
     [`platform_yaml_lock`][assets.platform_config.platform_yaml_lock]
     it reads the file, validates the disk rules, inserts or removes
     exactly one entry of the round-trip-loaded list (every comment,

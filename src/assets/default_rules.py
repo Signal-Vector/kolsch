@@ -11,6 +11,9 @@ default-deny tail) cannot drift apart:
 - [`workspace_only_default_rules`][assets.default_rules.workspace_only_default_rules]
   — what `kolsch setup` writes for a new workspace: the kolsch
   bundle's builtin tools allowed or gated by `prompt`, then the tail.
+  Derived from `STARTER_RULES`,
+  the declarative starter-rule manifest that
+  `kolsch setup --sync-bundle` also plans upgrades from (bug-146).
 
 The fail-closed set is catalog-independent on purpose:
 `load_or_create` runs before the catalog scan, and the authz provider
@@ -24,6 +27,11 @@ result freely. This module imports nothing from `cli` or `providers`
 """
 
 from __future__ import annotations
+
+from dataclasses import dataclass, replace
+from typing import Literal
+
+StarterEffect = Literal["allow", "prompt", "deny"]
 
 
 def default_deny_tail_rule() -> dict[str, str]:
@@ -66,6 +74,174 @@ def fail_closed_default_rules() -> list[dict[str, str]]:
     return [agent_execute_preflight_rule(), default_deny_tail_rule()]
 
 
+@dataclass(frozen=True, slots=True)
+class StarterRule:
+    """One entry of the starter-rule manifest.
+
+    Attributes:
+        key: Stable id, never reused (e.g. `"jev_decide"`). The
+            `.kolsch/default-rules.json` ledger records decisions by it.
+        what: The rule's `what`.
+        pattern: The rule's `pattern`.
+        effect: The rule's `effect`.
+        since: The spec / ticket that introduced the rule.
+        rationale: One user-facing line on why the default is what it
+            is; shown when an upgrade offers the rule.
+        tail: True only for the protected default-deny tail.
+    """
+
+    key: str
+    what: str
+    pattern: str
+    effect: StarterEffect
+    since: str
+    rationale: str
+    tail: bool = False
+
+    def as_rule(self) -> dict[str, str]:
+        """Return the `{what, pattern, effect}` mapping written to `platform.yaml`."""
+        return {"what": self.what, "pattern": self.pattern, "effect": self.effect}
+
+
+def _from_rule(
+    key: str,
+    rule: dict[str, str],
+    effect: StarterEffect,
+    *,
+    since: str,
+    rationale: str,
+) -> StarterRule:
+    """Wrap one of the shared rule builders above as a manifest entry."""
+    if rule["effect"] != effect:  # pragma: no cover — static data
+        msg = f"starter rule {key!r}: effect {rule['effect']!r} != {effect!r}"
+        raise ValueError(msg)
+    return StarterRule(
+        key=key,
+        what=rule["what"],
+        pattern=rule["pattern"],
+        effect=effect,
+        since=since,
+        rationale=rationale,
+    )
+
+
+def _tool(
+    name: str, effect: StarterEffect, *, since: str, rationale: str
+) -> StarterRule:
+    return StarterRule(
+        key=name,
+        what=f"kolsch/tools/{name}",
+        pattern="*",
+        effect=effect,
+        since=since,
+        rationale=rationale,
+    )
+
+
+# The starter-rule manifest — the single source of the rules a new
+# workspace gets, in evaluation order. Monotonic, like
+# `cli._migrations.tools.TOOL_MIGRATIONS`: entries are only ever added
+# (before the tail); a `key` is never removed or reused, because the
+# ledger and `--sync-bundle`'s upgrade planner key on it.
+STARTER_RULES: tuple[StarterRule, ...] = (
+    # Pre-flight gate — the engine requires agent.execute.<id> to run
+    # any exchange. Default to allow; users tighten by adding a more
+    # specific deny before this rule.
+    _from_rule(
+        "agent_execute",
+        agent_execute_preflight_rule(),
+        "allow",
+        since="phase-2.0",
+        rationale="lets agents run at all (the engine's pre-flight check)",
+    ),
+    # The canonical builtins — owned by the kolsch bundle.
+    _tool("read_file", "allow", since="phase-2.0", rationale="read-only file access"),
+    _tool(
+        "list_files",
+        "allow",
+        since="phase-2.0",
+        rationale="read-only listing",
+    ),
+    _tool(
+        "write_file",
+        "prompt",
+        since="phase-2.0",
+        rationale="changes files in the workspace",
+    ),
+    _tool("bash", "prompt", since="phase-2.0", rationale="runs shell commands"),
+    # qol-fetch-url-tool — network access is a fresh capability;
+    # conservative default per bash/write_file.
+    _tool(
+        "fetch_url",
+        "prompt",
+        since="qol-fetch-url-tool",
+        rationale="makes network requests",
+    ),
+    # qol-browse-url-tool — Tier 2 (opt-in `kolsch[browse]` extra).
+    # Same conservative prompt default as fetch_url so the chat
+    # surface asks before the agent drives headless Chromium.
+    _tool(
+        "browse_url",
+        "prompt",
+        since="qol-browse-url-tool",
+        rationale="drives a headless browser over the network",
+    ),
+    # spec-136: `jev_decide` sends workspace data (the `state`) to a
+    # third party (OpenRouter / TypeSafe) — same conservative `prompt`
+    # default as fetch_url.
+    _tool(
+        "jev_decide",
+        "prompt",
+        since="spec-136",
+        rationale="sends workspace content to a third party (OpenRouter)",
+    ),
+    # bug-024: workflow-service tools. `run_workflow` opens a
+    # WorkflowCard AND queues a run; conservative `prompt` so the user
+    # confirms the run before any nodes fire. `workflow_status` is
+    # read-only; safe to `allow`. `cancel_workflow` is user-initiated
+    # safety; `allow` so the model can react to an Esc or an explicit
+    # "cancel that" instruction without a modal.
+    _tool(
+        "run_workflow",
+        "prompt",
+        since="bug-024",
+        rationale="starts a workflow run",
+    ),
+    _tool(
+        "workflow_status",
+        "allow",
+        since="bug-024",
+        rationale="read-only workflow run status",
+    ),
+    _tool(
+        "cancel_workflow",
+        "allow",
+        since="bug-024",
+        rationale="stops a run the user asked to stop",
+    ),
+    # bug-027: `workflow_inspect` is read-only introspection — the
+    # model calls it to discover a workflow's required inputs before
+    # `run_workflow`. Safe to `allow`; no side effects, no run started.
+    _tool(
+        "workflow_inspect",
+        "allow",
+        since="bug-027",
+        rationale="read-only workflow introspection",
+    ),
+    # Default-deny tail (protected). Always last.
+    replace(
+        _from_rule(
+            "default_deny_tail",
+            default_deny_tail_rule(),
+            "deny",
+            since="phase-2.0",
+            rationale="denies every action no earlier rule covers",
+        ),
+        tail=True,
+    ),
+)
+
+
 def workspace_only_default_rules() -> list[dict[str, str]]:
     """Return the workspace-only default rules `kolsch setup` writes.
 
@@ -84,45 +260,11 @@ def workspace_only_default_rules() -> list[dict[str, str]]:
     in the catalog, so this set is not usable as a bare-root default
     (see [`fail_closed_default_rules`][assets.default_rules.fail_closed_default_rules]).
 
+    Derived from `STARTER_RULES`,
+    in manifest order.
+
     Returns:
         A fresh list of 13 rule mappings, pre-flight allow first and
         the default-deny tail last.
     """
-    return [
-        # Pre-flight gate — the engine requires agent.execute.<id>
-        # to run any exchange. Default to allow; users tighten by
-        # adding a more specific deny before this rule.
-        agent_execute_preflight_rule(),
-        # The canonical builtins — owned by the kolsch bundle.
-        {"what": "kolsch/tools/read_file", "pattern": "*", "effect": "allow"},
-        {"what": "kolsch/tools/list_files", "pattern": "*", "effect": "allow"},
-        {"what": "kolsch/tools/write_file", "pattern": "*", "effect": "prompt"},
-        {"what": "kolsch/tools/bash", "pattern": "*", "effect": "prompt"},
-        # qol-fetch-url-tool — network access is a fresh capability;
-        # conservative default per bash/write_file.
-        {"what": "kolsch/tools/fetch_url", "pattern": "*", "effect": "prompt"},
-        # qol-browse-url-tool — Tier 2 (opt-in `kolsch[browse]`
-        # extra). Same conservative prompt default as fetch_url so the
-        # chat surface asks before the agent drives headless Chromium.
-        {"what": "kolsch/tools/browse_url", "pattern": "*", "effect": "prompt"},
-        # spec-136: `jev_decide` sends workspace data (the `state`) to a
-        # third party (OpenRouter / TypeSafe) — same conservative
-        # `prompt` default as fetch_url.
-        {"what": "kolsch/tools/jev_decide", "pattern": "*", "effect": "prompt"},
-        # bug-024: workflow-service tools. `run_workflow` opens a
-        # WorkflowCard AND queues a run; conservative `prompt` so the
-        # user confirms the run before any nodes fire. `workflow_status`
-        # is read-only; safe to `allow`. `cancel_workflow` is user-
-        # initiated safety; `allow` so the model can react to an Esc
-        # or an explicit "cancel that" instruction without a modal.
-        {"what": "kolsch/tools/run_workflow", "pattern": "*", "effect": "prompt"},
-        {"what": "kolsch/tools/workflow_status", "pattern": "*", "effect": "allow"},
-        {"what": "kolsch/tools/cancel_workflow", "pattern": "*", "effect": "allow"},
-        # bug-027: `workflow_inspect` is read-only introspection —
-        # the model calls it to discover a workflow's required
-        # inputs before `run_workflow`. Safe to `allow`; no side
-        # effects, no run started.
-        {"what": "kolsch/tools/workflow_inspect", "pattern": "*", "effect": "allow"},
-        # Default-deny tail (protected).
-        default_deny_tail_rule(),
-    ]
+    return [rule.as_rule() for rule in STARTER_RULES]

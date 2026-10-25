@@ -369,11 +369,16 @@ def platform_yaml_lock_path(root: Path) -> Path:
 def platform_yaml_lock(root: Path, *, timeout_s: float = 5.0) -> Iterator[None]:
     """Hold an exclusive `flock` on `root/.platform/platform.yaml.lock`.
 
-    Every writer of `platform.yaml`'s authorization rules
-    (`cli.permissions.mutate_platform_rules`) runs its read → modify
-    → write under this lock, so two kolsch processes (a chat and a
-    `kolsch permissions` in another terminal, or two chats) can never
-    lose each other's rule edits.
+    Every kolsch writer of an existing `platform.yaml` runs its read →
+    modify → write under this lock: single rule edits through
+    `cli.permissions.mutate_platform_rules`, and whole-document rewrites
+    (setup's migrations and `defaults.model` / `file_access` updates,
+    sync's tool-ref rewrite, `kolsch connect` / `disconnect` /
+    `refresh`) through `cli._platform_yaml_write.rewrite_platform_yaml_locked`
+    (bug-146). So two kolsch processes (a chat and a `kolsch
+    permissions` or `kolsch setup` in another terminal, or two chats)
+    can never lose each other's edits. (Creating a missing file, in
+    `load_or_create` and setup's fresh install, takes no lock.)
 
     Polls `LOCK_EX | LOCK_NB` every ~50 ms for up to `timeout_s`, then
     raises. Mirrors the event store's sidecar-lock pattern

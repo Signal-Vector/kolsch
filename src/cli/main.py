@@ -384,8 +384,12 @@ def _build_parser() -> argparse.ArgumentParser:
     # (rewrites kolsch-owned drift per the qol-089 migrator +
     # baseline; reports user-owned drift). --dry-run touches nothing.
     # --yes / --no drive per-file default answers in non-interactive
-    # runs (both = safe default: keep-local for modified files, keep
-    # for retired-at-source; either triggers partial-success exit).
+    # runs. Both keep locally-modified files. --yes copies new files and
+    # deletes a retired-at-source file only when the baseline proves
+    # kolsch shipped it unedited (bug-146); --no copies and deletes
+    # nothing. --yes also adds missing prompt/deny default permission
+    # rules (bug-146, never allow); --no adds none. Any kept item
+    # triggers the partial-success exit (1).
     setup.add_argument(
         "--sync-bundle",
         dest="sync_bundle",
@@ -407,9 +411,11 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="yes",
         action="store_true",
         help=(
-            "With --sync-bundle: non-interactive. Keeps locally-modified "
-            "files (safe default); triggers partial-success exit if any "
-            "drift item was skipped."
+            "With --sync-bundle: non-interactive. Copies new shipped files; "
+            "keeps locally-modified files; deletes a file no longer shipped "
+            "only when the baseline shows kolsch shipped it unedited (else "
+            "keeps it); adds missing `prompt`/`deny` default permission "
+            "rules (never `allow`). Exits 1 (partial) if anything was kept."
         ),
     )
     setup.add_argument(
@@ -417,8 +423,11 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="no",
         action="store_true",
         help=(
-            "With --sync-bundle: non-interactive. Same safe defaults as "
-            "--yes; kept as a symmetric knob for scripting."
+            "With --sync-bundle: non-interactive. Copies and deletes "
+            "nothing: keeps modified and no-longer-shipped files, skips "
+            "new ones and adds no default permission rules (retired-tool "
+            "ref rewrites still apply). Exits 1 (partial) if anything was "
+            "kept."
         ),
     )
 

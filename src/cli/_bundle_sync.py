@@ -6,17 +6,23 @@ Sits on top of qol-089's shipped foundation:
   that returns rewrites for kolsch-owned YAMLs and reports user-owned
   hits (never writes user files).
 - :mod:`cli._bundle_baseline` — the sha256 baseline (``.kolsch/bundle-baseline.json``)
-  written on install; the oracle for "unmodified since last shipped".
+  written on install and updated per file by every sync; the oracle for
+  "unmodified since last shipped". Optional (bug-146): a workspace
+  installed before qol-089 has none, and sync records one.
 - :func:`cli._doctor._starter_bundle_dir` — locates the packaged
   source template so tests can monkeypatch it.
 
-Sync classifies every file in ``bundles/kolsch/`` into one of four
-buckets:
+Sync classifies every file in ``bundles/kolsch/`` (as
+:func:`cli._bundle_baseline.iter_bundle_files` walks it — no
+``__pycache__/`` or ``.DS_Store``) into one of four buckets, by
+:func:`plan_bundle_files`:
 
-- **unchanged** — present in source + workspace, sha256 matches
-  baseline → **safe to overwrite** with the source copy.
-- **locally_modified** — present in source + workspace, sha256
-  differs from baseline (or missing from baseline) → **prompt**
+- **unchanged** — present in source + workspace, and byte-identical to
+  the source copy, or sha256 matches the baseline entry → **safe to
+  overwrite** with the source copy.
+- **locally_modified** — present in source + workspace, differs from
+  source, and sha256 differs from the baseline entry or has none
+  (always the case without a baseline) → **prompt**
   (`[k]eep local / [o]verwrite / [d]iff`); non-interactive path
   defaults to keep-local + records a skip (partial-success exit).
 - **added_at_source** — present in source, absent from workspace →
@@ -27,15 +33,26 @@ buckets:
 
 After the file-level pass, applies the migrator's YAML rewrites for
 ``bundles/kolsch/agents/*.yaml`` and ``platform.yaml`` (if any) and
-refreshes the baseline. **Never writes outside ``bundles/kolsch/**``
-+ ``platform.yaml``** — the kolsch-owned boundary qol-089 established
-is a hard invariant here.
+updates the baseline — on every non-dry-run pass, partial or not — with
+an entry for each file sync copied, refreshed, overwrote, rewrote or
+found identical to source; a kept-local file keeps its prior entry (or none),
+so it is still "modified" next run. **Never writes outside
+``bundles/kolsch/**``, ``platform.yaml`` and ``.kolsch/``** — the
+kolsch-owned boundary qol-089 established is a hard invariant here.
+
+Then the default-rule pass (:mod:`cli._rules_upgrade`, bug-146) offers
+the missing ``prompt`` / ``deny`` starter rules. :func:`plan_workspace_upgrade`
+is the read-only count of all of the above that a plain ``kolsch setup``
+re-run prints as its upgrade notice.
 
 Exit contract: sync returns ``0`` when the workspace is fully in
 sync with source at exit (no skips, all rewrites applied). Any
 skipped drift item (locally-modified kept, retired-at-source kept,
-parse failure) triggers a non-zero return — the operator needs to
-see the partial-success signal.
+parse failure, a default rule left out under ``--no``, a rule that
+couldn't be written) returns ``1`` — the partial-success signal; the
+report's last line says how many and how to review them. ``2`` means
+it refused to start (no ``--yes`` / ``--no`` and stdin is not a
+terminal).
 """
 
 from __future__ import annotations
@@ -43,19 +60,24 @@ from __future__ import annotations
 import shutil
 from dataclasses import dataclass, field
 from difflib import unified_diff
+from pathlib import PurePosixPath
 from typing import TYPE_CHECKING
 
 from cli._bundle_baseline import (
+    iter_bundle_files,
     read_baseline,
     sha256_file,
-    write_baseline,
+    update_baseline_entries,
 )
+from cli._bundle_kept import KeptKey, read_kept, update_kept
 from cli._migrations.tools import (
     ToolsMigrationResult,
     migrate_tool_refs,
+    plan_platform_yaml_rewrite,
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
     from pathlib import Path
 
     from cli._setup import SetupPrompter, _SetupIO
@@ -81,12 +103,38 @@ class _SyncReport:
     skipped: list[_SyncOutcome] = field(default_factory=list)
     parse_failures: list[str] = field(default_factory=list)
     user_owned_hits: list[str] = field(default_factory=list)
+    # bug-146 — `{bundle-relative path: "sha256:…" | None}` for every
+    # file this pass wrote or found identical to source (`None` =
+    # deleted). Merged into the baseline after a non-dry-run pass.
+    baseline_entries: dict[str, str | None] = field(default_factory=dict)
     baseline_refreshed: bool = False
     dry_run: bool = False
+    # Ran under `--yes` / `--no`: the closing line says how to review
+    # the kept items.
+    non_interactive: bool = False
+    # bug-146 — the default-rule pass (cli._rules_upgrade).
+    rule_lines: list[str] = field(default_factory=list)
+    rule_failures: list[str] = field(default_factory=list)
+    rules_offered: bool = False
+    rules_unresolved: int = 0
+    # Bundle-relative paths deleted (or, in a dry run, to be deleted)
+    # by the retired pass; the migrator must not write them back.
+    deleted: set[str] = field(default_factory=set)
+    # bug-146 — interactive `[k]eep` answers to remember, records to
+    # drop (file overwritten / deleted), and files kept in an earlier
+    # run (not asked again; informational).
+    kept_now: dict[str, KeptKey] = field(default_factory=dict)
+    kept_forget: set[str] = field(default_factory=set)
+    kept_earlier: list[str] = field(default_factory=list)
 
     def is_partial(self) -> bool:
         """True when the sync left any drift unresolved."""
-        return bool(self.skipped or self.parse_failures)
+        return bool(
+            self.skipped
+            or self.parse_failures
+            or self.rule_failures
+            or self.rules_unresolved
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -122,40 +170,221 @@ async def sync_kolsch_bundle(
         )
         return 1
 
+    if not (yes or no) and _needs_terminal(io):
+        hint = "" if dry_run else "; add --dry-run to preview"
+        io.err.write(
+            "error: `kolsch setup --sync-bundle` asks before each change, but "
+            "stdin is not a terminal. Re-run with --yes (safe defaults) or "
+            f"--no (change nothing){hint}.\n"
+        )
+        return 2
+
     baseline = read_baseline(io.root)
     if baseline is None:
-        io.out.write(
-            "no `.kolsch/bundle-baseline.json` recorded — cannot classify "
-            "shipped files as unchanged-vs-modified. Delete `bundles/kolsch/` "
-            "and re-run `kolsch setup` to re-install with a fresh baseline.\n"
-        )
-        return 1
+        # bug-146 — pre-qol-089 workspaces (and a corrupt baseline)
+        # bootstrap: a file identical to source is unchanged, anything
+        # else prompts as modified; the pass then records a baseline.
+        io.out.write("no baseline recorded — classifying against current source.\n")
 
-    plan = _plan(source_dir, workspace_bundle, baseline.files)
+    plan = plan_bundle_files(
+        source_dir,
+        workspace_bundle,
+        baseline.files if baseline is not None else None,
+        read_kept(io.root),
+    )
     migration = migrate_tool_refs(io.root)
     # Migrator-owned files supersede the file-level modified/unchanged
     # pass — a helper.yaml with a retired ref will register as
     # "modified" (sha256 drift vs baseline), but the migrator's
     # rewrite is the authoritative fix. Strip such paths from the
     # file-level plan so we don't double-handle them.
-    plan = _defer_to_migrator(plan, migration)
+    plan, pristine_rewrites = _defer_to_migrator(plan, migration)
     report = await _apply(
         io=io,
         source_dir=source_dir,
         workspace_bundle=workspace_bundle,
         plan=plan,
         migration=migration,
+        pristine_rewrites=pristine_rewrites,
+        baseline_files=baseline.files if baseline is not None else {},
         dry_run=dry_run,
         yes=yes,
         no=no,
     )
+    report.non_interactive = yes or no
 
-    if not dry_run and not report.is_partial() and _wrote_anything(report):
-        write_baseline(io.root, bundle_dir=workspace_bundle)
-        report.baseline_refreshed = True
+    # bug-146 — after the file pass (so newly copied tools are in the
+    # catalog) and the migrator's platform.yaml rewrite.
+    from cli._rules_upgrade import run_default_rules_pass  # noqa: PLC0415
+
+    rules_outcome = await run_default_rules_pass(
+        io,
+        dry_run=dry_run,
+        yes=yes,
+        no=no,
+        pending_tool_refs=_dry_run_copied_tool_refs(report) if dry_run else (),
+    )
+    report.rule_lines = rules_outcome.lines
+    report.rule_failures = rules_outcome.failures
+    report.rules_offered = rules_outcome.offered
+    report.rules_unresolved = rules_outcome.unresolved
+
+    if not dry_run:
+        report.baseline_refreshed = update_baseline_entries(
+            io.root, report.baseline_entries
+        )
+        update_kept(io.root, keep=report.kept_now, forget=report.kept_forget)
+    report.kept_earlier = plan.kept
 
     _render_report(report, out=io.out, dry_run=dry_run)
     return 0 if not report.is_partial() else 1
+
+
+# ---------------------------------------------------------------------------
+# Read-only upgrade plan — `kolsch setup` re-run notice (bug-146)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class UpgradePlan:
+    """What `--sync-bundle` would do here, by count. Read-only.
+
+    Attributes:
+        added: Shipped files missing from the workspace (copied in).
+        outdated: Unedited older shipped files (refreshed from source).
+        removable: Files source no longer ships that the baseline
+            proves are unedited kolsch files (`--yes` deletes them).
+        modified: Files sync asks about (`--yes` keeps them): shipped
+            files that differ from source, and workspace-only files not
+            provably unedited kolsch files. Files kept earlier excluded.
+        rewrites: Kolsch-owned YAMLs (incl. `platform.yaml`) with
+            retired tool refs the migrator rewrites.
+        rule_proposals: Missing `prompt` / `deny` default rules, as
+            `(what, effect, rationale)`.
+    """
+
+    added: int = 0
+    outdated: int = 0
+    removable: int = 0
+    modified: int = 0
+    rewrites: int = 0
+    rule_proposals: tuple[tuple[str, str, str], ...] = ()
+
+    @property
+    def actionable(self) -> bool:
+        """True when a sync would change or ask about anything."""
+        return bool(
+            self.added
+            or self.outdated
+            or self.removable
+            or self.modified
+            or self.rewrites
+            or self.rule_proposals
+        )
+
+    def notice_lines(self, version: str) -> list[str]:
+        """The `kolsch setup` re-run notice (at most 3 lines)."""
+        parts = []
+        if self.added:
+            parts.append(f"copy {self.added} new file(s)")
+        if self.outdated:
+            parts.append(f"refresh {self.outdated} outdated file(s)")
+        if self.removable:
+            parts.append(f"remove {self.removable} retired file(s)")
+        if self.rewrites:
+            parts.append(f"rewrite retired tool refs in {self.rewrites} file(s)")
+        if self.modified:
+            parts.append(
+                f"ask about {self.modified} file(s) that differ from this "
+                "version (kept unless you overwrite or delete them)"
+            )
+        lines = []
+        if parts:
+            lines.append(
+                f"  ⚠ workspace bundle is behind kolsch {version}: "
+                f"`--sync-bundle` would {', '.join(parts)}."
+            )
+        if len(self.rule_proposals) == 1:
+            what, effect, rationale = self.rule_proposals[0]
+            lines.append(
+                f"    1 missing default permission rule: {what} → {effect} "
+                f"({rationale})"
+            )
+        elif self.rule_proposals:
+            listed = ", ".join(f"{w} → {e}" for w, e, _ in self.rule_proposals)
+            lines.append(
+                f"    {len(self.rule_proposals)} missing default permission "
+                f"rules: {listed}"
+            )
+        if lines and not parts:
+            lines[0] = lines[0].replace("    ", "  ⚠ ", 1)
+        lines.append(
+            "    Run `kolsch setup --sync-bundle` to review and apply "
+            "(`--dry-run` to preview)."
+        )
+        return lines
+
+
+async def plan_workspace_upgrade(root: Path) -> UpgradePlan:
+    """Count what `kolsch setup --sync-bundle` would do at `root`. Read-only.
+
+    Combines [`plan_bundle_files`][cli._bundle_sync.plan_bundle_files]
+    and [`check_default_rules`][cli._rules_upgrade.check_default_rules]
+    (tools the file pass would copy count as installed), the same
+    planners sync and `kolsch doctor` use, so all three agree.
+    """
+    from cli._doctor import _starter_bundle_dir  # noqa: PLC0415 — import cycle
+    from cli._rules_upgrade import check_default_rules  # noqa: PLC0415
+
+    source_dir = _starter_bundle_dir()
+    workspace_bundle = root / "bundles" / "kolsch"
+    if not workspace_bundle.is_dir():
+        return UpgradePlan()
+    baseline = read_baseline(root)
+    recorded = baseline.files if baseline is not None else {}
+    migration = migrate_tool_refs(root)
+    # Exactly the worklist sync builds (same deferral to the migrator).
+    plan, _pristine = _defer_to_migrator(
+        plan_bundle_files(
+            source_dir,
+            workspace_bundle,
+            recorded if baseline is not None else None,
+            read_kept(root),
+        ),
+        migration,
+    )
+    outdated = sum(
+        1
+        for rel in plan.unchanged
+        if sha256_file(workspace_bundle / rel) != sha256_file(source_dir / rel)
+    )
+    removable = sum(
+        1
+        for rel in plan.retired
+        if recorded.get(rel) == sha256_file(workspace_bundle / rel)
+    )
+    pending = {
+        f"kolsch/tools/{PurePosixPath(rel).stem}"
+        for rel in plan.added
+        if rel.startswith("tools/") and rel.endswith(".py")
+    }
+    rules = await check_default_rules(root, pending_tool_refs=pending)
+    proposals = (
+        tuple((e.what, e.effect, e.rationale) for e in rules.plan.proposals)
+        if rules.plan is not None
+        else ()
+    )
+    return UpgradePlan(
+        added=len(plan.added),
+        outdated=outdated,
+        removable=removable,
+        # Sync asks about these (`--yes` keeps them): shipped files that
+        # differ, and workspace-only files it can't prove are unedited
+        # kolsch files. Files the user kept earlier are not counted.
+        modified=len(plan.modified) + len(plan.retired) - removable,
+        rewrites=len({rewrite.path for rewrite in migration.rewrites}),
+        rule_proposals=proposals,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -164,23 +393,60 @@ async def sync_kolsch_bundle(
 
 
 @dataclass(frozen=True)
-class _Plan:
-    """Sorted per-bucket relative-path lists — the sync loop's worklist."""
+class BundleFilePlan:
+    """Sorted per-bucket relative-path lists — the sync loop's worklist.
 
-    added: list[str]  # in source, not in workspace
-    modified: list[str]  # in both, sha256 mismatch vs baseline
-    retired: list[str]  # in workspace, not in source
-    unchanged: list[str]  # in both, sha256 matches baseline (safe overwrite)
+    Paths are relative to the bundle directory (e.g. ``tools/bash.py``).
+    Built by [`plan_bundle_files`][cli._bundle_sync.plan_bundle_files].
+
+    Attributes:
+        added: In source, not in the workspace.
+        modified: In both; differs from source, and the workspace hash
+            differs from its baseline entry or has none.
+        retired: In the workspace, not in source.
+        unchanged: In both; identical to source, or the workspace hash
+            matches its baseline entry (safe to overwrite from source).
+        kept: Would be ``modified`` / ``retired``, but the user chose to
+            keep exactly this file against exactly this source
+            (``.kolsch/bundle-kept.json``): not asked about again.
+    """
+
+    added: list[str]
+    modified: list[str]
+    retired: list[str]
+    unchanged: list[str]
+    kept: list[str] = field(default_factory=list)
 
 
-def _plan(
+def plan_bundle_files(
     source_dir: Path,
     workspace_bundle: Path,
-    baseline_files: dict[str, str],
-) -> _Plan:
-    """Classify every file in ``source-vs-workspace`` into one of four buckets."""
-    source_files = _relative_files(source_dir)
-    workspace_files = _relative_files(workspace_bundle)
+    baseline_files: dict[str, str] | None,
+    kept: Mapping[str, KeptKey] | None = None,
+) -> BundleFilePlan:
+    """Classify every shipped file in source-vs-workspace into four buckets.
+
+    Read-only. A shared file byte-identical to its source copy is always
+    ``unchanged``, with or without a baseline entry (bug-146). Otherwise
+    it is ``unchanged`` only when its sha256 matches the baseline entry
+    (an older shipped version nobody edited), and ``modified`` when the
+    entry differs or is missing — always the case when
+    ``baseline_files`` is ``None`` (no baseline recorded). A ``modified``
+    or ``retired`` file whose ``(file sha256, source sha256 | None)``
+    equals its ``kept`` record goes to ``kept`` instead (bug-146).
+
+    Args:
+        source_dir: The packaged starter-bundle template.
+        workspace_bundle: The workspace's ``bundles/kolsch/``.
+        baseline_files: The baseline's ``files`` map, or ``None``.
+        kept: :func:`cli._bundle_kept.read_kept`'s map, or ``None``.
+
+    Returns:
+        The [`BundleFilePlan`][cli._bundle_sync.BundleFilePlan].
+    """
+    source_files = iter_bundle_files(source_dir)
+    workspace_files = iter_bundle_files(workspace_bundle)
+    recorded_files = baseline_files or {}
 
     added = sorted(source_files - workspace_files)
     retired = sorted(workspace_files - source_files)
@@ -189,18 +455,40 @@ def _plan(
     modified: list[str] = []
     unchanged: list[str] = []
     for rel in sorted(shared):
-        recorded = baseline_files.get(rel)
         current = sha256_file(workspace_bundle / rel)
+        if current == sha256_file(source_dir / rel):
+            unchanged.append(rel)
+            continue
+        recorded = recorded_files.get(rel)
         if recorded is None or current != recorded:
             # No baseline entry OR sha256 mismatch → treated as
             # locally modified (safer: prompt before touching).
             modified.append(rel)
         else:
             unchanged.append(rel)
-    return _Plan(added=added, modified=modified, retired=retired, unchanged=unchanged)
+    kept_records = kept or {}
+    kept_now = [
+        rel
+        for rel in modified
+        if kept_records.get(rel)
+        == (sha256_file(workspace_bundle / rel), sha256_file(source_dir / rel))
+    ] + [
+        rel
+        for rel in retired
+        if kept_records.get(rel) == (sha256_file(workspace_bundle / rel), None)
+    ]
+    return BundleFilePlan(
+        added=added,
+        modified=[r for r in modified if r not in kept_now],
+        retired=[r for r in retired if r not in kept_now],
+        unchanged=unchanged,
+        kept=sorted(kept_now),
+    )
 
 
-def _defer_to_migrator(plan: _Plan, migration: ToolsMigrationResult) -> _Plan:
+def _defer_to_migrator(
+    plan: BundleFilePlan, migration: ToolsMigrationResult
+) -> tuple[BundleFilePlan, set[str]]:
     """Remove paths the migrator will rewrite from ``modified``/``unchanged``.
 
     Kolsch-owned YAMLs the migrator handles (``bundles/kolsch/agents/*.yaml``,
@@ -210,6 +498,12 @@ def _defer_to_migrator(plan: _Plan, migration: ToolsMigrationResult) -> _Plan:
     or the previous session's rewrite; the migrator is the correct
     fixer, not "overwrite from source" (which would clobber every
     user tweak the file also carries).
+
+    Also returns the deferred paths that were ``unchanged`` (pristine:
+    identical to source, or matching their baseline entry). Only those
+    get the rewritten file's hash recorded in the baseline; a deferred
+    ``modified`` file keeps its prior entry (or none), so a later run
+    still asks before touching the user's edit (bug-146).
     """
     migrator_paths = set(migration.yaml_bodies)
     # Migrator paths are workspace-relative from `io.root`; the plan's
@@ -220,23 +514,14 @@ def _defer_to_migrator(plan: _Plan, migration: ToolsMigrationResult) -> _Plan:
         for p in migrator_paths
         if p.startswith("bundles/kolsch/")
     }
-    return _Plan(
+    deferred = BundleFilePlan(
         added=plan.added,
         modified=[r for r in plan.modified if r not in migrator_bundle_paths],
         retired=plan.retired,
         unchanged=[r for r in plan.unchanged if r not in migrator_bundle_paths],
+        kept=plan.kept,
     )
-
-
-def _relative_files(root: Path) -> set[str]:
-    """Return every non-directory file under ``root``, as relative POSIX paths."""
-    if not root.is_dir():
-        return set()
-    return {
-        str(path.relative_to(root))
-        for path in root.rglob("*")
-        if path.is_file() and "__pycache__" not in path.parts
-    }
+    return deferred, migrator_bundle_paths.intersection(plan.unchanged)
 
 
 # ---------------------------------------------------------------------------
@@ -249,13 +534,20 @@ async def _apply(
     io: _SetupIO,
     source_dir: Path,
     workspace_bundle: Path,
-    plan: _Plan,
+    plan: BundleFilePlan,
     migration: ToolsMigrationResult,
+    pristine_rewrites: set[str],
+    baseline_files: dict[str, str],
     dry_run: bool,
     yes: bool,
     no: bool,
 ) -> _SyncReport:
-    """Walk the plan; write per decisions; return an aggregated report."""
+    """Walk the plan; write per decisions; return an aggregated report.
+
+    Every file written (copied, refreshed, overwritten, or rewritten by
+    the migrator while pristine), or left identical to source, is
+    recorded in ``report.baseline_entries`` (deleted files as ``None``).
+    """
     report = _SyncReport(dry_run=dry_run)
 
     for failure in migration.parse_failures:
@@ -274,8 +566,8 @@ async def _apply(
             no=no,
         )
 
-    # 2. Unchanged — overwrite silently to pick up any whitespace-only
-    #    re-flow in source. (Overwrite of an identical file is a no-op
+    # 2. Unchanged — overwrite silently to pick up an older shipped
+    #    version's changes. (Overwrite of an identical file is a no-op
     #    for content but refreshes the baseline entry.)
     for rel in plan.unchanged:
         _refresh_unchanged_file(
@@ -293,6 +585,7 @@ async def _apply(
             source_dir=source_dir,
             workspace_bundle=workspace_bundle,
             rel=rel,
+            in_baseline=rel in baseline_files,
             report=report,
             dry_run=dry_run,
             yes=yes,
@@ -305,6 +598,7 @@ async def _apply(
             io=io,
             workspace_bundle=workspace_bundle,
             rel=rel,
+            recorded=baseline_files.get(rel),
             report=report,
             dry_run=dry_run,
             yes=yes,
@@ -315,8 +609,19 @@ async def _apply(
     #    user-owned hits are report-only).
     for rel, body in migration.yaml_bodies.items():
         target = io.root / rel
-        if not dry_run:
+        bundle_rel = rel.removeprefix("bundles/kolsch/")
+        if rel.startswith("bundles/kolsch/") and bundle_rel in report.deleted:
+            # Deleted by the retired pass above — don't write it back.
+            continue
+        if rel == "platform.yaml":
+            if not dry_run and not _rewrite_platform_yaml_locked(io.root):
+                continue
+        elif not dry_run:
             _write_atomic(target, body)
+            if rel.startswith("bundles/kolsch/") and bundle_rel in pristine_rewrites:
+                # Nobody edited it, so the migrator's output is what
+                # kolsch shipped. An edited file keeps its old entry.
+                report.baseline_entries[bundle_rel] = sha256_file(target)
         report.applied.append(
             _SyncOutcome(rel=rel, action="rewrote", kind="yaml_rewrite")
         )
@@ -365,7 +670,8 @@ def _copy_source_file(
     if not dry_run:
         target = workspace_bundle / rel
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source_dir / rel, target)
+        _copy_atomic(source_dir / rel, target)
+        report.baseline_entries[rel] = sha256_file(target)
     report.applied.append(
         _SyncOutcome(rel=rel, action="copied", kind="missing-from-workspace")
     )
@@ -388,9 +694,11 @@ def _refresh_unchanged_file(
     src = source_dir / rel
     dst = workspace_bundle / rel
     if src.read_bytes() == dst.read_bytes():
+        report.baseline_entries[rel] = sha256_file(dst)
         return
     if not dry_run:
-        shutil.copy2(src, dst)
+        _copy_atomic(src, dst)
+        report.baseline_entries[rel] = sha256_file(dst)
     report.applied.append(
         _SyncOutcome(rel=rel, action="refreshed", kind="unchanged-vs-baseline")
     )
@@ -402,12 +710,17 @@ def _resolve_modified_file(
     source_dir: Path,
     workspace_bundle: Path,
     rel: str,
+    in_baseline: bool,
     report: _SyncReport,
     dry_run: bool,
     yes: bool,
     no: bool,
 ) -> None:
-    """Handle a locally-modified shipped file — prompt or use safe default."""
+    """Handle a locally-modified shipped file — prompt or use safe default.
+
+    ``in_baseline`` picks the prompt wording: without a baseline entry
+    sync can't tell a local edit from an older shipped version.
+    """
     if no or yes:
         # Safe default in non-interactive mode: keep local. Records
         # the skip so the partial-success signal fires.
@@ -415,10 +728,16 @@ def _resolve_modified_file(
             _SyncOutcome(rel=rel, action="kept-local", kind="modified")
         )
         return
+    question = (
+        f"[sync] {rel}: locally modified vs baseline."
+        if in_baseline
+        else f"[sync] {rel}: differs from source (no baseline entry — "
+        "a local edit or an older shipped version)."
+    )
     while True:
         answer = _prompt_choice(
             io.prompter,
-            question=f"[sync] {rel}: locally modified vs baseline.",
+            question=question,
             options=["[k]eep local", "[o]verwrite with source", "[d]iff"],
             default="k",
         )
@@ -428,11 +747,20 @@ def _resolve_modified_file(
         break
     if answer == "o":
         if not dry_run:
-            shutil.copy2(source_dir / rel, workspace_bundle / rel)
+            _copy_atomic(source_dir / rel, workspace_bundle / rel)
+            report.baseline_entries[rel] = sha256_file(workspace_bundle / rel)
+            report.kept_forget.add(rel)
         report.applied.append(
             _SyncOutcome(rel=rel, action="overwrote", kind="modified")
         )
         return
+    # An explicit keep is remembered against these exact bytes (bug-146):
+    # not asked again until the file or the shipped version changes.
+    if not dry_run:
+        report.kept_now[rel] = (
+            sha256_file(workspace_bundle / rel),
+            sha256_file(source_dir / rel),
+        )
     report.skipped.append(_SyncOutcome(rel=rel, action="kept-local", kind="modified"))
 
 
@@ -441,6 +769,7 @@ def _resolve_retired_file(
     io: _SetupIO,
     workspace_bundle: Path,
     rel: str,
+    recorded: str | None,
     report: _SyncReport,
     dry_run: bool,
     yes: bool,
@@ -448,37 +777,65 @@ def _resolve_retired_file(
 ) -> None:
     """Handle a retired-at-source file — prompt or use flag defaults.
 
-    Unlike modified files (which carry user edits), retired-at-source
-    files are shipped platform files the source has since removed —
-    the user has no reason to keep them. So ``--yes`` DELETES them
-    (aligns with the ses_0e54 repair story); ``--no`` KEEPS them
-    (strict, never touches). Interactive prompts per file.
+    "Retired" only means "in the workspace, not in source": it may be a
+    file kolsch shipped and later removed, or one the user added under
+    ``bundles/kolsch/``. ``--yes`` deletes it only when it provably is
+    the former — it has a baseline entry (``recorded``) and its sha256
+    still matches it (shipped, never edited; the ses_0e54 repair).
+    Anything else — no baseline, no entry, or edited — is kept and
+    recorded as a skip (bug-146). ``--no`` always keeps. Interactive
+    runs prompt per file; ``[d]`` is the explicit consent to delete.
     """
+    pristine_shipped = (
+        recorded is not None and sha256_file(workspace_bundle / rel) == recorded
+    )
+    if yes and not pristine_shipped:
+        report.skipped.append(
+            _SyncOutcome(
+                rel=rel,
+                action="kept-retired (not shipped by kolsch, or edited)",
+                kind="retired-at-source",
+            )
+        )
+        return
     if yes:
         if not dry_run:
             (workspace_bundle / rel).unlink(missing_ok=True)
+            report.baseline_entries[rel] = None
         report.applied.append(
             _SyncOutcome(rel=rel, action="deleted", kind="retired-at-source")
         )
+        report.deleted.add(rel)
         return
     if no:
         report.skipped.append(
             _SyncOutcome(rel=rel, action="kept-retired", kind="retired-at-source")
         )
         return
+    question = (
+        f"[sync] {rel}: retired at source, still in workspace."
+        if pristine_shipped
+        else f"[sync] {rel}: not in source — not a recorded kolsch file, "
+        "or edited since shipped."
+    )
     answer = _prompt_choice(
         io.prompter,
-        question=f"[sync] {rel}: retired at source, still in workspace.",
+        question=question,
         options=["[k]eep local", "[d]elete"],
         default="k",
     )
     if answer == "d":
         if not dry_run:
             (workspace_bundle / rel).unlink(missing_ok=True)
+            report.baseline_entries[rel] = None
+            report.kept_forget.add(rel)
         report.applied.append(
             _SyncOutcome(rel=rel, action="deleted", kind="retired-at-source")
         )
+        report.deleted.add(rel)
         return
+    if not dry_run:
+        report.kept_now[rel] = (sha256_file(workspace_bundle / rel), None)
     report.skipped.append(
         _SyncOutcome(rel=rel, action="kept-retired", kind="retired-at-source")
     )
@@ -518,6 +875,56 @@ def _print_diff(io: _SetupIO, source: Path, workspace: Path, *, rel: str) -> Non
 # ---------------------------------------------------------------------------
 
 
+def _needs_terminal(io: _SetupIO) -> bool:
+    """True when the real stdin prompter would read from a non-terminal."""
+    import sys  # noqa: PLC0415
+
+    from cli._setup import StdinSetupPrompter  # noqa: PLC0415 — import cycle
+
+    return isinstance(io.prompter, StdinSetupPrompter) and not sys.stdin.isatty()
+
+
+def _copy_atomic(src: Path, dst: Path) -> None:
+    """Copy `src` over `dst` via a temp file + rename (never a truncated `dst`)."""
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dst.with_name(f".{dst.name}.sync-tmp")
+    try:
+        shutil.copy2(src, tmp)
+        tmp.replace(dst)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _rewrite_platform_yaml_locked(root: Path) -> bool:
+    """Apply the migrator's `platform.yaml` rewrite under the rules lock.
+
+    The rewrite edits `authorization.config.rules`, so it takes
+    [`platform_yaml_lock`][assets.platform_config.platform_yaml_lock]
+    like every other rules writer and re-plans from the file as read
+    *inside* the lock: a rule a chat "always" wrote since the first
+    read survives (bug-146). Returns False when, on that re-read, there
+    is nothing left to rewrite.
+    """
+    from assets.platform_config import platform_yaml_lock  # noqa: PLC0415
+    from cli.permissions import _atomic_write_text  # noqa: PLC0415
+
+    with platform_yaml_lock(root):
+        body = plan_platform_yaml_rewrite(root)
+        if body is None:
+            return False
+        _atomic_write_text(root / "platform.yaml", body)
+    return True
+
+
+def _dry_run_copied_tool_refs(report: _SyncReport) -> set[str]:
+    """Tool refs a dry run would have copied in (`tools/<name>.py`)."""
+    return {
+        f"kolsch/tools/{PurePosixPath(o.rel).stem}"
+        for o in report.applied
+        if o.action == "copied" and o.rel.startswith("tools/") and o.rel.endswith(".py")
+    }
+
+
 def _write_atomic(path: Path, text: str) -> None:
     """Write ``text`` to ``path`` atomically (temp file + rename)."""
     import os  # noqa: PLC0415
@@ -533,11 +940,6 @@ def _write_atomic(path: Path, text: str) -> None:
     finally:
         if tmp.exists():
             tmp.unlink(missing_ok=True)
-
-
-def _wrote_anything(report: _SyncReport) -> bool:
-    """True when the sync applied any change (used to gate baseline refresh)."""
-    return bool(report.applied)
 
 
 # ---------------------------------------------------------------------------
@@ -580,8 +982,46 @@ def _render_report(report: _SyncReport, *, out: object, dry_run: bool) -> None:
             write(f"  ! {line}\n")
         write("\n")
 
+    if report.kept_earlier:
+        write(
+            f"Kept local ({len(report.kept_earlier)}) — you chose to keep these; "
+            "asked again if the file or the shipped version changes:\n"
+        )
+        for rel in report.kept_earlier:
+            write(f"  · {rel}\n")
+        write("\n")
+
+    if report.rule_lines or report.rule_failures:
+        write("Default permission rules:\n")
+        for line in report.rule_lines:
+            write(f"  {line}\n")
+        for line in report.rule_failures:
+            write(f"  ✗ {line}\n")
+        write("\n")
+
     if report.baseline_refreshed:
         write("✓ baseline refreshed at .kolsch/bundle-baseline.json\n")
 
-    if not report.applied and not report.skipped and not report.parse_failures:
+    if (
+        not report.applied
+        and not report.skipped
+        and not report.parse_failures
+        and not report.rules_offered
+        and not report.rule_failures
+    ):
         write("✓ no drift — workspace already in sync with source.\n")
+
+    if report.is_partial():
+        unresolved = (
+            len(report.skipped)
+            + len(report.parse_failures)
+            + len(report.rule_failures)
+            + report.rules_unresolved
+        )
+        line = f"\n{unresolved} item(s) left unresolved — exit 1 (partial)."
+        if (report.skipped or report.rules_unresolved) and report.non_interactive:
+            line += (
+                " Re-run `kolsch setup --sync-bundle` without --yes/--no "
+                "to review each ([d]iff)."
+            )
+        write(line + "\n")

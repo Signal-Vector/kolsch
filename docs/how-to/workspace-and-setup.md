@@ -97,6 +97,42 @@ To remove a single provider without touching the rest:
 kolsch disconnect <provider>   # updates platform.yaml + .env
 ```
 
+## Upgrading an existing workspace
+
+A newer kolsch ships new starter files (tools, agents, workflows) and,
+sometimes, new default permission rules. Re-running `kolsch setup` on
+an existing workspace does not install them by itself — it tells you,
+right after `✓ starter agent already at …`:
+
+```text
+  ⚠ workspace bundle is behind kolsch 0.12.0: `--sync-bundle` would copy 24 new file(s), ask about 11 file(s) that differ from this version (kept unless you overwrite).
+    1 missing default permission rule: kolsch/tools/jev_decide → prompt (sends workspace content to a third party (OpenRouter))
+    Run `kolsch setup --sync-bundle` to review and apply (`--dry-run` to preview).
+```
+
+An interactive re-run then asks **Review and apply now?** — yes runs
+the [`--sync-bundle`](#repairing-drift-kolsch-setup-sync-bundle) flow
+right there, before setup's test run, so the test uses the upgraded
+bundle. `--non-interactive` only prints the notice. Nothing is written
+unless you say yes, and the notice disappears once the workspace is in
+sync. The notice counts everything sync would act on: files to copy,
+refresh or remove, retired tool refs to rewrite (in
+`bundles/kolsch/agents/*.yaml` and `platform.yaml`), files it would
+ask about, and missing default rules.
+
+Files that differ from source are only cleared by an interactive
+`--sync-bundle`: `[o]verwrite` them, or `[k]eep` them. A keep is
+remembered in `.kolsch/bundle-kept.json` against that exact file and
+that exact shipped version, so sync doesn't ask again and the notice
+and `kolsch doctor`'s drift leave it out (doctor lists it under
+**Kept local**, informational) — until you edit the file or a kolsch
+upgrade changes the shipped version, when it's asked about again.
+`--yes` and `--no` keep files without remembering, so those runs keep
+exiting 1 and the files keep showing.
+
+`kolsch doctor`, `kolsch setup --sync-bundle --dry-run` and this notice
+are built from the same planners, so they agree on what sync would do.
+
 ## Diagnosing bundle drift — `kolsch doctor`
 
 The starter bundle at `bundles/kolsch/` is shipped by `kolsch setup`
@@ -112,13 +148,19 @@ Writes nothing.
 kolsch doctor
 ```
 
-Prints up to five sections:
+Prints up to six sections:
 
 1. **Missing tool files** — present in current source, absent from
    your workspace.
-2. **Modified tool files** — sha256 differs from the recorded
-   `.kolsch/bundle-baseline.json`. Skipped with a one-line note when
-   no baseline exists (older workspaces installed before qol-089).
+2. **Modified tool files** — differ from the current source, and the
+   sha256 differs from the recorded `.kolsch/bundle-baseline.json`. A
+   file identical to source is never listed. Files the baseline has no
+   entry for are listed separately ("differs from source, no baseline
+   entry"). With no baseline
+   (workspaces installed before qol-089) the section is labelled
+   **Modified vs source** and lists every shipped file that differs
+   from the current source: a local edit or an older shipped version.
+   The next `kolsch setup --sync-bundle` records the baseline.
 3. **Retired-at-source tool files** — present in your workspace but
    no longer in source (e.g. `fetch_website.py` after the
    `fetch_url` / `browse_url` split).
@@ -129,6 +171,11 @@ Prints up to five sections:
 5. **Retired-tool refs in user-owned YAMLs** — same, but in
    `bundles/<your-bundle>/**`. `kolsch doctor` surfaces them; it
    never rewrites user code.
+6. **Missing default permission rules** — default rules shipped since
+   the workspace was set up. Missing `prompt` / `deny` defaults count
+   as drift (`--sync-bundle` adds them); missing `allow` defaults are
+   informational, with the `kolsch permissions add` command. See
+   [New default rules on an existing workspace](permissions.md#new-default-rules-on-an-existing-workspace).
 
 Plus, only when there's a finding, an advisory **Authorization**
 section: `platform.yaml`'s rule list has no default-deny tail, or has
@@ -144,9 +191,14 @@ other `write_file` allows whose pattern uses a glob character (`*`,
 `?`, `[`), which also matches `/` and `.`. See
 [What agents can never change](permissions.md#what-agents-can-never-change-and-what-they-still-can).
 
+`__pycache__/` directories and `.DS_Store` files are ignored
+everywhere: they are never shipped, so they are not reported as
+retired.
+
 Exit code is `0` when clean, `1` when any drift was found. The
 Authorization and Agent write access sections never change the exit
-code.
+code. When there is drift, the report ends by pointing at
+`kolsch setup --sync-bundle`.
 
 ## Repairing drift — `kolsch setup --sync-bundle`
 
@@ -160,26 +212,63 @@ kolsch setup --sync-bundle --dry-run  # preview only; write nothing
 
 Sync classifies every file in `bundles/kolsch/` into four buckets:
 
-- **unchanged** — sha256 matches baseline → **overwrite** with the
-  source copy.
-- **locally-modified** — sha256 differs from baseline → **prompt**
-  per file (`[k]eep local / [o]verwrite / [d]iff`). Non-interactive
-  runs default to keep-local and exit non-zero as a partial-success
-  signal.
-- **added-at-source** — new file in source → **copy in**.
-- **retired-at-source** — file in workspace no longer in source →
-  **prompt** (`[k]eep / [d]elete`). Non-interactive default is
-  keep + skip.
+- **unchanged** — identical to the source copy, or sha256 matches the
+  baseline (an older shipped version you never edited) → **overwrite**
+  with the source copy.
+- **locally-modified** — differs from source, and sha256 differs from
+  the baseline (or the baseline has no entry for it) → **prompt** per
+  file (`[k]eep local / [o]verwrite / [d]iff`). An interactive `[k]eep`
+  is remembered until the file or the shipped version changes (see
+  [Upgrading an existing workspace](#upgrading-an-existing-workspace)).
+  `--yes` and `--no` keep the local file without remembering and exit
+  non-zero as a partial-success signal.
+- **added-at-source** — new file in source → **copy in** (`--no`
+  skips it).
+- **retired-at-source** — file in `bundles/kolsch/` that source
+  doesn't ship → **prompt** (`[k]eep / [d]elete`). That covers both a
+  file kolsch shipped and later retired and a file you added yourself,
+  so `--yes` deletes it only when the baseline proves kolsch shipped it
+  and you never edited it (it has an entry and the sha256 matches);
+  anything else is kept. `--no` always keeps. An interactive `[k]eep`
+  is remembered, as for modified files.
+
+When a run keeps anything, it ends with
+`N item(s) left unresolved — exit 1 (partial).` — under `--yes` /
+`--no` it adds that a run without those flags reviews each item (with
+`[d]iff`). Exit `1` here is the partial-success signal, not a crash.
+
+**No baseline?** Workspaces installed before qol-089 have no
+`.kolsch/bundle-baseline.json`. Sync still runs: it prints
+`no baseline recorded — classifying against current source.`, treats
+every file identical to source as unchanged and every other shipped
+file as locally modified (so it asks before touching it), then
+records a baseline.
 
 After the file-level pass, the migrator's YAML rewrites are applied
-to `bundles/kolsch/agents/*.yaml` and `platform.yaml`. `.kolsch/bundle-baseline.json`
-is refreshed. Files under `bundles/<your-bundle>/**` are **never
-written** — the `kolsch doctor` report is where user-owned drift
-gets surfaced.
+to `bundles/kolsch/agents/*.yaml` and `platform.yaml`. Then
+`.kolsch/bundle-baseline.json` is updated — even when the run was
+partial — with an entry for every file sync copied, overwrote,
+rewrote or found identical to source. A file you kept local keeps its
+old entry (or stays unrecorded), so the next sync asks about it
+again and nothing else. A file the migrator rewrote is recorded only
+if you had not edited it; an edited one keeps its old entry, so your
+edit is never refreshed away later. Files under `bundles/<your-bundle>/**` are
+**never written** — the `kolsch doctor` report is where user-owned
+drift gets surfaced.
 
-`--yes` and `--no` are symmetric knobs for scripting — both use the
-safe-default answers (keep-local for modified, keep for
-retired-at-source). Use whichever reads better in your automation.
+Then sync checks `platform.yaml` for **default permission rules**
+shipped since the workspace was set up (for example the `prompt` rule
+for `kolsch/tools/jev_decide`). It offers the missing `prompt` / `deny`
+defaults with a one-line reason each (`[a]dd all / [c]hoose each /
+[s]kip`; `--yes` adds them, `--no` and `--dry-run` add nothing), adds
+the accepted ones directly before the default-deny tail (or at the end
+if there is none), and records each decision in
+`.kolsch/default-rules.json` so a default is offered only once.
+Missing `allow` defaults are only reported, with the
+`kolsch permissions add` command. Without `--yes` / `--no`, sync asks
+on the terminal; if stdin isn't a terminal it stops with an `error:`
+line (exit 2) telling you to pass one of them. See
+[New default rules on an existing workspace](permissions.md#new-default-rules-on-an-existing-workspace).
 
 ## When the workspace doesn't exist
 

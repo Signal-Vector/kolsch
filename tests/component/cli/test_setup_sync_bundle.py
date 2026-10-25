@@ -35,6 +35,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import io
+import json
+import shutil
 from typing import TYPE_CHECKING
 
 from cli._doctor import cmd_doctor
@@ -99,6 +101,19 @@ def _sha256(path: Path) -> str:
     return f"sha256:{hasher.hexdigest()}"
 
 
+def _record_as_shipped(root: Path, rel: str) -> None:
+    """Give ``bundles/kolsch/<rel>`` a matching baseline entry.
+
+    Models a file kolsch shipped (and the user never edited) that the
+    source has since retired: only such files does `--yes` delete
+    (bug-146).
+    """
+    path = root / ".kolsch" / "bundle-baseline.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["files"][rel] = _sha256(root / "bundles" / "kolsch" / rel)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
 def _dir_hash(root: Path) -> dict[str, str]:
     out: dict[str, str] = {}
     for path in root.rglob("*"):
@@ -136,8 +151,10 @@ async def test_sync_repairs_ses_0e54_shape(
     # fetch_website.py + retired refs in kolsch-owned YAMLs.
     stray_tool = tmp_path / "bundles" / "kolsch" / "tools" / "fetch_website.py"
     stray_tool.write_text("# legacy tool\n", encoding="utf-8")
+    _record_as_shipped(tmp_path, "tools/fetch_website.py")
 
     helper = tmp_path / "bundles" / "kolsch" / "agents" / "helper.yaml"
+    helper_entry = _baseline_files(tmp_path)["agents/helper.yaml"]
     helper_text = helper.read_text(encoding="utf-8")
     helper.write_text(
         helper_text.replace(
@@ -181,8 +198,13 @@ async def test_sync_repairs_ses_0e54_shape(
     platform_after = platform_yaml.read_text(encoding="utf-8")
     assert "kolsch/tools/fetch_website" not in platform_after
     assert "kolsch/tools/fetch_url" in platform_after
-    # Baseline refreshed.
+    # Baseline refreshed (the deleted file's entry drops out) — but the
+    # helper was edited before the rewrite, so its entry is NOT advanced:
+    # the next sync still asks before touching it (bug-146 B1).
     assert "baseline refreshed" in output
+    files = _baseline_files(tmp_path)
+    assert "tools/fetch_website.py" not in files
+    assert files["agents/helper.yaml"] == helper_entry
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +243,7 @@ async def test_dry_run_writes_nothing(
     await _install(tmp_path, monkeypatch)
     stray = tmp_path / "bundles" / "kolsch" / "tools" / "fetch_website.py"
     stray.write_text("# legacy\n", encoding="utf-8")
+    _record_as_shipped(tmp_path, "tools/fetch_website.py")
 
     hash_before = _dir_hash(tmp_path)
 
@@ -247,6 +270,7 @@ async def test_baseline_refreshed_after_sync(
     # Induce one clean drift item (added file — an easy fix).
     stray = tmp_path / "bundles" / "kolsch" / "tools" / "fetch_website.py"
     stray.write_text("# legacy\n", encoding="utf-8")
+    _record_as_shipped(tmp_path, "tools/fetch_website.py")
 
     io_ = _make_setup_io(tmp_path)
     rc = await run_setup(_sync_args(tmp_path, yes=True), io_)
@@ -385,6 +409,7 @@ async def test_partial_success_when_applied_and_skipped(
     # Retired-at-source file — will be prompted; --yes safe default = keep.
     stray = tmp_path / "bundles" / "kolsch" / "tools" / "fetch_website.py"
     stray.write_text("# legacy\n", encoding="utf-8")
+    _record_as_shipped(tmp_path, "tools/fetch_website.py")
     # Modified file — --yes safe default = keep-local.
     bash_path = tmp_path / "bundles" / "kolsch" / "tools" / "bash.py"
     bash_path.write_text(
@@ -425,19 +450,393 @@ async def test_first_run_install_unchanged_by_qol_093(
 
 
 # ---------------------------------------------------------------------------
-# Test — sync on a workspace with no baseline errors gracefully
+# bug-146 — sync on a workspace with no baseline bootstraps one
 # ---------------------------------------------------------------------------
 
 
-async def test_sync_without_baseline_errors_gracefully(
+def _baseline_files(root: Path) -> dict[str, str]:
+    payload = json.loads(
+        (root / ".kolsch" / "bundle-baseline.json").read_text(encoding="utf-8")
+    )
+    files = payload["files"]
+    assert isinstance(files, dict)
+    return files
+
+
+def _make_pre_baseline_workspace(root: Path) -> Path:
+    """Turn a fresh install into the bug-146 Reproduce shape (file part).
+
+    No baseline, no `tools/jev_decide.py`, no `workflows/`, one comment
+    line added to `agents/helper.yaml`, plus the junk a real workspace
+    carries (`__pycache__/` bytecode, a Finder `.DS_Store`). Returns
+    the edited helper path.
+    """
+    bundle = root / "bundles" / "kolsch"
+    (root / ".kolsch" / "bundle-baseline.json").unlink()
+    (bundle / "tools" / "jev_decide.py").unlink()
+    shutil.rmtree(bundle / "workflows")
+    helper = bundle / "agents" / "helper.yaml"
+    helper.write_text(
+        "# my local note\n" + helper.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    (bundle / "tools" / "__pycache__").mkdir()
+    (bundle / "tools" / "__pycache__" / "bash.cpython-313.pyc").write_bytes(b"\0pyc")
+    (bundle / ".DS_Store").write_bytes(b"\0finder")
+    return helper
+
+
+async def test_sync_without_baseline_bootstraps_and_repairs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """qol-093 defensive: sync on a workspace with no baseline exits non-zero cleanly."""
+    """bug-146 AC-1/3/4 (Test 1): no baseline → classify vs source, repair, record.
+
+    Contract change: qol-093 refused a baseline-less workspace; it now
+    classifies against the current source and writes a baseline.
+    """
     await _install(tmp_path, monkeypatch)
-    (tmp_path / ".kolsch" / "bundle-baseline.json").unlink()
+    from cli._setup import _STARTER_BUNDLE_TEMPLATE_DIR
+
+    source = _STARTER_BUNDLE_TEMPLATE_DIR
+    helper = _make_pre_baseline_workspace(tmp_path)
+    helper_before = helper.read_bytes()
+    bundle = tmp_path / "bundles" / "kolsch"
 
     io_ = _make_setup_io(tmp_path)
     rc = await run_setup(_sync_args(tmp_path, yes=True), io_)
-    assert rc != 0
     output = io_.out.getvalue()
-    assert "baseline" in output.lower()
+
+    assert rc == 1, output  # partial: helper.yaml kept local
+    assert "no baseline recorded" in output
+    assert "Delete `bundles/kolsch/`" not in output
+    # Missing files copied in, byte-identical to source.
+    copied = ["tools/jev_decide.py"] + [
+        f"workflows/{p.name}" for p in (source / "workflows").iterdir()
+    ]
+    for rel in copied:
+        assert (bundle / rel).read_bytes() == (source / rel).read_bytes(), rel
+    assert "kept-local: agents/helper.yaml" in output
+    assert helper.read_bytes() == helper_before
+    # Junk is not "retired at source": never deleted, never recorded.
+    assert (bundle / ".DS_Store").is_file()
+    assert (bundle / "tools" / "__pycache__" / "bash.cpython-313.pyc").is_file()
+
+    files = _baseline_files(tmp_path)
+    assert "agents/helper.yaml" not in files
+    assert not any("__pycache__" in k or k.endswith(".DS_Store") for k in files)
+    expected = {
+        p.relative_to(bundle).as_posix()
+        for p in bundle.rglob("*")
+        if p.is_file()
+        and "__pycache__" not in p.parts
+        and p.name != ".DS_Store"
+        and p != helper
+    }
+    assert set(files) == expected
+    for rel, digest in files.items():
+        assert digest == _sha256(bundle / rel), rel
+
+    # Second run: only the kept-local helper comes back.
+    io2 = _make_setup_io(tmp_path)
+    rc2 = await run_setup(_sync_args(tmp_path, yes=True), io2)
+    output2 = io2.out.getvalue()
+    assert rc2 == 1, output2
+    assert "no baseline recorded" not in output2
+    assert "Applied" not in output2
+    assert "Skipped (1):" in output2
+    assert "kept-local: agents/helper.yaml" in output2
+
+
+async def test_sync_without_baseline_on_synced_workspace_records_baseline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """bug-146 AC-1/2: a baseline-less but in-sync workspace exits 0 and gains one."""
+    await _install(tmp_path, monkeypatch)
+    baseline = tmp_path / ".kolsch" / "bundle-baseline.json"
+    recorded = _baseline_files(tmp_path)
+    baseline.unlink()
+
+    io_ = _make_setup_io(tmp_path)
+    rc = await run_setup(_sync_args(tmp_path, yes=True), io_)
+    output = io_.out.getvalue()
+    assert rc == 0, output
+    assert "baseline refreshed" in output
+    assert "no drift" in output
+    assert _baseline_files(tmp_path) == recorded
+
+
+async def test_identical_to_source_file_is_unchanged_without_baseline_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """bug-146 AC-2 (Test 2): a missing baseline entry no longer means "modified"."""
+    await _install(tmp_path, monkeypatch)
+    baseline = tmp_path / ".kolsch" / "bundle-baseline.json"
+    payload = json.loads(baseline.read_text(encoding="utf-8"))
+    del payload["files"]["tools/bash.py"]
+    baseline.write_text(json.dumps(payload), encoding="utf-8")
+
+    io_ = _make_setup_io(tmp_path)
+    rc = await run_setup(_sync_args(tmp_path, yes=True), io_)
+    output = io_.out.getvalue()
+    assert rc == 0, output
+    assert "kept-local" not in output
+    # The entry is restored.
+    assert "tools/bash.py" in _baseline_files(tmp_path)
+
+
+async def test_partial_sync_with_baseline_records_copied_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """bug-146 AC-3: a partial run still records what it copied.
+
+    Before bug-146 a partial run left the baseline untouched, so a file
+    it copied in had no entry and came back as "modified" next run.
+    """
+    await _install(tmp_path, monkeypatch)
+    bundle = tmp_path / "bundles" / "kolsch"
+    (bundle / "tools" / "jev_decide.py").unlink()
+    payload_path = tmp_path / ".kolsch" / "bundle-baseline.json"
+    payload = json.loads(payload_path.read_text(encoding="utf-8"))
+    del payload["files"]["tools/jev_decide.py"]
+    payload_path.write_text(json.dumps(payload), encoding="utf-8")
+    bash_path = bundle / "tools" / "bash.py"
+    bash_path.write_text(
+        bash_path.read_text(encoding="utf-8") + "\n# local edit\n", encoding="utf-8"
+    )
+    bash_entry = _baseline_files(tmp_path)["tools/bash.py"]
+
+    io_ = _make_setup_io(tmp_path)
+    rc = await run_setup(_sync_args(tmp_path, yes=True), io_)
+    assert rc == 1, io_.out.getvalue()
+    files = _baseline_files(tmp_path)
+    assert files["tools/jev_decide.py"] == _sha256(bundle / "tools" / "jev_decide.py")
+    # The kept-local file keeps its prior entry.
+    assert files["tools/bash.py"] == bash_entry
+
+    io2 = _make_setup_io(tmp_path)
+    rc2 = await run_setup(_sync_args(tmp_path, yes=True), io2)
+    output2 = io2.out.getvalue()
+    assert rc2 == 1, output2
+    assert "jev_decide" not in output2
+    assert "kept-local: tools/bash.py" in output2
+
+
+async def test_sync_dry_run_without_baseline_writes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """bug-146 AC-10 (file part): `--dry-run` records no baseline either."""
+    await _install(tmp_path, monkeypatch)
+    _make_pre_baseline_workspace(tmp_path)
+    before = _dir_hash(tmp_path)
+
+    io_ = _make_setup_io(tmp_path)
+    rc = await run_setup(_sync_args(tmp_path, dry_run=True, yes=True), io_)
+    output = io_.out.getvalue()
+    assert rc == 1, output
+    assert "copied: tools/jev_decide.py" in output
+    assert _dir_hash(tmp_path) == before
+    assert not (tmp_path / ".kolsch" / "bundle-baseline.json").exists()
+
+
+async def test_interactive_prompt_without_baseline_entry_names_the_ambiguity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """bug-146: with no baseline entry the prompt can't claim "modified vs baseline"."""
+    await _install(tmp_path, monkeypatch)
+    helper = _make_pre_baseline_workspace(tmp_path)
+    questions: list[str] = []
+
+    class _Recorder(NonInteractivePrompter):
+        def choose(self, question: str, options: list[str], default: str) -> str:
+            questions.append(question)
+            return "o" if "helper.yaml" in question else default
+
+    io_ = _make_setup_io(tmp_path, prompter=_Recorder())
+    rc = await run_setup(_sync_args(tmp_path, yes=False), io_)
+    assert rc == 0, io_.out.getvalue()
+    helper_q = [q for q in questions if "agents/helper.yaml" in q]
+    assert helper_q == [
+        "[sync] agents/helper.yaml: differs from source (no baseline entry — "
+        "a local edit or an older shipped version)."
+    ]
+    # Overwritten → identical to source → recorded.
+    assert _baseline_files(tmp_path)["agents/helper.yaml"] == _sha256(helper)
+
+
+async def test_fresh_install_skips_pycache_and_ds_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """bug-146 AC-4: install never copies or hashes bytecode / Finder junk."""
+    import cli._setup as setup_mod
+
+    template = tmp_path / "template" / "kolsch"
+    shutil.copytree(setup_mod._STARTER_BUNDLE_TEMPLATE_DIR, template)
+    (template / "tools" / "__pycache__").mkdir()
+    (template / "tools" / "__pycache__" / "bash.cpython-313.pyc").write_bytes(b"x")
+    (template / ".DS_Store").write_bytes(b"x")
+    monkeypatch.setattr(setup_mod, "_STARTER_BUNDLE_TEMPLATE_DIR", template)
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    await _install(workspace, monkeypatch)
+    bundle = workspace / "bundles" / "kolsch"
+    assert not (bundle / "tools" / "__pycache__").exists()
+    assert not (bundle / ".DS_Store").exists()
+    files = _baseline_files(workspace)
+    assert set(files) == {
+        p.relative_to(bundle).as_posix() for p in bundle.rglob("*") if p.is_file()
+    }
+    assert not any("__pycache__" in k or ".DS_Store" in k for k in files)
+
+
+# ---------------------------------------------------------------------------
+# bug-146 QA B1 — a migrated user edit is never refreshed away
+# ---------------------------------------------------------------------------
+
+
+def _inject_retired_helper_ref(helper: Path) -> None:
+    helper.write_text(
+        helper.read_text(encoding="utf-8").replace(
+            "- ref: kolsch/tools/bash",
+            "- ref: kolsch/tools/bash\n        - ref: kolsch/tools/fetch_website",
+        ),
+        encoding="utf-8",
+    )
+
+
+async def test_migrated_user_edit_survives_a_second_yes_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """QA B1 probe: user edit + retired ref + another kept file, then `--yes` twice.
+
+    Run 1 rewrites the helper's retired ref (edit kept) but must not
+    record the result as shipped; otherwise run 2 sees it as
+    "unchanged" and refreshes the edit away.
+    """
+    await _install(tmp_path, monkeypatch)
+    bundle = tmp_path / "bundles" / "kolsch"
+    helper = bundle / "agents" / "helper.yaml"
+    helper.write_text(
+        "# MY PRECIOUS USER EDIT\n" + helper.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    _inject_retired_helper_ref(helper)
+    bundle_yaml = bundle / "bundle.yaml"
+    bundle_yaml.write_text(
+        bundle_yaml.read_text(encoding="utf-8") + "# edit\n", encoding="utf-8"
+    )
+
+    io1 = _make_setup_io(tmp_path)
+    assert await run_setup(_sync_args(tmp_path, yes=True), io1) == 1
+    assert "rewrote: bundles/kolsch/agents/helper.yaml" in io1.out.getvalue()
+    assert "# MY PRECIOUS USER EDIT" in helper.read_text(encoding="utf-8")
+
+    io2 = _make_setup_io(tmp_path)
+    assert await run_setup(_sync_args(tmp_path, yes=True), io2) == 1
+    output2 = io2.out.getvalue()
+    assert "refreshed: agents/helper.yaml" not in output2
+    assert "kept-local: agents/helper.yaml" in output2
+    assert "# MY PRECIOUS USER EDIT" in helper.read_text(encoding="utf-8")
+
+
+async def test_migrated_pristine_file_is_recorded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """QA B1 rule: a file nobody edited gets its migrated hash recorded."""
+    await _install(tmp_path, monkeypatch)
+    helper = tmp_path / "bundles" / "kolsch" / "agents" / "helper.yaml"
+    _inject_retired_helper_ref(helper)
+    # The retired ref is what kolsch shipped back then.
+    _record_as_shipped(tmp_path, "agents/helper.yaml")
+
+    io_ = _make_setup_io(tmp_path)
+    assert await run_setup(_sync_args(tmp_path, yes=True), io_) == 0, io_.out.getvalue()
+    assert _baseline_files(tmp_path)["agents/helper.yaml"] == _sha256(helper)
+
+
+# ---------------------------------------------------------------------------
+# bug-146 QA B2 — `--yes` deletes only provably-shipped, unedited files
+# ---------------------------------------------------------------------------
+
+
+async def test_yes_keeps_user_file_in_kolsch_bundle_without_baseline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """QA B2 probe 1: a user's `bundles/kolsch/tools/my_tool.py` is never deleted."""
+    await _install(tmp_path, monkeypatch)
+    (tmp_path / ".kolsch" / "bundle-baseline.json").unlink()
+    mine = tmp_path / "bundles" / "kolsch" / "tools" / "my_tool.py"
+    mine.write_text("# mine\n", encoding="utf-8")
+
+    io_ = _make_setup_io(tmp_path)
+    rc = await run_setup(_sync_args(tmp_path, yes=True), io_)
+    output = io_.out.getvalue()
+    assert rc == 1, output
+    assert mine.read_text(encoding="utf-8") == "# mine\n"
+    assert "deleted" not in output
+    assert "kept-retired (not shipped by kolsch, or edited): tools/my_tool.py" in output
+    # Self-explaining partial exit.
+    assert "1 item(s) left unresolved — exit 1 (partial)." in output
+    assert "without --yes/--no to review each ([d]iff)" in output
+
+
+async def test_yes_keeps_edited_retired_file_with_baseline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """QA B2 probe 2: a shipped-then-retired file the user edited is kept."""
+    await _install(tmp_path, monkeypatch)
+    stray = tmp_path / "bundles" / "kolsch" / "tools" / "fetch_website.py"
+    stray.write_text("# legacy\n", encoding="utf-8")
+    _record_as_shipped(tmp_path, "tools/fetch_website.py")
+    stray.write_text("# legacy\n# my fix\n", encoding="utf-8")
+
+    io_ = _make_setup_io(tmp_path)
+    rc = await run_setup(_sync_args(tmp_path, yes=True), io_)
+    assert rc == 1, io_.out.getvalue()
+    assert stray.read_text(encoding="utf-8") == "# legacy\n# my fix\n"
+    assert "tools/fetch_website.py" in _baseline_files(tmp_path)
+
+
+async def test_interactive_delete_is_the_consent_path_for_unrecorded_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """QA B2: interactive `[d]` still deletes; the prompt says it isn't recorded."""
+    await _install(tmp_path, monkeypatch)
+    mine = tmp_path / "bundles" / "kolsch" / "tools" / "my_tool.py"
+    mine.write_text("# mine\n", encoding="utf-8")
+    questions: list[str] = []
+
+    class _Deleter(NonInteractivePrompter):
+        def choose(self, question: str, options: list[str], default: str) -> str:
+            questions.append(question)
+            return "d"
+
+    io_ = _make_setup_io(tmp_path, prompter=_Deleter())
+    rc = await run_setup(_sync_args(tmp_path, yes=False), io_)
+    assert rc == 0, io_.out.getvalue()
+    assert not mine.exists()
+    assert questions == [
+        "[sync] tools/my_tool.py: not in source — not a recorded kolsch file, "
+        "or edited since shipped."
+    ]
+
+
+async def test_interactive_partial_exit_line_has_no_rerun_advice(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The partial line always explains rc 1; re-run advice is for --yes/--no only."""
+    await _install(tmp_path, monkeypatch)
+    bash_path = tmp_path / "bundles" / "kolsch" / "tools" / "bash.py"
+    bash_path.write_text(
+        bash_path.read_text(encoding="utf-8") + "# edit\n", encoding="utf-8"
+    )
+
+    class _Keeper(NonInteractivePrompter):
+        def choose(self, question: str, options: list[str], default: str) -> str:
+            return "k"
+
+    io_ = _make_setup_io(tmp_path, prompter=_Keeper())
+    rc = await run_setup(_sync_args(tmp_path, yes=False), io_)
+    output = io_.out.getvalue()
+    assert rc == 1, output
+    assert "1 item(s) left unresolved — exit 1 (partial)." in output
+    assert "without --yes/--no" not in output

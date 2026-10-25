@@ -17,7 +17,7 @@ Invariants:
 
 from __future__ import annotations
 
-import os
+import dataclasses
 import sys
 from dataclasses import dataclass
 from getpass import getpass
@@ -28,8 +28,9 @@ from errors import (
     LlmConnectorUnknown,
     LlmDiscoveryFailed,
     LlmValidationFailed,
+    PlatformError,
 )
-from kolsch._yamlio import dump_preserving_trailing_comment_block, load
+from kolsch._yamlio import load
 from llm import (
     Credentials,
     ProviderConfig,
@@ -103,6 +104,8 @@ class _CommandIO:
     out: Any  # file-like; defaults to sys.stdout in main.py
     prompter: Prompter
     connector_factory: Callable[[str], ProviderConnector]
+    # bug-146 — `error:` lines (e.g. platform.yaml not updated).
+    err: Any = dataclasses.field(default_factory=lambda: sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -123,11 +126,20 @@ def _load_platform_yaml(root: Path) -> dict[str, Any]:
     return payload
 
 
-def _write_platform_yaml_atomic(root: Path, payload: dict[str, Any]) -> None:
-    """Write `payload` to `platform.yaml` atomically.
+def _write_platform_yaml_atomic(
+    root: Path, change: Callable[[dict[str, Any]], bool]
+) -> bool:
+    """Apply `change` to `platform.yaml` under the rules lock; atomic write.
 
-    Pattern: temp file in same directory → fsync → atomic rename.
-    On any failure the original file is left untouched.
+    bug-146: the commands below compute their change from a read taken
+    before slow provider validation / discovery. Re-dumping *that* copy
+    would drop any rule a chat "always" wrote meanwhile, so the change
+    is re-applied to a fresh read taken under
+    [`platform_yaml_lock`][assets.platform_config.platform_yaml_lock],
+    via
+    [`rewrite_platform_yaml_locked`][cli._platform_yaml_write.rewrite_platform_yaml_locked]
+    (temp file → fsync → atomic rename; on failure the original file
+    is untouched). `change` returns `False` when nothing changes.
 
     qol-133: this is the single write chokepoint shared by
     `cmd_connect`/`cmd_disconnect`/`cmd_refresh` — all three read
@@ -142,19 +154,25 @@ def _write_platform_yaml_atomic(root: Path, payload: dict[str, Any]) -> None:
     there's no such block (including first-ever write, when the file
     doesn't exist yet).
     """
-    path = root / "platform.yaml"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    previous_text = path.read_text(encoding="utf-8") if path.is_file() else ""
-    tmp = path.with_suffix(path.suffix + ".tmp")
+    from cli._platform_yaml_write import rewrite_platform_yaml_locked  # noqa: PLC0415
+
+    root.mkdir(parents=True, exist_ok=True)
+    return rewrite_platform_yaml_locked(root, change)
+
+
+def _persist_platform_yaml(
+    io: _CommandIO, change: Callable[[dict[str, Any]], bool]
+) -> bool | None:
+    """Write via `_write_platform_yaml_atomic`; report a failure on `io.err`.
+
+    Returns whether the file was written, or `None` after printing an
+    `error:` line when it couldn't be (e.g. the rules lock timed out).
+    """
     try:
-        with tmp.open("w", encoding="utf-8") as f:
-            f.write(dump_preserving_trailing_comment_block(previous_text, payload))
-            f.flush()
-            os.fsync(f.fileno())
-        tmp.replace(path)
-    finally:
-        if tmp.exists():
-            tmp.unlink(missing_ok=True)
+        return _write_platform_yaml_atomic(io.root, change)
+    except (PlatformError, OSError) as exc:
+        io.err.write(f"error: platform.yaml was not updated: {exc}\n")
+        return None
 
 
 def _load_dotenv_lines(env_path: Path) -> list[str]:
@@ -292,11 +310,14 @@ async def cmd_connect(args: argparse.Namespace, io: _CommandIO) -> int:
     if binary_path:
         new_entry["binary_path"] = binary_path
 
-    payload = dict(existing_payload)
-    llm_providers = dict(payload.get("llm_providers") or {})
-    llm_providers[provider_name] = new_entry
-    payload["llm_providers"] = llm_providers
-    _write_platform_yaml_atomic(io.root, payload)
+    def add_provider(payload: dict[str, Any]) -> bool:
+        llm_providers = dict(payload.get("llm_providers") or {})
+        llm_providers[provider_name] = new_entry
+        payload["llm_providers"] = llm_providers
+        return True
+
+    if _persist_platform_yaml(io, add_provider) is None:
+        return 1
     io.out.write("✓ wrote provider config to platform.yaml\n")
     return 0
 
@@ -426,13 +447,26 @@ async def cmd_disconnect(args: argparse.Namespace, io: _CommandIO) -> int:
     existing = providers[provider_name]
     secret_name = existing.get("api_key_secret") if isinstance(existing, dict) else None
 
-    new_providers = {k: v for k, v in providers.items() if k != provider_name}
-    if new_providers:
-        payload["llm_providers"] = new_providers
+    def remove_provider(fresh: dict[str, Any]) -> bool:
+        fresh_providers = fresh.get("llm_providers") or {}
+        if provider_name not in fresh_providers:
+            return False
+        new_providers = {k: v for k, v in fresh_providers.items() if k != provider_name}
+        if new_providers:
+            fresh["llm_providers"] = new_providers
+        else:
+            fresh.pop("llm_providers", None)
+        return True
+
+    written = _persist_platform_yaml(io, remove_provider)
+    if written is None:
+        return 1
+    if written:
+        io.out.write(f"✓ removed {provider_name} from platform.yaml\n")
     else:
-        payload.pop("llm_providers", None)
-    _write_platform_yaml_atomic(io.root, payload)
-    io.out.write(f"✓ removed {provider_name} from platform.yaml\n")
+        io.out.write(
+            f"provider {provider_name!r} was already removed from platform.yaml\n"
+        )
 
     if secret_name and _remove_dotenv_entry(io.root, secret_name):
         io.out.write(f"✓ removed {secret_name} from .env\n")
@@ -699,6 +733,9 @@ async def cmd_refresh(args: argparse.Namespace, io: _CommandIO) -> int:
         return 1
     secrets = _build_refresh_secrets(io.root, payload)
     targets = [args.provider] if args.provider else sorted(providers)
+    # bug-146 — exactly the fields refresh changes, per provider; merged
+    # into the fresh read under the lock (never whole blocks).
+    changes: dict[str, dict[str, Any]] = {}
     for name in targets:
         if name not in providers:
             io.out.write(f"provider {name!r} is not connected; skipping\n")
@@ -745,6 +782,7 @@ async def cmd_refresh(args: argparse.Namespace, io: _CommandIO) -> int:
         entries = await _maybe_augment(entries, existing_providers, connector, name, io)
 
         entry["models"] = [_model_entry_to_yaml(e) for e in entries]
+        changes.setdefault(name, {})["models"] = entry["models"]
 
     # Retroactive marker sweep. For any provider block whose connector
     # qualifies as a metadata source but lacks the flag, add it. This
@@ -761,12 +799,28 @@ async def cmd_refresh(args: argparse.Namespace, io: _CommandIO) -> int:
             continue
         if is_metadata_source(connector):
             entry["serves_as_metadata_source"] = True
+            changes.setdefault(name, {})["serves_as_metadata_source"] = True
             io.out.write(f"✓ {name}: marked as metadata source\n")
 
-    providers_after = dict(providers)
-    payload["llm_providers"] = providers_after
-    _write_platform_yaml_atomic(io.root, payload)
-    return 0
+    if not changes:
+        return 0
+
+    def apply_refresh(fresh: dict[str, Any]) -> bool:
+        # Merge only the refreshed fields into the fresh copy: a provider
+        # (re)connected or disconnected meanwhile keeps its other fields,
+        # and a vanished provider is not re-created.
+        fresh_providers = fresh.get("llm_providers")
+        if not isinstance(fresh_providers, dict):
+            return False
+        merged = False
+        for name, fields in changes.items():
+            fresh_entry = fresh_providers.get(name)
+            if isinstance(fresh_entry, dict):
+                fresh_entry.update(fields)
+                merged = True
+        return merged
+
+    return 1 if _persist_platform_yaml(io, apply_refresh) is None else 0
 
 
 # ---------------------------------------------------------------------------

@@ -2,19 +2,20 @@
 
 Prints five bundle report sections plus an advisory Authorization
 section, and exits ``0`` clean / ``1`` drift.
-Writes nothing to disk. Complements ``kolsch setup``'s install path
-(which records ``.kolsch/bundle-baseline.json``) and precedes qol-093's
-``kolsch setup --sync-bundle`` (which will actually repair the drift
-this command surfaces).
+Writes nothing to disk. ``kolsch setup --sync-bundle`` (qol-093) repairs
+the drift this command surfaces; the report's closing hint points at it.
 
 Report sections:
 
 1. **Missing tool files** — present in the starter-bundle source but
    absent from the workspace's ``bundles/kolsch/`` (e.g. a new tool
    shipped after the workspace was installed).
-2. **Modified tool files** — sha256 mismatch vs the recorded baseline.
-   Skipped with a one-line note when no baseline exists (older
-   workspaces).
+2. **Modified tool files** — differ from source, and the sha256
+   doesn't match the recorded baseline (a file identical to source is
+   never listed). With no baseline (workspaces installed before
+   qol-089) every file that differs from source is listed, labelled
+   "modified vs source" — a local edit or an older shipped version;
+   ``--sync-bundle`` records the baseline (bug-146).
 3. **Retired-at-source tool files** — present in the workspace but no
    longer in source (e.g. ``fetch_website.py`` after the
    ``fetch_url``/``browse_url`` split).
@@ -23,6 +24,15 @@ Report sections:
    says are retired. Includes the proposed rewrite.
 5. **Retired-tool refs in user-owned YAMLs** — the migrator surfaces
    these but never rewrites them. Includes the suggested manual fix.
+
+6. **Missing default permission rules** (bug-146) — starter rules
+   shipped since the workspace was set up
+   (:func:`cli._rules_upgrade.check_default_rules`, the same plan
+   ``--sync-bundle`` applies). Missing ``prompt`` / ``deny`` defaults
+   are drift; missing ``allow`` defaults are listed as informational
+   (``--sync-bundle`` never adds them) and don't change the exit code.
+   A missing default-deny tail is the Authorization section's finding,
+   not repeated here.
 
 Plus, only when there is a finding, an **Authorization** section
 (bug-152): ``platform.yaml``'s rule set has no default-deny tail, or
@@ -38,8 +48,10 @@ without asking — the two routes around that floor. Never changes the
 exit code.
 
 qol-089 spec section §Acceptance Criteria (5) and (6) drive the
-contract. qol-093 will consume the same detection logic for its
-``--sync-bundle`` path.
+contract. The file classification is ``--sync-bundle``'s own
+:func:`cli._bundle_sync.plan_bundle_files`, over the shared
+:func:`cli._bundle_baseline.iter_bundle_files` walk, so the two
+commands always agree.
 """
 
 from __future__ import annotations
@@ -49,10 +61,9 @@ import re
 from fnmatch import fnmatchcase
 from typing import TYPE_CHECKING
 
-from cli._bundle_baseline import (
-    read_baseline,
-    sha256_file,
-)
+from cli._bundle_baseline import read_baseline
+from cli._bundle_kept import read_kept
+from cli._bundle_sync import plan_bundle_files
 from cli._migrations.tools import (
     ToolsMigrationResult,
     migrate_tool_refs,
@@ -71,6 +82,8 @@ if TYPE_CHECKING:
     import argparse
     from pathlib import Path
     from typing import TextIO
+
+    from cli._rules_upgrade import RulesCheck
 
 
 # ---------------------------------------------------------------------------
@@ -104,6 +117,19 @@ async def cmd_doctor(args: object, *, out: TextIO, root: Path) -> int:
     """
     _ = args  # no CLI flags in qol-089's scope
     report = _build_report(root)
+    if not report.not_yet_installed and (root / "platform.yaml").is_file():
+        from cli._rules_upgrade import check_default_rules  # noqa: PLC0415
+
+        # Tools `--sync-bundle` would copy in count as installed, so
+        # doctor names the same rules sync would add.
+        pending = {
+            f"kolsch/tools/{rel.removeprefix('tools/').removesuffix('.py')}"
+            for rel in report.missing
+            if rel.startswith("tools/") and rel.endswith(".py") and rel.count("/") == 1
+        }
+        report.default_rules = await check_default_rules(
+            root, pending_tool_refs=pending
+        )
     if report.not_yet_installed:
         # Pre-`kolsch setup` workspace — no bundle materialized, no
         # baseline. Emit a friendly one-liner instead of dumping the
@@ -136,6 +162,13 @@ class _Report:
     def __init__(self) -> None:
         self.missing: list[str] = []
         self.modified: list[str] = []
+        # bug-146 — differ from source but have no baseline entry (all
+        # of them when there is no baseline): a local edit or an older
+        # shipped version; sync can't tell which.
+        self.unrecorded: list[str] = []
+        # bug-146 — files the user chose to keep (interactive sync);
+        # informational, not drift, until the file or source changes.
+        self.kept: list[str] = []
         self.retired_at_source: list[str] = []
         self.migration: ToolsMigrationResult = ToolsMigrationResult()
         self.no_baseline_note: bool = False
@@ -149,6 +182,8 @@ class _Report:
         # bug-161 — "Agent write access" findings (list) or a
         # "couldn't check" reason (str). Advisory: NOT part of `has_drift`.
         self.agent_write_access: list[str] | str = []
+        # bug-146 — missing starter rules; proposals are drift.
+        self.default_rules: RulesCheck | None = None
 
     @property
     def has_drift(self) -> bool:
@@ -156,10 +191,16 @@ class _Report:
         return bool(
             self.missing
             or self.modified
+            or self.unrecorded
             or self.retired_at_source
             or self.migration.rewrites
             or self.migration.user_owned_hits
             or self.migration.parse_failures
+            or (
+                self.default_rules is not None
+                and self.default_rules.plan is not None
+                and self.default_rules.plan.actionable
+            )
         )
 
 
@@ -172,21 +213,20 @@ def _build_report(workspace_root: Path) -> _Report:
     workspace_bundle = workspace_root / "bundles" / "kolsch"
 
     if source_dir.is_dir() and workspace_bundle.is_dir():
-        source_files = _relative_files(source_dir)
-        workspace_files = _relative_files(workspace_bundle)
-
-        report.missing = sorted(source_files - workspace_files)
-        report.retired_at_source = sorted(workspace_files - source_files)
-
         baseline = read_baseline(workspace_root)
-        if baseline is None:
-            report.no_baseline_note = True
-        else:
-            report.modified = _diff_vs_baseline(
-                workspace_bundle,
-                shared_files=source_files & workspace_files,
-                baseline=baseline.files,
-            )
+        report.no_baseline_note = baseline is None
+        plan = plan_bundle_files(
+            source_dir,
+            workspace_bundle,
+            baseline.files if baseline is not None else None,
+            read_kept(workspace_root),
+        )
+        report.kept = plan.kept
+        recorded = baseline.files if baseline is not None else {}
+        report.missing = plan.added
+        report.modified = [r for r in plan.modified if r in recorded]
+        report.unrecorded = [r for r in plan.modified if r not in recorded]
+        report.retired_at_source = plan.retired
     elif source_dir.is_dir() and not workspace_bundle.is_dir():
         # Pre-`kolsch setup` workspace — flagged so the CLI can emit
         # the "run kolsch setup to install" hint rather than the full
@@ -420,40 +460,6 @@ def _legacy_what_covers(what: str, refs: tuple[str, ...]) -> bool:
     return any(compiled.fullmatch(ref) for ref in refs)
 
 
-def _relative_files(root: Path) -> set[str]:
-    """Return every non-directory file under ``root``, as relative POSIX paths."""
-    if not root.is_dir():
-        return set()
-    return {
-        str(path.relative_to(root))
-        for path in root.rglob("*")
-        if path.is_file() and "__pycache__" not in path.parts
-    }
-
-
-def _diff_vs_baseline(
-    bundle_dir: Path,
-    *,
-    shared_files: set[str],
-    baseline: dict[str, str],
-) -> list[str]:
-    """List shared files whose current sha256 differs from the baseline."""
-    modified: list[str] = []
-    for rel in sorted(shared_files):
-        recorded = baseline.get(rel)
-        if recorded is None:
-            # File exists in source + workspace but wasn't in the
-            # baseline snapshot (e.g. baseline predates this file's
-            # addition). Treated as "modified" so the operator sees
-            # it and can decide.
-            modified.append(rel)
-            continue
-        current = sha256_file(bundle_dir / rel)
-        if current != recorded:
-            modified.append(rel)
-    return modified
-
-
 # ---------------------------------------------------------------------------
 # Rendering
 # ---------------------------------------------------------------------------
@@ -463,6 +469,8 @@ def _render(report: _Report, *, out: TextIO) -> None:
     """Print the five report sections; write nothing on a clean workspace."""
     if not report.has_drift and not report.no_baseline_note:
         out.write("✓ no drift detected — bundle in sync with source.\n")
+        _render_kept(report.kept, out=out)
+        _render_default_rules(report.default_rules, out=out, quiet_when_clean=True)
         _render_authz_tail(report.authz_tail_note, out=out)
         _render_agent_write_access(report.agent_write_access, out=out)
         return
@@ -471,20 +479,78 @@ def _render(report: _Report, *, out: TextIO) -> None:
     out.write("===================\n\n")
 
     _render_missing(report.missing, out=out)
-    _render_modified(report.modified, no_baseline=report.no_baseline_note, out=out)
+    _render_modified(
+        report.modified,
+        report.unrecorded,
+        no_baseline=report.no_baseline_note,
+        out=out,
+    )
     _render_retired_at_source(report.retired_at_source, out=out)
+    _render_kept(report.kept, out=out)
     _render_parse_failures(report.migration, out=out)
     _render_kolsch_owned_rewrites(report.migration, out=out)
     _render_user_owned_hits(report.migration, out=out)
+    _render_default_rules(report.default_rules, out=out, quiet_when_clean=False)
 
     if report.has_drift:
         out.write(
-            "\nEdit the listed files by hand to repair. Automated "
-            "`kolsch setup --sync-bundle` support is planned in qol-093 "
-            "(not yet shipped).\n"
+            "\nRun `kolsch setup --sync-bundle` to review and repair "
+            "(`--dry-run` to preview). User-owned YAMLs are listed for "
+            "a manual fix; sync never rewrites them.\n"
         )
+        if report.modified or report.unrecorded:
+            out.write(
+                "Modified files are kept under `--yes`: run "
+                "`kolsch setup --sync-bundle` interactively to review each "
+                "([d]iff).\n"
+            )
     _render_authz_tail(report.authz_tail_note, out=out)
     _render_agent_write_access(report.agent_write_access, out=out)
+
+
+def _render_default_rules(
+    check: RulesCheck | None, *, out: TextIO, quiet_when_clean: bool
+) -> None:
+    """Print the "Missing default permission rules" section (bug-146)."""
+    if check is None:
+        return
+    plan = check.plan
+    informational = plan is not None and bool(plan.report_only or plan.unavailable)
+    if quiet_when_clean and plan is not None and not informational:
+        return
+    out.write("Missing default permission rules (shipped since setup):\n")
+    if plan is None:
+        out.write(f"  ? couldn't check: {check.skipped}.\n\n")
+        return
+    if not plan.proposals and not informational:
+        out.write("  ✓ none\n\n")
+        return
+    for entry in plan.proposals:
+        out.write(f"  + {entry.what} → {entry.effect} ({entry.rationale})\n")
+    if plan.proposals:
+        where = (
+            "before the default-deny tail"
+            if plan.tail_present
+            else "at the end (no default-deny tail)"
+        )
+        out.write(f"    `kolsch setup --sync-bundle` adds these {where}.\n")
+    for entry in plan.unavailable:
+        out.write(
+            f"  · {entry.what} → {entry.effect}: tool not installed here "
+            "(informational).\n"
+        )
+    from cli.permissions import permissions_add_command  # noqa: PLC0415
+    from providers.authz import Rule  # noqa: PLC0415
+
+    for entry in plan.report_only:
+        command = permissions_add_command(
+            Rule(what=entry.what, pattern=entry.pattern, effect=entry.effect)
+        )
+        out.write(
+            f"  ! {entry.what} → allow ({entry.rationale}) — informational; "
+            f"sync never adds `allow` rules: `{command}`\n"
+        )
+    out.write("\n")
 
 
 def _render_authz_tail(note: str | None, *, out: TextIO) -> None:
@@ -529,22 +595,50 @@ def _render_missing(missing: list[str], *, out: TextIO) -> None:
 
 def _render_modified(
     modified: list[str],
+    unrecorded: list[str],
     *,
     no_baseline: bool,
     out: TextIO,
 ) -> None:
-    out.write("Modified vs baseline (sha256 mismatch):\n")
+    unrecorded_header = (
+        "differs from source, no baseline entry (a local edit or an older "
+        "shipped version)"
+    )
     if no_baseline:
+        out.write(f"Modified vs source — {unrecorded_header}:\n")
         out.write(
-            "  · baseline not recorded — run `kolsch setup` to record "
-            "the current shipped file set.\n\n"
+            "  · baseline not recorded — compared against the current "
+            "source; `kolsch setup --sync-bundle` records one.\n"
         )
+        _render_paths(unrecorded, marker="~", out=out)
         return
-    if not modified:
+    out.write("Modified vs baseline (sha256 mismatch):\n")
+    _render_paths(modified, marker="~", out=out)
+    if unrecorded:
+        out.write(f"Modified — {unrecorded_header}:\n")
+        _render_paths(unrecorded, marker="?", out=out)
+
+
+def _render_paths(paths: list[str], *, marker: str, out: TextIO) -> None:
+    if not paths:
         out.write("  ✓ none\n\n")
         return
-    for rel in modified:
-        out.write(f"  ~ {rel}\n")
+    for rel in paths:
+        out.write(f"  {marker} {rel}\n")
+    out.write("\n")
+
+
+def _render_kept(kept: list[str], *, out: TextIO) -> None:
+    """Informational: files kept on purpose; never drift (bug-146)."""
+    if not kept:
+        return
+    out.write(
+        f"Kept local: {len(kept)} (you chose to keep these in an interactive "
+        "sync; listed as drift again if the file or the shipped version "
+        "changes) — informational:\n"
+    )
+    for rel in kept:
+        out.write(f"  · {rel}\n")
     out.write("\n")
 
 
